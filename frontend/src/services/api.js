@@ -1,26 +1,73 @@
 // services/api.js
 const isDevelopment = process.env.NODE_ENV === 'development';
+const isGitHubPages = window.location.hostname === 'directoryofsites.github.io';
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
-  : 'https://contenedor-production-3606.up.railway.app/api'; // URL de Railway en producción
+  : isGitHubPages 
+    ? 'https://contenedor-production-3606.up.railway.app/api' // URL explícita para GitHub Pages
+    : 'https://contenedor-production-3606.up.railway.app/api'; // URL de Railway en producción
+
+  // Función de utilidad para implementar reintentos en las llamadas API
+const fetchWithRetry = async (url, options = {}, maxRetries = 3) => {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`Intento ${attempt}/${maxRetries} para ${url}`);
+      
+      // Configurar un timeout más largo
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos de timeout
+      
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Error desconocido');
+        throw new Error(`Error ${response.status}: ${errorText}`);
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.error(`Intento ${attempt} falló:`, error.message);
+      
+      // Si no es el último intento, esperar antes de reintentar
+      if (attempt < maxRetries) {
+        const delay = 1000 * attempt; // Espera exponencial: 1s, 2s, 3s
+        console.log(`Esperando ${delay}ms antes de reintentar...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  // Si llegamos aquí, todos los intentos fallaron
+  throw lastError;
+};
 
 /**
  * Lista los archivos en la ruta especificada
  * @param {string} path - Ruta a listar
  * @returns {Promise<Array>} - Lista de archivos y carpetas
  */
+
 export const listFiles = async (path = '') => {
   try {
-    const response = await fetch(`${BASE_URL}/files${path ? `?prefix=${path}` : ''}`);
+    console.log(`Listando archivos en: ${path || 'raíz'}`);
     
-    if (!response.ok) {
-      throw new Error('No se pudieron cargar los archivos');
-    }
+    const url = `${BASE_URL}/files${path ? `?prefix=${encodeURIComponent(path)}` : ''}`;
+    const response = await fetchWithRetry(url);
     
-    return await response.json();
+    const data = await response.json();
+    console.log(`Listado exitoso: ${data.length} elementos encontrados`);
+    return data;
   } catch (error) {
-    console.error('Error en listFiles:', error);
-    throw error;
+    console.error('Error en listFiles después de reintentos:', error);
+    throw new Error('No se pudieron cargar los archivos');
   }
 };
 

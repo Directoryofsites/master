@@ -15,7 +15,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',  // Permitir cualquier origen
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS', 'PUT', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Middleware de logging
@@ -39,7 +43,7 @@ const supabaseUrl = process.env.SUPABASE_URL || 'https://bxkzxxokdvfobcpbmldj.su
 const supabaseKey = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4a3p4eG9rZHZmb2JjcGJtbGRqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MTU2NzMwNiwiZXhwIjoyMDU3MTQzMzA2fQ.HofSSYqlfoVHwe_L4pXsVd0JzhBR65PPPEDP0pAh6uM';
 const bucketName = process.env.BUCKET_NAME || 'archivos';
 
-// Crear cliente de Supabase
+// Crear cliente de Supabase con opciones avanzadas
 let supabase;
 
 try {
@@ -48,9 +52,26 @@ try {
   console.log('SUPABASE_KEY disponible:', !!process.env.SUPABASE_KEY);
   console.log('SUPABASE_URL:', supabaseUrl);
   
-  // No es necesario verificar porque ya proporcionamos valores predeterminados
+  // Opciones con tiempos de espera más largos
+  const options = {
+    auth: {
+      persistSession: false
+    },
+    global: {
+      headers: {
+        'x-application-name': 'explorador-archivos'
+      },
+      fetch: (url, options) => {
+        // Aumentamos el tiempo de espera a 30 segundos
+        return fetch(url, {
+          ...options,
+          timeout: 30000 // 30 segundos en lugar de 10 segundos
+        });
+      }
+    }
+  };
   
-  supabase = createClient(supabaseUrl, supabaseKey);
+  supabase = createClient(supabaseUrl, supabaseKey, options);
   console.log('Cliente de Supabase configurado correctamente');
 } catch (error) {
   console.error('Error al configurar cliente de Supabase:', error);
@@ -111,7 +132,9 @@ app.get('/api/auth-test', async (req, res) => {
   }
 });
 
-// Ruta para listar archivos
+
+
+// Ruta para listar archivos con sistema de reintentos
 app.get('/api/files', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -132,32 +155,69 @@ app.get('/api/files', async (req, res) => {
     
     console.log(`Listando archivos con prefijo: "${normalizedPrefix}"`);
     
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .list(normalizedPrefix, {
-        sortBy: { column: 'name', order: 'asc' }
-      });
+    // Implementar sistema de reintentos
+    const MAX_RETRIES = 3;
+    let lastError = null;
     
-    if (error) {
-      throw error;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .list(normalizedPrefix, {
+            sortBy: { column: 'name', order: 'asc' }
+          });
+        
+        if (error) {
+          lastError = error;
+          console.log(`Intento ${attempt}/${MAX_RETRIES} falló: ${error.message}`);
+          
+          // Esperar antes de reintentar (tiempo exponencial)
+          if (attempt < MAX_RETRIES) {
+            const delay = 1000 * attempt; // 1s, 2s, 3s, etc.
+            console.log(`Esperando ${delay}ms antes de reintentar...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          } else {
+            throw error;
+          }
+        }
+        
+        // Éxito - formatear la respuesta
+        const formattedFiles = data.map(item => {
+          // Identificar si es carpeta o archivo
+          const isFolder = !item.metadata || item.metadata.mimetype === 'application/x-directory';
+          
+          return {
+            name: item.name,
+            path: normalizedPrefix ? `/${normalizedPrefix}/${item.name}` : `/${item.name}`,
+            size: (item.metadata && item.metadata.size) || 0,
+            contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+            updated: item.updated_at,
+            isFolder: isFolder
+          };
+        });
+        
+        // Si tuvimos éxito, devolver los datos
+        console.log(`Listado exitoso en el intento ${attempt}`);
+        return res.status(200).json(formattedFiles);
+        
+      } catch (attemptError) {
+        lastError = attemptError;
+        console.log(`Excepción en intento ${attempt}/${MAX_RETRIES}: ${attemptError.message}`);
+        
+        // Reintentar solo si no es el último intento
+        if (attempt < MAX_RETRIES) {
+          const delay = 1000 * attempt;
+          console.log(`Esperando ${delay}ms antes de reintentar...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
     
-    // Formatear la respuesta
-    const formattedFiles = data.map(item => {
-      // Identificar si es carpeta o archivo
-      const isFolder = !item.metadata || item.metadata.mimetype === 'application/x-directory';
-      
-      return {
-        name: item.name,
-        path: normalizedPrefix ? `/${normalizedPrefix}/${item.name}` : `/${item.name}`,
-        size: (item.metadata && item.metadata.size) || 0,
-        contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
-        updated: item.updated_at,
-        isFolder: isFolder
-      };
-    });
+    // Si llegamos aquí, es porque todos los intentos fallaron
+    console.error('Error persistente al listar archivos después de reintentos:', lastError);
+    throw lastError;
     
-    res.status(200).json(formattedFiles);
   } catch (error) {
     console.error('Error al listar archivos:', error);
     
@@ -168,7 +228,6 @@ app.get('/api/files', async (req, res) => {
     });
   }
 });
-
 
 // Ruta para buscar archivos y carpetas
 app.get('/api/search', async (req, res) => {
@@ -1032,6 +1091,110 @@ app.get('/api/view-docx', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al procesar el documento',
+      error: error.message
+    });
+  }
+});
+
+
+// Endpoint de diagnóstico para verificar la conectividad con Supabase
+app.get('/api/diagnose', async (req, res) => {
+  console.log('Ejecutando diagnóstico de conectividad con Supabase...');
+  
+  try {
+    // 1. Intentar resolver el nombre DNS de Supabase
+    const dns = require('dns').promises;
+    let dnsResult;
+    
+    try {
+      dnsResult = await dns.lookup(supabaseUrl.replace('https://', ''));
+      console.log('Resolución DNS exitosa:', dnsResult);
+    } catch (dnsError) {
+      console.error('Error en resolución DNS:', dnsError);
+      dnsResult = { error: dnsError.message };
+    }
+    
+    // 2. Intentar establecer conexión HTTP básica
+    let pingResult;
+    try {
+      const pingStart = Date.now();
+      const pingResponse = await fetch(supabaseUrl);
+      const pingTime = Date.now() - pingStart;
+      
+      pingResult = {
+        success: pingResponse.ok,
+        status: pingResponse.status,
+        statusText: pingResponse.statusText,
+        time: pingTime + 'ms'
+      };
+      
+      console.log('Ping HTTP exitoso:', pingResult);
+    } catch (pingError) {
+      console.error('Error en ping HTTP:', pingError);
+      pingResult = { error: pingError.message };
+    }
+    
+    // 3. Intentar listar buckets (prueba de autenticación)
+    let bucketsResult;
+    try {
+      const { data, error } = await supabase.storage.listBuckets();
+      
+      if (error) {
+        throw error;
+      }
+      
+      bucketsResult = {
+        success: true,
+        bucketCount: data.length,
+        buckets: data.map(b => b.name)
+      };
+      
+      console.log('Listado de buckets exitoso:', bucketsResult);
+    } catch (bucketsError) {
+      console.error('Error en listado de buckets:', bucketsError);
+      bucketsResult = { error: bucketsError.message };
+    }
+    
+    // 4. Intentar listar archivos en el bucket específico
+    let filesResult;
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucketName)
+        .list('', { limit: 5 });
+      
+      if (error) {
+        throw error;
+      }
+      
+      filesResult = {
+        success: true,
+        fileCount: data.length,
+        sample: data.slice(0, 3).map(f => f.name)
+      };
+      
+      console.log('Listado de archivos exitoso:', filesResult);
+    } catch (filesError) {
+      console.error('Error en listado de archivos:', filesError);
+      filesResult = { error: filesError.message };
+    }
+    
+    // Devolver resultados completos
+    res.json({
+      timestamp: new Date().toISOString(),
+      supabaseUrl: supabaseUrl,
+      supabaseKeyConfigured: !!supabaseKey,
+      bucketName: bucketName,
+      dns: dnsResult,
+      ping: pingResult,
+      buckets: bucketsResult,
+      files: filesResult
+    });
+    
+  } catch (error) {
+    console.error('Error general en diagnóstico:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al ejecutar diagnóstico',
       error: error.message
     });
   }

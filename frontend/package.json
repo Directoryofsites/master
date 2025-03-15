@@ -36,6 +36,6 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://localhost:3000",
-  "homepage": "https://directoryofsites.github.io/contenedor/frontend/build"
+"proxy": "http://localhost:3000",
+  "homepage": "https://directoryofsites.github.io/contenedor"
 }
