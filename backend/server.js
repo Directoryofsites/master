@@ -137,7 +137,6 @@ app.get('/api/auth-test', async (req, res) => {
 
 
 
-
 // Ruta para buscar archivos y carpetas
 app.get('/api/search', async (req, res) => {
   try {
