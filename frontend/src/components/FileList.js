@@ -1,11 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
 
+
+
 const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, isSearchResults = false }) => {
   // Estado para almacenar las URLs de YouTube para cada archivo
   const [youtubeUrls, setYoutubeUrls] = useState({});
   // Estado para controlar la carga de URLs
   const [loadingUrls, setLoadingUrls] = useState(false);
+
+  
+
+// Estado para almacenar las URLs de audio para cada archivo
+const [audioUrls, setAudioUrls] = useState({});
+// Estado para almacenar las URLs de imagen para cada archivo
+const [imageUrls, setImageUrls] = useState({});
+
+
+
+
 
   // Función para cargar la URL de YouTube de un archivo
   const loadYoutubeUrl = async (filePath) => {
@@ -24,50 +37,127 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
     }
   };
 
+
+  // Función para cargar la URL de audio de un archivo
+  const loadAudioUrl = async (filePath) => {
+    try {
+      const url = await api.getAudioUrl(filePath);
+      if (url) {
+        setAudioUrls(prev => ({
+          ...prev,
+          [filePath]: url
+        }));
+      }
+      return url;
+    } catch (error) {
+      console.error('Error al cargar URL de audio:', error);
+      return null;
+    }
+  };
+
+  // Función para cargar la URL de imagen de un archivo
+  const loadImageUrl = async (filePath) => {
+    try {
+      const url = await api.getImageUrl(filePath);
+      if (url) {
+        setImageUrls(prev => ({
+          ...prev,
+          [filePath]: url
+        }));
+      }
+      return url;
+    } catch (error) {
+      console.error('Error al cargar URL de imagen:', error);
+      return null;
+    }
+  };
+
   // Estado para controlar qué archivo está siendo editado
   const [editingUrlFile, setEditingUrlFile] = useState(null);
   // Estado para almacenar la URL temporal mientras se edita
   const [tempUrl, setTempUrl] = useState('');
 
-  // Efecto para cargar las URLs de YouTube cuando cambian los archivos o la ruta
-  useEffect(() => {
-    async function loadAllYoutubeUrls() {
-      if (!files || files.length === 0 || loadingUrls) return;
-      
-      setLoadingUrls(true);
-      console.log('Cargando URLs de YouTube para todos los archivos...');
-      
-      const newUrls = {};
-      const promises = files.map(async (file) => {
-        // Solo procesar archivos (no carpetas)
-        if (!file.isFolder) {
-          // Determinar la ruta correcta del archivo
-          let filePath;
-          if (isSearchResults) {
-            filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
-          } else {
-            filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+
+// Estado para controlar qué archivo está siendo editado (audio)
+const [editingAudioFile, setEditingAudioFile] = useState(null);
+// Estado para almacenar la URL temporal mientras se edita (audio)
+const [tempAudioUrl, setTempAudioUrl] = useState('');
+
+// Estado para controlar qué archivo está siendo editado (imagen)
+const [editingImageFile, setEditingImageFile] = useState(null);
+// Estado para almacenar la URL temporal mientras se edita (imagen)
+const [tempImageUrl, setTempImageUrl] = useState('');
+
+
+// Efecto para cargar las URLs cuando cambian los archivos o la ruta
+useEffect(() => {
+  async function loadAllUrls() {
+    if (!files || files.length === 0 || loadingUrls) return;
+    
+    setLoadingUrls(true);
+    console.log('Cargando URLs para todos los archivos...');
+    
+    const newYoutubeUrls = {};
+    const newAudioUrls = {};
+    const newImageUrls = {};
+    
+    const promises = files.map(async (file) => {
+      // Solo procesar archivos (no carpetas)
+      if (!file.isFolder) {
+        // Determinar la ruta correcta del archivo
+        let filePath;
+        if (isSearchResults) {
+          filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
+        } else {
+          filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+        }
+        
+        try {
+          // Cargar URL de YouTube
+          const youtubeUrl = await api.getYoutubeUrl(filePath);
+          if (youtubeUrl) {
+            newYoutubeUrls[filePath] = youtubeUrl;
           }
           
-          try {
-            const url = await api.getYoutubeUrl(filePath);
-            if (url) {
-              newUrls[filePath] = url;
-            }
-          } catch (error) {
-            console.error(`Error al cargar URL para ${filePath}:`, error);
+          // Cargar URL de audio
+          const audioUrl = await api.getAudioUrl(filePath);
+          if (audioUrl) {
+            newAudioUrls[filePath] = audioUrl;
           }
+          
+          // Cargar URL de imagen
+          const imageUrl = await api.getImageUrl(filePath);
+          if (imageUrl) {
+            newImageUrls[filePath] = imageUrl;
+          }
+        } catch (error) {
+          console.error(`Error al cargar URLs para ${filePath}:`, error);
         }
-      });
-      
-      await Promise.all(promises);
-      setYoutubeUrls(newUrls);
-      console.log('URLs cargadas:', newUrls);
-      setLoadingUrls(false);
-    }
+      }
+    });
     
-    loadAllYoutubeUrls();
-  }, [files, currentPath, isSearchResults]);
+    await Promise.all(promises);
+    
+    setYoutubeUrls(newYoutubeUrls);
+    setAudioUrls(newAudioUrls);
+    setImageUrls(newImageUrls);
+    
+    console.log('URLs de YouTube cargadas:', newYoutubeUrls);
+    console.log('URLs de audio cargadas:', newAudioUrls);
+    console.log('URLs de imagen cargadas:', newImageUrls);
+    
+    setLoadingUrls(false);
+  }
+  
+  loadAllUrls();
+}, [files, currentPath, isSearchResults]);
+
+
+
+
+
+
+
   
   const handleFileClick = async (file) => {
     if (file.isFolder) {
@@ -94,20 +184,30 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
         
         console.log('Procesando archivo:', file.name);
         console.log('Ruta completa:', filePath);
+
         
-        // Verificar los tipos de archivos por su extensión
-        const isPDF = file.name.toLowerCase().endsWith('.pdf') || 
-          file.contentType === 'application/pdf';
-        const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(file.name) ||
-          file.contentType?.startsWith('image/');
-        const isDOCX = file.name.toLowerCase().endsWith('.docx') || 
-          file.contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-        console.log('¿Es un archivo PDF?', isPDF);
-        console.log('¿Es una imagen?', isImage);
-        console.log('¿Es un archivo DOCX?', isDOCX);
 
-        // Si es un archivo visualizable, lo mostramos directamente en el navegador
+// Verificar los tipos de archivos por su extensión
+const isPDF = file.name.toLowerCase().endsWith('.pdf') || 
+  file.contentType === 'application/pdf';
+const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(file.name) ||
+  file.contentType?.startsWith('image/');
+const isDOCX = file.name.toLowerCase().endsWith('.docx') || 
+  file.contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+const isMP3 = file.name.toLowerCase().endsWith('.mp3') ||
+  file.contentType === 'audio/mpeg';
+
+console.log('¿Es un archivo PDF?', isPDF);
+console.log('¿Es una imagen?', isImage);
+console.log('¿Es un archivo DOCX?', isDOCX);
+console.log('¿Es un archivo MP3?', isMP3);
+
+
+
+
+      // Si es un archivo visualizable, lo mostramos directamente en el navegador
         if (isPDF || isImage) {
           console.log('Archivo visualizable en navegador');
           // No se usa forceDownload para que el navegador lo muestre en su visor nativo
@@ -124,6 +224,36 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
           const viewUrl = `${baseUrl}/api/view-docx?path=${encodeURIComponent(filePath)}`;
           console.log('URL para visualizar DOCX:', viewUrl);
           window.open(viewUrl, '_blank');
+
+        } else if (isMP3) {
+          console.log('Archivo MP3 reproducible en navegador');
+          // Obtener la URL para reproducción
+          const url = await api.getDownloadUrl(filePath, false);
+          console.log('URL obtenida para MP3:', url);
+          
+          // Crear un reproductor de audio sencillo
+          const audioPlayer = document.createElement('audio');
+          audioPlayer.controls = true;
+          audioPlayer.src = url;
+          audioPlayer.style.position = 'fixed';
+          audioPlayer.style.bottom = '0';
+          audioPlayer.style.left = '0';
+          audioPlayer.style.width = '100%';
+          audioPlayer.style.zIndex = '1000';
+          audioPlayer.style.backgroundColor = '#f5f5f5';
+          audioPlayer.style.padding = '10px';
+          audioPlayer.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
+          
+          // Eliminar reproductor anterior si existe
+          const oldPlayer = document.getElementById('audio-player');
+          if (oldPlayer) {
+            oldPlayer.remove();
+          }
+          
+          audioPlayer.id = 'audio-player';
+          document.body.appendChild(audioPlayer);
+          audioPlayer.play();  
+
         } else {
           // Para otros tipos de archivo, mantener el comportamiento actual (descarga)
           const url = await api.getDownloadUrl(filePath);
@@ -297,6 +427,215 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
     }
   };
 
+
+// FUNCIONES PARA AUDIO
+  
+// Función para mostrar el campo de entrada de URL de audio
+const handleEditAudioUrl = async (file, e) => {
+  e.stopPropagation(); // Evitar que se propague el clic al elemento padre
+  
+  // Determinar la ruta del archivo
+  let filePath;
+  if (isSearchResults) {
+    filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
+  } else {
+    filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+  }
+  
+  setEditingAudioFile(filePath);
+  
+  try {
+    // Intentar cargar la URL del servidor si no la tenemos ya en el estado
+    if (!audioUrls[filePath]) {
+      const url = await loadAudioUrl(filePath);
+      setTempAudioUrl(url || '');
+    } else {
+      setTempAudioUrl(audioUrls[filePath] || '');
+    }
+  } catch (error) {
+    console.error('Error al cargar URL de audio para editar:', error);
+    setTempAudioUrl('');
+  }
+};
+
+// Función para guardar la URL de audio
+const handleSaveAudioUrl = async (filePath, e) => {
+  e.stopPropagation(); // Evitar que se propague el clic
+  
+  // Si la URL no es válida y no está vacía, mostrar alerta
+  if (tempAudioUrl.trim() && !tempAudioUrl.match(/^(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/)) {
+    alert('Por favor ingresa una URL válida o deja el campo vacío para eliminar la URL.');
+    return;
+  }
+  
+  try {
+    // URL a guardar (null si está vacía)
+    const urlToSave = tempAudioUrl.trim() ? tempAudioUrl : null;
+    
+    // Guardar URL en el servidor
+    await api.saveAudioUrl(filePath, urlToSave);
+    
+    // Actualizar estado local
+    setAudioUrls(prev => {
+      const updated = { ...prev };
+      if (urlToSave) {
+        updated[filePath] = urlToSave;
+      } else {
+        delete updated[filePath];
+      }
+      return updated;
+    });
+    
+    // Cerrar el campo de edición
+    setEditingAudioFile(null);
+    setTempAudioUrl('');
+    
+    // Notificar al usuario
+    alert(urlToSave ? 'URL de audio guardada correctamente' : 'URL de audio eliminada');
+  } catch (error) {
+    console.error('Error al guardar URL de audio:', error);
+    alert('Error al guardar URL de audio');
+  }
+};
+
+// Función para cancelar la edición de audio
+const handleCancelAudioEdit = (e) => {
+  e.stopPropagation();
+  setEditingAudioFile(null);
+  setTempAudioUrl('');
+};
+
+// Función para abrir la URL de audio
+const handleOpenAudioUrl = (filePath, e) => {
+  e.stopPropagation();
+  if (audioUrls[filePath]) {
+    // Asegurarse de que la URL tenga el formato correcto
+    let url = audioUrls[filePath];
+    
+    // Si la URL no comienza con http:// o https://, añadir https://
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    
+    // Crear un reproductor de audio
+    const audioPlayer = document.createElement('audio');
+    audioPlayer.controls = true;
+    audioPlayer.src = url;
+    audioPlayer.style.position = 'fixed';
+    audioPlayer.style.bottom = '0';
+    audioPlayer.style.left = '0';
+    audioPlayer.style.width = '100%';
+    audioPlayer.style.zIndex = '1000';
+    audioPlayer.style.backgroundColor = '#f5f5f5';
+    audioPlayer.style.padding = '10px';
+    audioPlayer.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
+    
+    // Eliminar reproductor anterior si existe
+    const oldPlayer = document.getElementById('audio-player');
+    if (oldPlayer) {
+      oldPlayer.remove();
+    }
+    
+    audioPlayer.id = 'audio-player';
+    document.body.appendChild(audioPlayer);
+    audioPlayer.play();
+  }
+};
+
+// FUNCIONES PARA IMAGEN
+
+// Función para mostrar el campo de entrada de URL de imagen
+const handleEditImageUrl = async (file, e) => {
+  e.stopPropagation(); // Evitar que se propague el clic al elemento padre
+  
+  // Determinar la ruta del archivo
+  let filePath;
+  if (isSearchResults) {
+    filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
+  } else {
+    filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+  }
+  
+  setEditingImageFile(filePath);
+  
+  try {
+    // Intentar cargar la URL del servidor si no la tenemos ya en el estado
+    if (!imageUrls[filePath]) {
+      const url = await loadImageUrl(filePath);
+      setTempImageUrl(url || '');
+    } else {
+      setTempImageUrl(imageUrls[filePath] || '');
+    }
+  } catch (error) {
+    console.error('Error al cargar URL de imagen para editar:', error);
+    setTempImageUrl('');
+  }
+};
+
+// Función para guardar la URL de imagen
+const handleSaveImageUrl = async (filePath, e) => {
+  e.stopPropagation(); // Evitar que se propague el clic
+  
+  // Si la URL no es válida y no está vacía, mostrar alerta
+  if (tempImageUrl.trim() && !tempImageUrl.match(/^(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/)) {
+    alert('Por favor ingresa una URL válida o deja el campo vacío para eliminar la URL.');
+    return;
+  }
+  
+  try {
+    // URL a guardar (null si está vacía)
+    const urlToSave = tempImageUrl.trim() ? tempImageUrl : null;
+    
+    // Guardar URL en el servidor
+    await api.saveImageUrl(filePath, urlToSave);
+    
+    // Actualizar estado local
+    setImageUrls(prev => {
+      const updated = { ...prev };
+      if (urlToSave) {
+        updated[filePath] = urlToSave;
+      } else {
+        delete updated[filePath];
+      }
+      return updated;
+    });
+    
+    // Cerrar el campo de edición
+    setEditingImageFile(null);
+    setTempImageUrl('');
+    
+    // Notificar al usuario
+    alert(urlToSave ? 'URL de imagen guardada correctamente' : 'URL de imagen eliminada');
+  } catch (error) {
+    console.error('Error al guardar URL de imagen:', error);
+    alert('Error al guardar URL de imagen');
+  }
+};
+
+// Función para cancelar la edición de imagen
+const handleCancelImageEdit = (e) => {
+  e.stopPropagation();
+  setEditingImageFile(null);
+  setTempImageUrl('');
+};
+
+// Función para abrir la URL de imagen
+const handleOpenImageUrl = (filePath, e) => {
+  e.stopPropagation();
+  if (imageUrls[filePath]) {
+    // Asegurarse de que la URL tenga el formato correcto
+    let url = imageUrls[filePath];
+    
+    // Si la URL no comienza con http:// o https://, añadir https://
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    
+    window.open(url, '_blank');
+  }
+};
+
+
   return (
     <div className="file-list-container">
       {!isSearchResults && (
@@ -375,50 +714,173 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
                         ▶
                       </button>
                     )}
+
+
+ {/* Botón de reproducción de audio visible para todos los usuarios */}
+{audioUrls[isSearchResults ? 
+  (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+  (currentPath ? `${currentPath}/${file.name}` : file.name)] && (
+  <button
+    className="play-audio-btn"
+    onClick={e => handleOpenAudioUrl(
+      isSearchResults ? 
+        (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+        (currentPath ? `${currentPath}/${file.name}` : file.name),
+      e
+    )}
+    title="Reproducir audio"
+  >
+    🔊
+  </button>
+)}
+
+{/* Botón de visualización de imagen visible para todos los usuarios */}
+{imageUrls[isSearchResults ? 
+  (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+  (currentPath ? `${currentPath}/${file.name}` : file.name)] && (
+  <button
+    className="view-image-btn"
+    onClick={e => handleOpenImageUrl(
+      isSearchResults ? 
+        (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+        (currentPath ? `${currentPath}/${file.name}` : file.name),
+      e
+    )}
+    title="Ver imagen"
+  >
+    🖼️
+  </button>
+)}
+
                     
-                    {/* Solo administradores pueden editar/añadir URLs */}
-                    {userRole === 'admin' && (
-                      <>
-                        {editingUrlFile === (isSearchResults ? 
-                          (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
-                          (currentPath ? `${currentPath}/${file.name}` : file.name)) ? (
-                          <div className="youtube-url-input-container" onClick={e => e.stopPropagation()}>
-                            <input
-                              type="text"
-                              value={tempUrl}
-                              onChange={e => setTempUrl(e.target.value)}
-                              placeholder="URL de YouTube"
-                              className="youtube-url-input"
-                            />
-                            <button 
-                              onClick={e => handleSaveYoutubeUrl(
-                                isSearchResults ? 
-                                  (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
-                                  (currentPath ? `${currentPath}/${file.name}` : file.name), 
-                                e
-                              )}
-                              className="save-url-btn"
-                            >
-                              ✓
-                            </button>
-                            <button 
-                              onClick={handleCancelEdit}
-                              className="cancel-url-btn"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            className="add-youtube-btn"
-                            onClick={e => handleEditYoutubeUrl(file, e)}
-                            title="Añadir URL de YouTube"
-                          >
-                            🔗
-                          </button>
-                        )}
-                      </>
-                    )}
+{/* Solo administradores pueden editar/añadir URLs */}
+{userRole === 'admin' && (
+  <>
+    {/* Control de YouTube */}
+    {editingUrlFile === (isSearchResults ? 
+      (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+      (currentPath ? `${currentPath}/${file.name}` : file.name)) ? (
+      <div className="youtube-url-input-container" onClick={e => e.stopPropagation()}>
+        <input
+          type="text"
+          value={tempUrl}
+          onChange={e => setTempUrl(e.target.value)}
+          placeholder="URL de YouTube"
+          className="youtube-url-input"
+        />
+        <button 
+          onClick={e => handleSaveYoutubeUrl(
+            isSearchResults ? 
+              (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+              (currentPath ? `${currentPath}/${file.name}` : file.name), 
+            e
+          )}
+          className="save-url-btn"
+        >
+          ✓
+        </button>
+        <button 
+          onClick={handleCancelEdit}
+          className="cancel-url-btn"
+        >
+          ✕
+        </button>
+      </div>
+    ) : (
+      <button
+        className="add-youtube-btn"
+        onClick={e => handleEditYoutubeUrl(file, e)}
+        title="Añadir URL de YouTube"
+      >
+        🔗
+      </button>
+    )}
+
+    {/* Control de Audio */}
+    {editingAudioFile === (isSearchResults ? 
+      (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+      (currentPath ? `${currentPath}/${file.name}` : file.name)) ? (
+      <div className="audio-url-input-container" onClick={e => e.stopPropagation()}>
+        <input
+          type="text"
+          value={tempAudioUrl}
+          onChange={e => setTempAudioUrl(e.target.value)}
+          placeholder="URL de Audio"
+          className="audio-url-input"
+        />
+        <button 
+          onClick={e => handleSaveAudioUrl(
+            isSearchResults ? 
+              (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+              (currentPath ? `${currentPath}/${file.name}` : file.name), 
+            e
+          )}
+          className="save-url-btn"
+        >
+          ✓
+        </button>
+        <button 
+          onClick={handleCancelAudioEdit}
+          className="cancel-url-btn"
+        >
+          ✕
+        </button>
+      </div>
+    ) : (
+      <button
+        className="add-audio-btn"
+        onClick={e => handleEditAudioUrl(file, e)}
+        title="Añadir URL de Audio"
+      >
+        🎵
+      </button>
+    )}
+
+    {/* Control de Imagen */}
+    {editingImageFile === (isSearchResults ? 
+      (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+      (currentPath ? `${currentPath}/${file.name}` : file.name)) ? (
+      <div className="image-url-input-container" onClick={e => e.stopPropagation()}>
+        <input
+          type="text"
+          value={tempImageUrl}
+          onChange={e => setTempImageUrl(e.target.value)}
+          placeholder="URL de Imagen"
+          className="image-url-input"
+        />
+        <button 
+          onClick={e => handleSaveImageUrl(
+            isSearchResults ? 
+              (file.path.startsWith('/') ? file.path.substring(1) : file.path) : 
+              (currentPath ? `${currentPath}/${file.name}` : file.name), 
+            e
+          )}
+          className="save-url-btn"
+        >
+          ✓
+        </button>
+        <button 
+          onClick={handleCancelImageEdit}
+          className="cancel-url-btn"
+        >
+          ✕
+        </button>
+      </div>
+    ) : (
+      <button
+        className="add-image-btn"
+        onClick={e => handleEditImageUrl(file, e)}
+        title="Añadir URL de Imagen"
+      >
+        🖼️
+      </button>
+    )}
+  </>
+)}
+
+
+
+
                   </>
                 )}
                 

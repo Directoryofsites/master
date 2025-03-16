@@ -134,100 +134,9 @@ app.get('/api/auth-test', async (req, res) => {
 
 
 
-// Ruta para listar archivos con sistema de reintentos
-app.get('/api/files', async (req, res) => {
-  try {
-    // Verificar si Supabase está configurado
-    if (!supabase) {
-      return res.status(500).json({
-        success: false,
-        message: 'Cliente de Supabase no configurado correctamente. Verifica las variables de entorno SUPABASE_URL y SUPABASE_KEY.'
-      });
-    }
-    
-    const prefix = req.query.prefix || '';
-    
-    // Normalizar el prefijo
-    let normalizedPrefix = prefix;
-    if (normalizedPrefix.startsWith('/')) {
-      normalizedPrefix = normalizedPrefix.substring(1);
-    }
-    
-    console.log(`Listando archivos con prefijo: "${normalizedPrefix}"`);
-    
-    // Implementar sistema de reintentos
-    const MAX_RETRIES = 3;
-    let lastError = null;
-    
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const { data, error } = await supabase.storage
-          .from(bucketName)
-          .list(normalizedPrefix, {
-            sortBy: { column: 'name', order: 'asc' }
-          });
-        
-        if (error) {
-          lastError = error;
-          console.log(`Intento ${attempt}/${MAX_RETRIES} falló: ${error.message}`);
-          
-          // Esperar antes de reintentar (tiempo exponencial)
-          if (attempt < MAX_RETRIES) {
-            const delay = 1000 * attempt; // 1s, 2s, 3s, etc.
-            console.log(`Esperando ${delay}ms antes de reintentar...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          } else {
-            throw error;
-          }
-        }
-        
-        // Éxito - formatear la respuesta
-        const formattedFiles = data.map(item => {
-          // Identificar si es carpeta o archivo
-          const isFolder = !item.metadata || item.metadata.mimetype === 'application/x-directory';
-          
-          return {
-            name: item.name,
-            path: normalizedPrefix ? `/${normalizedPrefix}/${item.name}` : `/${item.name}`,
-            size: (item.metadata && item.metadata.size) || 0,
-            contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
-            updated: item.updated_at,
-            isFolder: isFolder
-          };
-        });
-        
-        // Si tuvimos éxito, devolver los datos
-        console.log(`Listado exitoso en el intento ${attempt}`);
-        return res.status(200).json(formattedFiles);
-        
-      } catch (attemptError) {
-        lastError = attemptError;
-        console.log(`Excepción en intento ${attempt}/${MAX_RETRIES}: ${attemptError.message}`);
-        
-        // Reintentar solo si no es el último intento
-        if (attempt < MAX_RETRIES) {
-          const delay = 1000 * attempt;
-          console.log(`Esperando ${delay}ms antes de reintentar...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-    }
-    
-    // Si llegamos aquí, es porque todos los intentos fallaron
-    console.error('Error persistente al listar archivos después de reintentos:', lastError);
-    throw lastError;
-    
-  } catch (error) {
-    console.error('Error al listar archivos:', error);
-    
-    res.status(500).json({
-      success: false,
-      message: `Error al listar archivos: ${error.message}`,
-      error: error.message
-    });
-  }
-});
+
+
+
 
 // Ruta para buscar archivos y carpetas
 app.get('/api/search', async (req, res) => {
@@ -949,6 +858,380 @@ app.post('/api/youtube-url', express.json(), async (req, res) => {
     res.status(500).json({
       success: false,
       message: `Error al guardar URL de YouTube: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+
+// Rutas para manejar URLs de audio MP3
+
+// Obtener URL de audio para un archivo
+app.get('/api/audio-url', async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    const filePath = req.query.path;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha especificado la ruta del archivo'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Obteniendo URL de audio para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.audio.metadata`;
+    
+    // Intentar obtener el archivo de metadatos
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .download(metadataPath);
+    
+    if (error && error.message !== 'The object was not found') {
+      console.error('Error al obtener metadatos de audio:', error);
+      throw error;
+    }
+    
+    if (!data) {
+      return res.status(200).json({
+        success: true,
+        audioUrl: null
+      });
+    }
+    
+    // Convertir a texto y parsear JSON
+    const text = await data.text();
+    const metadata = JSON.parse(text);
+    
+    return res.status(200).json({
+      success: true,
+      audioUrl: metadata.audioUrl || null
+    });
+  } catch (error) {
+    console.error('Error al obtener URL de audio:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al obtener URL de audio: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Guardar URL de audio para un archivo
+app.post('/api/audio-url', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    const { filePath, audioUrl } = req.body;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha especificado la ruta del archivo'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Guardando URL de audio para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.audio.metadata`;
+    
+    // Crear contenido de metadatos
+    const metadata = {
+      audioUrl: audioUrl,
+      updatedAt: new Date().toISOString()
+    };
+    
+    // Convertir a JSON
+    const metadataContent = JSON.stringify(metadata);
+    
+    // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
+    if (!audioUrl) {
+      const { error } = await supabase.storage
+        .from(bucketName)
+        .remove([metadataPath]);
+      
+      if (error && error.message !== 'The object was not found') {
+        console.error('Error al eliminar metadatos de audio:', error);
+        throw error;
+      }
+      
+      return res.status(200).json({
+        success: true,
+        message: 'URL de audio eliminada correctamente'
+      });
+    }
+    
+    // Guardar archivo de metadatos
+    const { error } = await supabase.storage
+      .from(bucketName)
+      .upload(metadataPath, metadataContent, {
+        contentType: 'application/json',
+        upsert: true
+      });
+    
+    if (error) {
+      console.error('Error al guardar metadatos de audio:', error);
+      throw error;
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'URL de audio guardada correctamente'
+    });
+  } catch (error) {
+    console.error('Error al guardar URL de audio:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al guardar URL de audio: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Rutas para manejar URLs de imágenes
+
+// Obtener URL de imagen para un archivo
+app.get('/api/image-url', async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    const filePath = req.query.path;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha especificado la ruta del archivo'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Obteniendo URL de imagen para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.image.metadata`;
+    
+    // Intentar obtener el archivo de metadatos
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .download(metadataPath);
+    
+    if (error && error.message !== 'The object was not found') {
+      console.error('Error al obtener metadatos de imagen:', error);
+      throw error;
+    }
+    
+    if (!data) {
+      return res.status(200).json({
+        success: true,
+        imageUrl: null
+      });
+    }
+    
+    // Convertir a texto y parsear JSON
+    const text = await data.text();
+    const metadata = JSON.parse(text);
+    
+    return res.status(200).json({
+      success: true,
+      imageUrl: metadata.imageUrl || null
+    });
+  } catch (error) {
+    console.error('Error al obtener URL de imagen:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al obtener URL de imagen: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Guardar URL de imagen para un archivo
+app.post('/api/image-url', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    const { filePath, imageUrl } = req.body;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha especificado la ruta del archivo'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Guardando URL de imagen para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.image.metadata`;
+    
+    // Crear contenido de metadatos
+    const metadata = {
+      imageUrl: imageUrl,
+      updatedAt: new Date().toISOString()
+    };
+    
+    // Convertir a JSON
+    const metadataContent = JSON.stringify(metadata);
+    
+    // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
+    if (!imageUrl) {
+      const { error } = await supabase.storage
+        .from(bucketName)
+        .remove([metadataPath]);
+      
+      if (error && error.message !== 'The object was not found') {
+        console.error('Error al eliminar metadatos de imagen:', error);
+        throw error;
+      }
+      
+      return res.status(200).json({
+        success: true,
+        message: 'URL de imagen eliminada correctamente'
+      });
+    }
+    
+    // Guardar archivo de metadatos
+    const { error } = await supabase.storage
+      .from(bucketName)
+      .upload(metadataPath, metadataContent, {
+        contentType: 'application/json',
+        upsert: true
+      });
+    
+    if (error) {
+      console.error('Error al guardar metadatos de imagen:', error);
+      throw error;
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'URL de imagen guardada correctamente'
+    });
+  } catch (error) {
+    console.error('Error al guardar URL de imagen:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al guardar URL de imagen: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Modificación en la ruta de listado de archivos para ocultar archivos de metadatos
+app.get('/api/files', async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente. Verifica las variables de entorno SUPABASE_URL y SUPABASE_KEY.'
+      });
+    }
+    
+    const prefix = req.query.prefix || '';
+    
+    // Normalizar el prefijo
+    let normalizedPrefix = prefix;
+    if (normalizedPrefix.startsWith('/')) {
+      normalizedPrefix = normalizedPrefix.substring(1);
+    }
+    
+    console.log(`Listando archivos con prefijo: "${normalizedPrefix}"`);
+    
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .list(normalizedPrefix, {
+        sortBy: { column: 'name', order: 'asc' }
+      });
+    
+    if (error) {
+      throw error;
+    }
+    
+    // Formatear la respuesta y filtrar archivos de metadatos
+    const formattedFiles = data
+      .filter(item => {
+        // Filtrar archivos de metadatos (.youtube.metadata, .audio.metadata, .image.metadata)
+        return !item.name.endsWith('.youtube.metadata') && 
+               !item.name.endsWith('.audio.metadata') && 
+               !item.name.endsWith('.image.metadata');
+      })
+      .map(item => {
+        // Identificar si es carpeta o archivo
+        const isFolder = !item.metadata || item.metadata.mimetype === 'application/x-directory';
+        
+        return {
+          name: item.name,
+          path: normalizedPrefix ? `/${normalizedPrefix}/${item.name}` : `/${item.name}`,
+          size: (item.metadata && item.metadata.size) || 0,
+          contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+          updated: item.updated_at,
+          isFolder: isFolder
+        };
+      });
+    
+    res.status(200).json(formattedFiles);
+  } catch (error) {
+    console.error('Error al listar archivos:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al listar archivos: ${error.message}`,
       error: error.message
     });
   }

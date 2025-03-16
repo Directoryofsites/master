@@ -306,3 +306,125 @@ export const saveYoutubeUrl = async (path, youtubeUrl) => {
     throw error;
   }
 };
+
+/**
+ * Obtiene la URL de audio asociada a un archivo
+ * @param {string} path - Ruta del archivo
+ * @returns {Promise<string|null>} - URL de audio o null si no hay ninguna
+ */
+export const getAudioUrl = async (path) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para obtener la URL de audio');
+    }
+
+    const response = await fetch(`${BASE_URL}/audio-url?path=${encodeURIComponent(path)}`);
+    
+    if (!response.ok) {
+      throw new Error('No se pudo obtener la URL de audio');
+    }
+
+    const data = await response.json();
+    return data.audioUrl;
+  } catch (error) {
+    console.error('Error en getAudioUrl:', error);
+    throw error;
+  }
+};
+
+/**
+ * Guarda o elimina la URL de audio asociada a un archivo
+ * @param {string} path - Ruta del archivo
+ * @param {string|null} audioUrl - URL de audio a guardar, o null para eliminar
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const saveAudioUrl = async (path, audioUrl) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para guardar la URL de audio');
+    }
+
+    const response = await fetch(`${BASE_URL}/audio-url`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filePath: path,
+        audioUrl: audioUrl
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('No se pudo guardar la URL de audio');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en saveAudioUrl:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene la URL de imagen asociada a un archivo
+ * @param {string} path - Ruta del archivo
+ * @returns {Promise<string|null>} - URL de imagen o null si no hay ninguna
+ */
+export const getImageUrl = async (path) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para obtener la URL de imagen');
+    }
+
+    const response = await fetch(`${BASE_URL}/image-url?path=${encodeURIComponent(path)}`);
+    
+    if (!response.ok) {
+      throw new Error('No se pudo obtener la URL de imagen');
+    }
+
+    const data = await response.json();
+    return data.imageUrl;
+  } catch (error) {
+    console.error('Error en getImageUrl:', error);
+    throw error;
+  }
+};
+
+/**
+ * Guarda o elimina la URL de imagen asociada a un archivo
+ * @param {string} path - Ruta del archivo
+ * @param {string|null} imageUrl - URL de imagen a guardar, o null para eliminar
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const saveImageUrl = async (path, imageUrl) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para guardar la URL de imagen');
+    }
+
+    const response = await fetch(`${BASE_URL}/image-url`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filePath: path,
+        imageUrl: imageUrl
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('No se pudo guardar la URL de imagen');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en saveImageUrl:', error);
+    throw error;
+  }
+};
