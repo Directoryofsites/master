@@ -1,7 +1,0 @@
-ejecutar server local:.  
-
-cd E:\Admin7\explorador-archivos\backend
-npm run dev
-
-cd E:\Admin7\explorador-archivos\frontend
-npm start
