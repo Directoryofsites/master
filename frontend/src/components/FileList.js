@@ -906,4 +906,4 @@ const handleOpenImageUrl = (filePath, e) => {
   );
 };
 
-export default FileList;"// Actualizaci¢n forzada para GitHub Pages - $(date)" 
+export default FileList;
