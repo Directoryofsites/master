@@ -1,6 +1,12 @@
 // services/api.js
 const isDevelopment = process.env.NODE_ENV === 'development';
-const isGitHubPages = window.location.hostname === 'directoryofsites.github.io';
+const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/contenedor/');
+
+// Agregar estos console.log para depuración
+console.log('Hostname:', window.location.hostname);
+console.log('Pathname:', window.location.pathname);
+console.log('Is GitHub Pages:', isGitHubPages);
+
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
   : isGitHubPages 
