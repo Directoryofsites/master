@@ -98,7 +98,7 @@ try {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 2 * 1024 * 1024, // Límite de 2MB
+    fileSize: 6 * 1024 * 1024, // Límite de 6MB
   }
 });
 
@@ -237,6 +237,61 @@ app.get('/api/search', async (req, res) => {
 });
 
 
+
+
+// Función para calcular el tamaño total del bucket
+async function calculateBucketSize() {
+  let totalSize = 0;
+  
+  // Función recursiva para procesar carpetas
+  async function processFolder(prefix = '') {
+    // Listar elementos en la carpeta actual
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .list(prefix);
+    
+    if (error) {
+      console.error(`Error al listar contenido de ${prefix}:`, error);
+      return 0;
+    }
+    
+    if (!data || data.length === 0) {
+      return 0;
+    }
+    
+    let folderSize = 0;
+    
+    // Procesar cada elemento
+    for (const item of data) {
+      // Ignorar archivos especiales .folder y archivos de metadatos
+      if (item.name === '.folder' || 
+          item.name.endsWith('.youtube.metadata') || 
+          item.name.endsWith('.audio.metadata') || 
+          item.name.endsWith('.image.metadata')) {
+        continue;
+      }
+      
+      // Construir ruta completa del elemento
+      const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+      
+      // Si es una carpeta, procesarla recursivamente
+      if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+        folderSize += await processFolder(itemPath);
+      } else {
+        // Si es un archivo, sumar su tamaño
+        folderSize += item.metadata?.size || 0;
+      }
+    }
+    
+    return folderSize;
+  }
+  
+  // Iniciar el cálculo desde la raíz
+  totalSize = await processFolder();
+  
+  return totalSize;
+}
+
 // Ruta para subir archivos
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -252,6 +307,26 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'No se ha enviado ningún archivo'
+      });
+    }
+    
+    // Calcular tamaño actual del bucket y verificar límite (200MB)
+    console.log('Calculando tamaño actual del bucket...');
+    const currentBucketSize = await calculateBucketSize();
+    const fileSizeInBytes = req.file.size;
+    const maxBucketSize = 200 * 1024 * 1024; // 200MB en bytes
+    
+    console.log(`Tamaño actual del bucket: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB`);
+    console.log(`Tamaño del archivo a subir: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`);
+    
+    // Verificar si el archivo excede el límite total
+    if (currentBucketSize + fileSizeInBytes > maxBucketSize) {
+      return res.status(413).json({
+        success: false,
+        message: `No se puede subir el archivo. Se excedería el límite de 200MB para el repositorio. Tamaño actual: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB, Tamaño del archivo: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`,
+        currentSize: currentBucketSize,
+        fileSize: fileSizeInBytes,
+        maxSize: maxBucketSize
       });
     }
     
@@ -305,7 +380,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     });
   }
 });
-
 
 
 
