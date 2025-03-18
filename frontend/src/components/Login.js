@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BASE_URL } from '../services/api'; // Importar BASE_URL de api.js
 
 const Login = ({ onLogin }) => {
   const [username, setUsername] = useState('');
@@ -19,28 +20,26 @@ const Login = ({ onLogin }) => {
     }
 
     try {
-      // Simular retardo para dar sensación de procesamiento
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Llamar al endpoint de autenticación en el servidor
+      const response = await fetch(`${BASE_URL}/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
+      });
       
-      // Para fines de demostración, aceptamos dos usuarios:
-      // 1. admin/admin123 (rol administrador)
-      // 2. usuario/usuario123 (rol usuario normal)
-      if (
-        (username === 'admin' && password === 'Jh811880') || 
-        (username === 'usuario' && password === 'usuario123')
-      ) {
-        // Determinar el rol basado en el nombre de usuario
-        const role = username === 'admin' ? 'admin' : 'user';
-        
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
         // Éxito en el inicio de sesión
         onLogin({
-          username,
-          role,
-          // Agregar otros datos que puedan ser útiles
+          username: data.user.username,
+          role: data.user.role,
           loggedInAt: new Date().toISOString()
         });
       } else {
-        setError('Credenciales incorrectas');
+        setError(data.message || 'Credenciales incorrectas');
       }
     } catch (err) {
       setError('Error al iniciar sesión');
@@ -94,10 +93,8 @@ const Login = ({ onLogin }) => {
           </button>
           
           <div className="login-help">
-  <p>Contacte al administrador del sistema para obtener credenciales de acceso.</p>
-</div>
-
-
+            <p>Contacte al administrador del sistema para obtener credenciales de acceso.</p>
+          </div>
         </form>
       </div>
     </div>
