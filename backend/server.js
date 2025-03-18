@@ -1252,13 +1252,13 @@ app.get('/api/files', async (req, res) => {
 });
 
 
+
 // Endpoint para visualizar archivos DOCX como HTML
 app.get('/api/view-docx', async (req, res) => {
   console.log('Endpoint view-docx llamado');
   console.log('Query parameters:', req.query);
   
   try {
-
     // Verificar si Supabase está configurado
     if (!supabase) {
       return res.status(500).json({
@@ -1303,13 +1303,18 @@ app.get('/api/view-docx', async (req, res) => {
     
     // Convertir el arrayBuffer a Buffer para mammoth
     const buffer = Buffer.from(await data.arrayBuffer());
+    console.log('Buffer creado correctamente, tamaño:', buffer.length);
+    
+    // Importar mammoth
+    const mammoth = require('mammoth');
+    console.log('Librería mammoth importada correctamente');
     
     try {
-      // Importar mammoth de manera dinámica (asegúrate de tenerlo instalado con npm install mammoth)
-      const mammoth = require('mammoth');
-      
-      // Convertir DOCX a HTML
+      // Convertir DOCX a HTML con manejo de error mejorado
+      console.log('Iniciando conversión DOCX a HTML...');
       const result = await mammoth.convertToHtml({ buffer });
+      console.log('Conversión DOCX a HTML completada');
+      
       const html = result.value;
       
       // Enviar el HTML con estilos adicionales
@@ -1375,23 +1380,33 @@ app.get('/api/view-docx', async (req, res) => {
       `);
       
     } catch (mammothError) {
-      console.error('Error al convertir DOCX a HTML:', mammothError);
-      res.status(500).json({
+      console.error('Error detallado al convertir DOCX a HTML:', mammothError);
+      console.error('Tipo de error:', typeof mammothError);
+      console.error('Stack trace:', mammothError.stack);
+      
+      return res.status(500).json({
         success: false,
         message: 'Error al convertir el documento',
-        error: mammothError.message
+        error: JSON.stringify(mammothError, Object.getOwnPropertyNames(mammothError))
       });
     }
     
   } catch (error) {
     console.error('Error general en view-docx:', error);
-    res.status(500).json({
+    console.error('Tipo de error:', typeof error);
+    console.error('Stack trace:', error.stack);
+    
+    return res.status(500).json({
       success: false,
       message: 'Error al procesar el documento',
-      error: error.message
+      error: JSON.stringify(error, Object.getOwnPropertyNames(error))
     });
   }
 });
+
+
+
+
 
 
 // Endpoint de diagnóstico para verificar la conectividad con Supabase
