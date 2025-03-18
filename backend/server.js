@@ -1512,6 +1512,82 @@ app.get('/api/diagnose', async (req, res) => {
   }
 });
 
+
+// Endpoint de autenticación
+app.post('/api/login', express.json(), async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Credenciales válidas (deberías almacenar estas en variables de entorno)
+    const validCredentials = {
+      'admin': 'Jh811880',
+      'usuario': 'usuario123'
+    };
+    
+    // Verificar las credenciales
+    if (validCredentials[username] && validCredentials[username] === password) {
+      // Credenciales correctas
+      res.status(200).json({
+        success: true,
+        user: {
+          username: username,
+          role: username === 'admin' ? 'admin' : 'user'
+        }
+      });
+    } else {
+      // Credenciales incorrectas
+      res.status(401).json({
+        success: false,
+        message: 'Nombre de usuario o contraseña incorrectos'
+      });
+    }
+  } catch (error) {
+    console.error('Error en autenticación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno durante la autenticación'
+    });
+  }
+});
+
+
+// Endpoint de autenticación
+app.post('/api/login', express.json(), async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Credenciales válidas (estas pueden ser actualizadas aquí)
+    const validCredentials = {
+      'admin': 'Jh811880',
+      'usuario': 'usuario123'
+    };
+    
+    // Verificar las credenciales
+    if (validCredentials[username] && validCredentials[username] === password) {
+      // Credenciales correctas
+      res.status(200).json({
+        success: true,
+        user: {
+          username: username,
+          role: username === 'admin' ? 'admin' : 'user'
+        }
+      });
+    } else {
+      // Credenciales incorrectas
+      res.status(401).json({
+        success: false,
+        message: 'Nombre de usuario o contraseña incorrectos'
+      });
+    }
+  } catch (error) {
+    console.error('Error en autenticación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno durante la autenticación'
+    });
+  }
+});
+
 // Iniciar el servidor  
 app.listen(PORT, () => {
   console.log(`Servidor iniciado en el puerto ${PORT}`);
