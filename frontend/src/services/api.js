@@ -1,17 +1,27 @@
 // services/api.js
 const isDevelopment = process.env.NODE_ENV === 'development';
-const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/contenedor/');
+
+
+
+const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/Gracia_y_Vida/');
 
 // Agregar estos console.log para depuración
 console.log('Hostname:', window.location.hostname);
 console.log('Pathname:', window.location.pathname);
 console.log('Is GitHub Pages:', isGitHubPages);
 
+
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
   : isGitHubPages 
-    ? 'https://contenedor-production-3606.up.railway.app/api' // URL explícita para GitHub Pages
-    : 'https://contenedor-production-3606.up.railway.app/api'; // URL de Railway en producción
+    ? 'https://graciavida-production.up.railway.app/api' // URL explícita para GitHub Pages
+    : 'https://graciavida-production.up.railway.app/api'; // URL de Railway en producción
+
+
+
+
+
+    
 
   // Función de utilidad para implementar reintentos en las llamadas API
 const fetchWithRetry = async (url, options = {}, maxRetries = 3) => {
