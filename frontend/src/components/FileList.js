@@ -219,8 +219,12 @@ console.log('¿Es un archivo MP3?', isMP3);
 
         } else if (isDOCX) {
           console.log('Archivo DOCX visualizable mediante API');
-          // Usar nuestra función viewDocx y BASE_URL para construir la URL
-          const viewUrl = api.viewDocx(filePath);
+          // Obtener la URL BASE del api.js
+          const baseUrl = api.BASE_URL;
+          console.log('Base URL para DOCX:', baseUrl);
+          
+          // Construir URL explícitamente
+          const viewUrl = `${baseUrl}/view-docx?path=${encodeURIComponent(filePath)}`;
           console.log('URL para visualizar DOCX:', viewUrl);
           window.open(viewUrl, '_blank');
 

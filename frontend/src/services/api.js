@@ -3,7 +3,7 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 
 
 
-const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/Gracia_y_Vida/');
+const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/master/');
 
 // Agregar estos console.log para depuración
 console.log('Hostname:', window.location.hostname);
@@ -14,8 +14,8 @@ console.log('Is GitHub Pages:', isGitHubPages);
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
   : isGitHubPages 
-    ? 'https://graciayvida-production-339d.up.railway.app/api' // URL explícita para GitHub Pages
-    : 'https://graciayvida-production-339d.up.railway.app/api'; // URL de Railway en producción
+    ? 'https://master-production.up.railway.app/api' // URL explícita para GitHub Pages
+    : 'https://master-production.up.railway.app/api'; // URL de Railway en producción
 
     
 
