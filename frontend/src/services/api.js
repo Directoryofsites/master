@@ -14,8 +14,8 @@ console.log('Is GitHub Pages:', isGitHubPages);
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
   : isGitHubPages 
-    ? 'https://master-production.up.railway.app/api' // URL explícita para GitHub Pages
-    : 'https://master-production.up.railway.app/api'; // URL de Railway en producción
+    ? 'https://master-production-5386.up.railway.app/api' // URL explícita para GitHub Pages
+    : 'https://master-production-5386.up.railway.app/api'; // URL de Railway en producción
 
     
 
