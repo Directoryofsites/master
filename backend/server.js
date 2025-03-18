@@ -38,10 +38,20 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Configuración de Supabase con valores predeterminados para pruebas
-const supabaseUrl = process.env.SUPABASE_URL || 'https://bxkzxxokdvfobcpbmldj.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4a3p4eG9rZHZmb2JjcGJtbGRqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MTU2NzMwNiwiZXhwIjoyMDU3MTQzMzA2fQ.HofSSYqlfoVHwe_L4pXsVd0JzhBR65PPPEDP0pAh6uM';
-const bucketName = process.env.BUCKET_NAME || 'archivos';
+
+
+// Configuración de Supabase (sin valores predeterminados para garantizar separación)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const bucketName = process.env.BUCKET_NAME;
+
+// Verificar que las variables de entorno estén configuradas
+if (!supabaseUrl || !supabaseKey || !bucketName) {
+  console.error('ERROR: Variables de entorno faltantes. Asegúrate de configurar SUPABASE_URL, SUPABASE_KEY y BUCKET_NAME.');
+  process.exit(1); // Terminar la aplicación si faltan las variables
+}
+
+
 
 // Crear cliente de Supabase con opciones avanzadas
 let supabase;
