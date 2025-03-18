@@ -201,10 +201,12 @@ export const getDownloadUrl = async (path, forceDownload = false) => {
       throw new Error('Se requiere una ruta para obtener la URL');
     }
     
+
     // Determinar el tipo de archivo por su extensión
-    const isPDF = path.toLowerCase().endsWith('.pdf');
-    const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(path);
-    const isViewable = isPDF || isImage;
+const isPDF = path.toLowerCase().endsWith('.pdf');
+const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(path);
+const isDOCX = path.toLowerCase().endsWith('.docx');
+const isViewable = isPDF || isImage || isDOCX;
     
     console.log('¿Es un archivo visualizable?', isViewable);
     
@@ -437,6 +439,35 @@ export const saveImageUrl = async (path, imageUrl) => {
     return await response.json();
   } catch (error) {
     console.error('Error en saveImageUrl:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene la URL para visualizar un documento DOCX como HTML
+ * @param {string} path - Ruta del archivo DOCX
+ * @returns {Promise<string>} - URL para visualizar el documento como HTML
+ */
+export const viewDocx = async (path) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para visualizar el documento');
+    }
+    
+    // Verificar que sea un archivo DOCX
+    if (!path.toLowerCase().endsWith('.docx')) {
+      throw new Error('Esta función solo es para archivos DOCX');
+    }
+    
+    console.log('Obteniendo visualización para DOCX:', path);
+    
+    // Construir URL al endpoint view-docx en el backend
+    const viewUrl = `${BASE_URL}/view-docx?path=${encodeURIComponent(path)}`;
+    
+    return viewUrl;
+  } catch (error) {
+    console.error('Error en viewDocx:', error);
     throw error;
   }
 };

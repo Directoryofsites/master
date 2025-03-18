@@ -214,16 +214,19 @@ console.log('¿Es un archivo MP3?', isMP3);
           const url = await api.getDownloadUrl(filePath, false);
           console.log('URL obtenida:', url);
           window.open(url, '_blank');
+
+
+
         } else if (isDOCX) {
           console.log('Archivo DOCX visualizable mediante API');
-          // Construir la URL completa al servidor de backend para DOCX
-          const baseUrl = process.env.NODE_ENV === 'development' 
-            ? 'http://localhost:3000' // URL local en desarrollo
-            : 'https://contenedor-production-3606.up.railway.app'; // URL de Railway en producción
-          
-          const viewUrl = `${baseUrl}/api/view-docx?path=${encodeURIComponent(filePath)}`;
+          // Usar nuestra función viewDocx y BASE_URL para construir la URL
+          const viewUrl = api.viewDocx(filePath);
           console.log('URL para visualizar DOCX:', viewUrl);
           window.open(viewUrl, '_blank');
+
+
+
+
 
         } else if (isMP3) {
           console.log('Archivo MP3 reproducible en navegador');
