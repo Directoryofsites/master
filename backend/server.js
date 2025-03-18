@@ -1520,7 +1520,7 @@ app.post('/api/login', express.json(), async (req, res) => {
     
     // Credenciales válidas (deberías almacenar estas en variables de entorno)
     const validCredentials = {
-      'admin': 'Jh811880',
+      'admin': 'Pana811880',
       'usuario': 'usuario123'
     };
     
