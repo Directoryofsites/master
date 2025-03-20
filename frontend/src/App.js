@@ -11,8 +11,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [siteSettings, setSiteSettings] = useState({
-    title: 'Iglesia Gracia y Vida',
-    subtitle: 'Contenido Mensajes Biblicos',
+    title: 'Proyecto Prueba 1',
+    subtitle: 'Contenedor Documental',
     logo: ''
   });
 
