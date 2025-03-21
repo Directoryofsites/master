@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estadísticas de Almacenamiento</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: #3498db;
+            margin-top: 0;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .progress {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.3s ease;
+        }
+        .stats-container {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .error {
+            color: #e74c3c;
+            padding: 15px;
+            background-color: #ffdede;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        p {
+            margin: 10px 0;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        .timestamp {
+            text-align: center;
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-top: 20px;
+        }
+        .refresh-btn {
+            display: block;
+            width: 150px;
+            margin: 20px auto;
+            padding: 10px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            text-align: center;
+        }
+        .refresh-btn:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Estadísticas de Almacenamiento</h1>
+    <div id="stats-container" class="stats-container">
+        <div id="loading" class="loading">Cargando estadísticas...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="stats" style="display: none;">
+            <h2>Uso de Almacenamiento</h2>
+            <div class="progress-bar">
+                <div id="progress" class="progress"></div>
+            </div>
+            <p id="percentage"></p>
+            <p id="used"></p>
+            <p id="total"></p>
+            <p id="remaining"></p>
+            <p id="timestamp" class="timestamp"></p>
+        </div>
+    </div>
+    
+    <button id="refresh-btn" class="refresh-btn" style="display: none;">Actualizar</button>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const stats = document.getElementById('stats');
+            const progress = document.getElementById('progress');
+            const percentage = document.getElementById('percentage');
+            const used = document.getElementById('used');
+            const total = document.getElementById('total');
+            const remaining = document.getElementById('remaining');
+            const timestamp = document.getElementById('timestamp');
+            const refreshBtn = document.getElementById('refresh-btn');
+            
+            // URL de tu backend en Railway
+            const apiUrl = 'https://master-production-5386.up.railway.app/api/bucket-size';
+            
+            function loadStats() {
+                loading.style.display = 'block';
+                stats.style.display = 'none';
+                error.style.display = 'none';
+                
+                // Cargar estadísticas
+                fetch(apiUrl)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Error ${response.status}: ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        loading.style.display = 'none';
+                        stats.style.display = 'block';
+                        refreshBtn.style.display = 'block';
+                        
+                        // Actualizar elementos con los datos
+                        progress.style.width = `${data.percentUsed}%`;
+                        progress.style.backgroundColor = data.percentUsed > 80 ? '#ff4d4d' : '#4682b4';
+                        percentage.textContent = `Porcentaje utilizado: ${data.percentUsed}%`;
+                        used.textContent = `Espacio utilizado: ${data.sizeMB} MB`;
+                        total.textContent = `Espacio total: ${data.maxSizeMB} MB`;
+                        remaining.textContent = `Espacio disponible: ${data.remainingMB} MB`;
+                        
+                        // Mostrar fecha y hora de actualización
+                        const now = new Date();
+                        timestamp.textContent = `Última actualización: ${now.toLocaleString()}`;
+                    })
+                    .catch(err => {
+                        loading.style.display = 'none';
+                        error.style.display = 'block';
+                        refreshBtn.style.display = 'block';
+                        error.textContent = `Error al cargar estadísticas: ${err.message}`;
+                        console.error('Error:', err);
+                    });
+            }
+            
+            // Cargar estadísticas al inicio
+            loadStats();
+            
+            // Configurar botón de actualización
+            refreshBtn.addEventListener('click', loadStats);
+        });
+    </script>
+</body>
+</html>
