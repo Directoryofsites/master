@@ -310,11 +310,11 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
     
-    // Calcular tamaño actual del bucket y verificar límite (200MB)
+    // Calcular tamaño actual del bucket y verificar límite (800MB)
     console.log('Calculando tamaño actual del bucket...');
     const currentBucketSize = await calculateBucketSize();
     const fileSizeInBytes = req.file.size;
-    const maxBucketSize = 200 * 1024 * 1024; // 200MB en bytes
+    const maxBucketSize = 800 * 1024 * 1024; // 800MB en bytes
     
     console.log(`Tamaño actual del bucket: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB`);
     console.log(`Tamaño del archivo a subir: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`);
@@ -323,7 +323,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (currentBucketSize + fileSizeInBytes > maxBucketSize) {
       return res.status(413).json({
         success: false,
-        message: `No se puede subir el archivo. Se excedería el límite de 200MB para el repositorio. Tamaño actual: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB, Tamaño del archivo: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`,
+        message: `No se puede subir el archivo. Se excedería el límite de 800MB para el repositorio. Tamaño actual: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB, Tamaño del archivo: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`,
         currentSize: currentBucketSize,
         fileSize: fileSizeInBytes,
         maxSize: maxBucketSize
