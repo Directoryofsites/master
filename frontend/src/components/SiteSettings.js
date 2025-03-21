@@ -6,6 +6,12 @@ const SiteSettings = ({ onClose, onSave }) => {
   const [logo, setLogo] = useState('');
   const [previewLogo, setPreviewLogo] = useState('');
 
+  const [storageStats, setStorageStats] = useState(null);
+const [loadingStats, setLoadingStats] = useState(false);
+const [isAdmin, setIsAdmin] = useState(false);
+
+
+
   // Cargar configuración actual al iniciar
   useEffect(() => {
     try {
@@ -24,6 +30,36 @@ const SiteSettings = ({ onClose, onSave }) => {
       console.error('Error al cargar configuración:', error);
     }
   }, []);
+
+
+
+// Verificar si el usuario es admin y cargar estadísticas de almacenamiento
+useEffect(() => {
+  // Siempre mostrar las estadísticas por ahora (para pruebas)
+  setIsAdmin(true);
+  
+  // Cargar las estadísticas de almacenamiento con la URL completa
+  setLoadingStats(true);
+  fetch('http://localhost:3001/api/bucket-size')
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Error al obtener estadísticas de almacenamiento');
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log('Datos de almacenamiento recibidos:', data);
+      setStorageStats(data);
+      setLoadingStats(false);
+    })
+    .catch(error => {
+      console.error('Error al cargar estadísticas:', error);
+      setLoadingStats(false);
+    });
+}, []);
+
+
+
 
   const handleLogoChange = (e) => {
     const file = e.target.files[0];
@@ -103,6 +139,40 @@ const SiteSettings = ({ onClose, onSave }) => {
               </div>
             )}
           </div>
+
+
+          {isAdmin && (
+  <div className="form-group storage-stats-section">
+    <h3>Estadísticas de Almacenamiento</h3>
+    {loadingStats ? (
+      <p>Cargando estadísticas...</p>
+    ) : storageStats ? (
+      <div>
+        <div className="storage-progress-container">
+          <div className="storage-progress-bar">
+            <div 
+              className="storage-progress" 
+              style={{ 
+                width: `${storageStats.percentUsed}%`,
+                backgroundColor: storageStats.percentUsed > 80 ? '#ff4d4d' : '#4682b4'
+              }}
+            ></div>
+          </div>
+          <div className="storage-percentage">{storageStats.percentUsed}%</div>
+        </div>
+        <div className="storage-details">
+          <p><strong>Espacio utilizado:</strong> {storageStats.sizeMB} MB</p>
+          <p><strong>Espacio total:</strong> {storageStats.maxSizeMB} MB</p>
+          <p><strong>Espacio disponible:</strong> {storageStats.remainingMB} MB</p>
+        </div>
+      </div>
+    ) : (
+      <p>No se pudieron cargar las estadísticas de almacenamiento.</p>
+    )}
+  </div>
+)}
+
+
         </div>
         
         <div className="settings-actions">

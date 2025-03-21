@@ -1745,3 +1745,49 @@ body {
     padding: 0.8rem;
   }
 }
+
+/* Estilos para estadísticas de almacenamiento */
+.storage-stats-section {
+  margin-top: 25px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  border: 1px solid #e9ecef;
+}
+
+.storage-progress-container {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.storage-progress-bar {
+  flex: 1;
+  height: 20px;
+  background-color: #e9ecef;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-right: 10px;
+}
+
+.storage-progress {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.3s ease;
+}
+
+.storage-percentage {
+  width: 45px;
+  text-align: right;
+  font-weight: bold;
+}
+
+.storage-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.storage-details p {
+  margin: 5px 0;
+}
