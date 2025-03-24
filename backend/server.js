@@ -2114,11 +2114,11 @@ app.post('/api/login', express.json(), async (req, res) => {
     // Credenciales válidas (estas pueden ser actualizadas aquí)
 const validCredentials = {
   // Bucket master
-  'admin': 'Panica811880',     // Cambiada de 'Pana811880' a 'Panica811880'
+  'admin': 'olga811880',     // Cambiada de 'Pana811880' a 'Panica811880'
   'usuario123': 'usuario123',  
   
   // Bucket contenedor001
-  'admin1': 'df14T87lk44aqL',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
+  'admin1': 'Panica811880',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
   'usuario001': 'turpial1720', // Cambiada
   
   // Bucket contenedor002
