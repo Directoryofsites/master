@@ -110,7 +110,12 @@ const userBucketMap = {
   
   // Bucket pruebas
   'adminpruebas': 'pruebas',
-  'userpruebas': 'pruebas'
+  'userpruebas': 'pruebas',
+
+  // Bucket personal1
+  'adminpersonal1': 'personal1',
+  'usuariopersonal1': 'personal1'
+
 };
 
 // Definir roles de usuario (admin o user)
@@ -174,7 +179,12 @@ const userRoleMap = {
   
   // Bucket pruebas
   'adminpruebas': 'admin',
-  'userpruebas': 'user'
+  'userpruebas': 'user',
+
+  // Bucket personal1
+  'adminpersonal1': 'admin',
+  'usuariopersonal1': 'user'
+
 };
 
 // Verificar que las variables de entorno estén configuradas
@@ -2162,7 +2172,12 @@ const validCredentials = {
   
   // Bucket pruebas
   'adminpruebas': 'ClavePruebas',
-  'userpruebas': 'UserPruebas'
+  'userpruebas': 'UserPruebas',
+
+// Bucket personal1
+'adminpersonal1': 'Jh811880',
+'usuariopersonal1': '811880'
+
 };
 
 
