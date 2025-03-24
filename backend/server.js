@@ -2175,7 +2175,7 @@ const validCredentials = {
   'userpruebas': 'UserPruebas',
 
 // Bucket personal1
-'adminpersonal1': 'Jh811880',
+'adminpersonal1': 'Jh811881',
 'usuariopersonal1': '811880'
 
 };
