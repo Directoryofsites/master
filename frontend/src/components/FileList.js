@@ -1,24 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
-
-
-
 const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, isSearchResults = false }) => {
   // Estado para almacenar las URLs de YouTube para cada archivo
   const [youtubeUrls, setYoutubeUrls] = useState({});
   // Estado para controlar la carga de URLs
   const [loadingUrls, setLoadingUrls] = useState(false);
-
-  
+ 
 
 // Estado para almacenar las URLs de audio para cada archivo
 const [audioUrls, setAudioUrls] = useState({});
 // Estado para almacenar las URLs de imagen para cada archivo
 const [imageUrls, setImageUrls] = useState({});
-
-
-
-
 
   // Función para cargar la URL de YouTube de un archivo
   const loadYoutubeUrl = async (filePath) => {
@@ -152,13 +144,7 @@ useEffect(() => {
   loadAllUrls();
 }, [files, currentPath, isSearchResults]);
 
-
-
-
-
-
-
-  
+ 
   const handleFileClick = async (file) => {
     if (file.isFolder) {
       // Si es una carpeta, navegar a ella
@@ -184,10 +170,7 @@ useEffect(() => {
         
         console.log('Procesando archivo:', file.name);
         console.log('Ruta completa:', filePath);
-
-        
-
-
+      
 // Verificar los tipos de archivos por su extensión
 const isPDF = file.name.toLowerCase().endsWith('.pdf') || 
   file.contentType === 'application/pdf';
@@ -204,35 +187,134 @@ console.log('¿Es una imagen?', isImage);
 console.log('¿Es un archivo DOCX?', isDOCX);
 console.log('¿Es un archivo MP3?', isMP3);
 
-
-
-
       // Si es un archivo visualizable, lo mostramos directamente en el navegador
-        if (isPDF || isImage) {
-          console.log('Archivo visualizable en navegador');
-          // No se usa forceDownload para que el navegador lo muestre en su visor nativo
-          const url = await api.getDownloadUrl(filePath, false);
-          console.log('URL obtenida:', url);
-          window.open(url, '_blank');
 
 
+      if (isPDF || isImage) {
+        console.log('Archivo visualizable en navegador');
+        // No se usa forceDownload para que el navegador lo muestre en su visor nativo
+        const url = await api.getDownloadUrl(filePath, false);
+        console.log('URL obtenida:', url);
+        window.open(url, '_blank');
 
-        } else if (isDOCX) {
-          console.log('Archivo DOCX visualizable mediante API');
-          // Obtener la URL BASE del api.js
-          const baseUrl = api.BASE_URL;
-          console.log('Base URL para DOCX:', baseUrl);
+      
+      } else if (isDOCX) {
+        console.log('Archivo DOCX visualizable mediante API');
+        
+        try {
+          // Usar la función api.getDownloadUrl para obtener la URL con el token incluido
+          console.log('Obteniendo URL para DOCX mediante getDownloadUrl...');
           
-          // Construir URL explícitamente
-          const viewUrl = `${baseUrl}/view-docx?path=${encodeURIComponent(filePath)}`;
-          console.log('URL para visualizar DOCX:', viewUrl);
-          window.open(viewUrl, '_blank');
+          // Obtener la URL pública a través de la función corregida
+          const publicUrl = await api.getDownloadUrl(filePath, false);
+          console.log('URL pública obtenida para DOCX:', publicUrl);
+          
+          // Crear objeto con la información necesaria
+          const responseData = {
+            success: true,
+            publicUrl: publicUrl
+          };
+          
+          console.log('Respuesta de descarga:', responseData);
+          
+          if (responseData.publicUrl) {
+            // Crear HTML para visualizar opciones
+            const htmlContent = `
+              <!DOCTYPE html>
+              <html lang="es">
+              <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Visor de Documentos - ${file.name}</title>
+                <style>
+                  body {
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    margin: 0;
+                    padding: 20px;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    background-color: #f5f5f5;
+                  }
+                  h1, h2 {
+                    color: #333;
+                  }
+                  .options {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 15px;
+                    margin: 20px 0;
+                  }
+                  .button {
+                    display: inline-block;
+                    background-color: #4CAF50;
+                    color: white;
+                    padding: 10px 15px;
+                    text-decoration: none;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    text-align: center;
+                  }
+                  .button.secondary {
+                    background-color: #2196F3;
+                  }
+                  .view-container {
+                    margin-top: 30px;
+                    padding: 20px;
+                    background-color: white;
+                    border-radius: 4px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                  }
+                  iframe {
+                    width: 100%;
+                    height: 600px;
+                    border: 1px solid #ddd;
+                  }
+                </style>
+              </head>
+              <body>
+                <h1>Documento: ${file.name}</h1>
+                
+                <div class="options">
+                  <a class="button" href="${responseData.publicUrl}" target="_blank">Descargar documento</a>
+                  <a class="button secondary" href="https://docs.google.com/viewer?url=${encodeURIComponent(responseData.publicUrl)}&embedded=true" target="_blank">
+                    Visualizar con Google Docs Viewer
+                  </a>
+                  <a class="button secondary" href="https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(responseData.publicUrl)}" target="_blank">
+                    Visualizar con Microsoft Office Online
+                  </a>
+                </div>
+                
+                <div class="view-container">
+                  <h2>Vista previa (requiere navegador compatible)</h2>
+                  <iframe src="https://docs.google.com/viewer?url=${encodeURIComponent(responseData.publicUrl)}&embedded=true"></iframe>
+                </div>
+                
+                <script>
+                  // Permitir que se establezca la preferencia de visualización como predeterminada
+                  document.addEventListener('DOMContentLoaded', function() {
+                    // Código adicional si es necesario
+                  });
+                </script>
+              </body>
+              </html>
+            `;
+            
+            // Crear un blob y abrirlo en una nueva ventana
+            const blob = new Blob([htmlContent], { type: 'text/html' });
+            const viewerUrl = URL.createObjectURL(blob);
+            
+            window.open(viewerUrl, '_blank');
+          } else {
+            throw new Error('No se pudo obtener la URL pública del documento');
+          }
+        } catch (error) {
+          console.error('Error al abrir DOCX:', error);
+          alert('Error al visualizar el documento DOCX: ' + error.message);
+        }
+        
+      } else if (isMP3) {
 
-
-
-
-
-        } else if (isMP3) {
           console.log('Archivo MP3 reproducible en navegador');
           // Obtener la URL para reproducción
           const url = await api.getDownloadUrl(filePath, false);

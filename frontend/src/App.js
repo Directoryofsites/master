@@ -11,49 +11,70 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [siteSettings, setSiteSettings] = useState({
-    title: 'Proyecto Prueba 1',
-    subtitle: 'Contenedor Documental',
+    title: 'Contenedor de Documentos',
+    subtitle: 'Sistema Integral de Gestion',
     logo: ''
   });
 
   // Cargar datos de sesión y configuración del sitio
-  useEffect(() => {
-    // Verificar si hay una sesión activa en localStorage
-    const user = localStorage.getItem('user');
-    if (user) {
-      const userData = JSON.parse(user);
-      setIsLoggedIn(true);
-      setUserRole(userData.role);
-      setUsername(userData.username);
-    }
-
-    // Cargar configuración del sitio
-    try {
-      const savedSettings = localStorage.getItem('siteSettings');
-      if (savedSettings) {
-        setSiteSettings(JSON.parse(savedSettings));
-      }
-    } catch (error) {
-      console.error('Error al cargar configuración del sitio:', error);
-    }
-
-    setIsLoading(false);
-  }, []);
-
-  const handleLogin = (userData) => {
+useEffect(() => {
+  // Verificar si hay una sesión activa en localStorage usando la clave correcta
+  const userSession = localStorage.getItem('user_session');
+  
+  console.log('[APP-DEBUG] Al cargar, estado de localStorage:', {
+    user_session: userSession,
+    user: localStorage.getItem('user')
+  });
+  
+  if (userSession) {
+    const userData = JSON.parse(userSession);
+    console.log('[APP-DEBUG] Datos de usuario cargados:', userData);
     setIsLoggedIn(true);
     setUserRole(userData.role);
     setUsername(userData.username);
-    // Guardar sesión en localStorage
+  }
+
+  // Cargar configuración del sitio
+  try {
+    const savedSettings = localStorage.getItem('siteSettings');
+    if (savedSettings) {
+      setSiteSettings(JSON.parse(savedSettings));
+    }
+  } catch (error) {
+    console.error('Error al cargar configuración del sitio:', error);
+  }
+
+  setIsLoading(false);
+}, []);
+  const handleLogin = (userData) => {
+    console.log('[APP-DEBUG] Datos recibidos en handleLogin:', userData);
+    setIsLoggedIn(true);
+    setUserRole(userData.role);
+    setUsername(userData.username);
+    
+    // Guardar sesión en localStorage con la clave correcta para auth.js
+    localStorage.setItem('user_session', JSON.stringify(userData));
+    
+    // También guardar en 'user' para mantener la compatibilidad con el código actual
     localStorage.setItem('user', JSON.stringify(userData));
+    
+    console.log('[APP-DEBUG] Datos guardados en localStorage:', {
+      user_session: localStorage.getItem('user_session'),
+      user: localStorage.getItem('user')
+    });
   };
 
   const handleLogout = () => {
+    console.log('[APP-DEBUG] Cerrando sesión de usuario');
     setIsLoggedIn(false);
     setUserRole('');
     setUsername('');
-    // Eliminar sesión de localStorage
+    
+    // Eliminar sesión de localStorage (ambas claves)
     localStorage.removeItem('user');
+    localStorage.removeItem('user_session');
+    
+    console.log('[APP-DEBUG] Sesión eliminada de localStorage');
   };
 
   const toggleSettings = () => {
@@ -87,22 +108,23 @@ function App() {
         </div>
         
         {isLoggedIn && (
-          <div className="user-info">
-            <span>Bienvenido, {username}</span>
-            <span className="user-role">{userRole === 'admin' ? 'Administrador' : 'Usuario'}</span>
-            {userRole === 'admin' && (
-              <button onClick={toggleSettings} className="settings-btn">
-                ⚙️ Configuración
-              </button>
-            )}
-            <button onClick={handleLogout} className="logout-btn">Cerrar Sesión</button>
-          </div>
-        )}
+  <div className="user-info">
+    <span>Bienvenido, {username}</span>
+    <span className="user-role">{userRole === 'admin' ? 'Administrador' : 'Usuario'}</span>
+    <span className="user-bucket">Bucket: {localStorage.getItem('user_session') ? JSON.parse(localStorage.getItem('user_session')).bucket || 'No definido' : 'No definido'}</span>
+    {userRole === 'admin' && (
+      <button onClick={toggleSettings} className="settings-btn">
+        ⚙️ Configuración
+      </button>
+    )}
+    <button onClick={handleLogout} className="logout-btn">Cerrar Sesión</button>
+  </div>
+)}
       </header>
 
       <main className="app-content">
         {isLoggedIn ? (
-          <FileExplorer userRole={userRole} />
+          <FileExplorer userRole={userRole} username={username} />
         ) : (
           <Login onLogin={handleLogin} />
         )}

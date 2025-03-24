@@ -34,30 +34,44 @@ const [isAdmin, setIsAdmin] = useState(false);
 
 
 // Verificar si el usuario es admin y cargar estadísticas de almacenamiento
-useEffect(() => {
-  // Siempre mostrar las estadísticas por ahora (para pruebas)
-  setIsAdmin(true);
-  
-  // Cargar las estadísticas de almacenamiento con la URL completa
-  setLoadingStats(true);
-  fetch('http://localhost:3001/api/bucket-size')
-    .then(response => {
-      if (!response.ok) {
-        throw new Error('Error al obtener estadísticas de almacenamiento');
-      }
-      return response.json();
-    })
-    .then(data => {
-      console.log('Datos de almacenamiento recibidos:', data);
-      setStorageStats(data);
-      setLoadingStats(false);
-    })
-    .catch(error => {
-      console.error('Error al cargar estadísticas:', error);
-      setLoadingStats(false);
-    });
-}, []);
 
+
+
+useEffect(() => {
+  // Importar la función de autenticación
+  import('../services/auth').then(auth => {
+    // Siempre mostrar las estadísticas por ahora
+    setIsAdmin(true);
+    
+    // Obtener el token de autorización
+    const token = auth.getAuthToken();
+    
+    // Cargar las estadísticas de almacenamiento con la URL completa
+    setLoadingStats(true);
+    
+    const headers = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    fetch('http://localhost:3001/api/bucket-size', { headers })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Error al obtener estadísticas de almacenamiento');
+        }
+        return response.json();
+      })
+      .then(data => {
+        console.log('Datos de almacenamiento recibidos:', data);
+        setStorageStats(data);
+        setLoadingStats(false);
+      })
+      .catch(error => {
+        console.error('Error al cargar estadísticas:', error);
+        setLoadingStats(false);
+      });
+  });
+}, []);
 
 
 

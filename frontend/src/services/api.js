@@ -1,7 +1,8 @@
+import { getAuthToken } from './auth';
+
 // services/api.js
+
 const isDevelopment = process.env.NODE_ENV === 'development';
-
-
 
 const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/master/');
 
@@ -10,18 +11,78 @@ console.log('Hostname:', window.location.hostname);
 console.log('Pathname:', window.location.pathname);
 console.log('Is GitHub Pages:', isGitHubPages);
 
-
 export const BASE_URL = isDevelopment 
   ? '/api' // Usará el proxy configurado en package.json en desarrollo
   : isGitHubPages 
     ? 'https://master-production-5386.up.railway.app/api' // URL explícita para GitHub Pages
     : 'https://master-production-5386.up.railway.app/api'; // URL de Railway en producción
 
+// Función para obtener las cabeceras de autenticación
+const getAuthHeaders = () => {
+  try {
+    // Usar la misma función getAuthToken que usamos en fetchWithRetry
+    const token = getAuthToken(); 
+    console.log('[API-DEBUG] getAuthHeaders - Token obtenido:', token);
     
+    if (token) {
+      return {
+        'Authorization': `Bearer ${token}`
+      };
+    } else {
+      console.log('[API-DEBUG] getAuthHeaders - No hay token disponible');
+    }
+  } catch (error) {
+    console.error('[API-DEBUG] Error al obtener información de autenticación:', error);
+  }
+  
+  return {};
+};
 
-  // Función de utilidad para implementar reintentos en las llamadas API
+// Función de utilidad para implementar reintentos en las llamadas API
 const fetchWithRetry = async (url, options = {}, maxRetries = 3) => {
   let lastError;
+  
+  // Obtener el token de autorización
+  const token = getAuthToken();
+
+  // Para depuración, mostrar la información completa del token
+  try {
+    console.log('[API-DEBUG] Token obtenido de getAuthToken:', token);
+    
+    if (!token) {
+      console.log('[API-DEBUG] No hay token disponible para la petición a:', url);
+      console.log('[API-DEBUG] Estado de localStorage:', localStorage.getItem('user_session'));
+    } else {
+      const tokenData = JSON.parse(atob(token));
+      console.log('[API-DEBUG] Token decodificado completo:', tokenData);
+      console.log('[API-DEBUG] Enviando petición con token:', {
+        username: tokenData.username || 'No disponible',
+        role: tokenData.role || 'No disponible',
+        bucket: tokenData.bucket || 'No disponible'
+      });
+      
+      // Verificar que el token tiene todas las propiedades necesarias
+      if (!tokenData.username) {
+        console.error('[API-DEBUG] ERROR: Token sin username');
+      }
+      if (!tokenData.bucket) {
+        console.error('[API-DEBUG] ERROR: Token sin bucket');
+      }
+      if (!tokenData.role) {
+        console.error('[API-DEBUG] ERROR: Token sin role');
+      }
+    }
+  } catch (error) {
+    console.error('[API-DEBUG] Error al decodificar token para depuración:', error);
+    console.error('[API-DEBUG] Token problemático:', token);
+  }
+  // Añadir el token a los headers si existe
+  if (token) {
+    options.headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+  }
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -66,7 +127,6 @@ const fetchWithRetry = async (url, options = {}, maxRetries = 3) => {
  * @param {string} path - Ruta a listar
  * @returns {Promise<Array>} - Lista de archivos y carpetas
  */
-
 export const listFiles = async (path = '') => {
   try {
     console.log(`Listando archivos en: ${path || 'raíz'}`);
@@ -94,9 +154,18 @@ export const uploadFile = async (file, path = '') => {
   formData.append('file', file);
   formData.append('path', path);
 
+  // Obtener el token de autorización
+  const token = getAuthToken();
+  const headers = {};
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   try {
     const response = await fetch(`${BASE_URL}/upload`, {
       method: 'POST',
+      headers,
       body: formData
     });
 
@@ -118,11 +187,19 @@ export const uploadFile = async (file, path = '') => {
  */
 export const createFolder = async (folderName) => {
   try {
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${BASE_URL}/createFolder`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: JSON.stringify({
         folderName
       })
@@ -154,13 +231,21 @@ export const deleteItem = async (path, isFolder = false) => {
   console.log('Intentando eliminar:', path, 'Es carpeta:', isFolder);
   
   try {
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     // Para carpetas, usamos el endpoint mejorado deleteFolder con método DELETE
     if (isFolder) {
       const response = await fetch(`${BASE_URL}/deleteFolder?path=${encodeURIComponent(path)}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: headers
       });
       
       if (!response.ok) {
@@ -172,7 +257,8 @@ export const deleteItem = async (path, isFolder = false) => {
     } else {
       // Para archivos seguimos usando el endpoint delete existente
       const response = await fetch(`${BASE_URL}/delete?path=${encodeURIComponent(path)}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: headers
       });
       
       if (!response.ok) {
@@ -194,6 +280,7 @@ export const deleteItem = async (path, isFolder = false) => {
  * @param {boolean} forceDownload - Indica si se debe forzar la descarga
  * @returns {Promise<string>} - URL de visualización o descarga
  */
+
 export const getDownloadUrl = async (path, forceDownload = false) => {
   try {
     // Verificar que la ruta no esté vacía
@@ -201,17 +288,34 @@ export const getDownloadUrl = async (path, forceDownload = false) => {
       throw new Error('Se requiere una ruta para obtener la URL');
     }
     
-
     // Determinar el tipo de archivo por su extensión
-const isPDF = path.toLowerCase().endsWith('.pdf');
-const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(path);
-const isDOCX = path.toLowerCase().endsWith('.docx');
-const isViewable = isPDF || isImage || isDOCX;
+    const isPDF = path.toLowerCase().endsWith('.pdf');
+    const isImage = /\.(jpe?g|png|gif|bmp|webp)$/i.test(path);
+    const isDOCX = path.toLowerCase().endsWith('.docx');
+    const isViewable = isPDF || isImage || isDOCX;
     
     console.log('¿Es un archivo visualizable?', isViewable);
     
-    // Solicitar la URL con el parámetro view si es un archivo visualizable
-    const response = await fetch(`${BASE_URL}/download?path=${encodeURIComponent(path)}${isViewable && !forceDownload ? '&view=true' : ''}`);
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con parámetros
+    let url = `${BASE_URL}/download?path=${encodeURIComponent(path)}`;
+    
+    // Añadir parámetro de visualización si es necesario
+    if (isViewable && !forceDownload) {
+      url += '&view=true';
+    }
+    
+    // Añadir el token como parámetro de query para asegurar que se use incluso en redirecciones
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL de descarga con token:', url);
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
     
     if (!response.ok) {
       throw new Error('No se pudo obtener la URL del archivo');
@@ -246,7 +350,21 @@ export const searchFiles = async (searchTerm) => {
     
     console.log('Realizando búsqueda de:', searchTerm);
     
-    const response = await fetch(`${BASE_URL}/search?term=${encodeURIComponent(searchTerm.trim())}`);
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con el término de búsqueda
+    let url = `${BASE_URL}/search?term=${encodeURIComponent(searchTerm.trim())}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL de búsqueda con token:', url);
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
     
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -272,7 +390,17 @@ export const getYoutubeUrl = async (path) => {
       throw new Error('Se requiere una ruta para obtener la URL de YouTube');
     }
 
-    const response = await fetch(`${BASE_URL}/youtube-url?path=${encodeURIComponent(path)}`);
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/youtube-url?path=${encodeURIComponent(path)}`, {
+      headers: headers
+    });
     
     if (!response.ok) {
       throw new Error('No se pudo obtener la URL de YouTube');
@@ -298,12 +426,20 @@ export const saveYoutubeUrl = async (path, youtubeUrl) => {
     if (!path) {
       throw new Error('Se requiere una ruta para guardar la URL de YouTube');
     }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
     const response = await fetch(`${BASE_URL}/youtube-url`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: JSON.stringify({
         filePath: path,
         youtubeUrl: youtubeUrl
@@ -333,7 +469,17 @@ export const getAudioUrl = async (path) => {
       throw new Error('Se requiere una ruta para obtener la URL de audio');
     }
 
-    const response = await fetch(`${BASE_URL}/audio-url?path=${encodeURIComponent(path)}`);
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/audio-url?path=${encodeURIComponent(path)}`, {
+      headers: headers
+    });
     
     if (!response.ok) {
       throw new Error('No se pudo obtener la URL de audio');
@@ -360,11 +506,19 @@ export const saveAudioUrl = async (path, audioUrl) => {
       throw new Error('Se requiere una ruta para guardar la URL de audio');
     }
 
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${BASE_URL}/audio-url`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: JSON.stringify({
         filePath: path,
         audioUrl: audioUrl
@@ -394,7 +548,17 @@ export const getImageUrl = async (path) => {
       throw new Error('Se requiere una ruta para obtener la URL de imagen');
     }
 
-    const response = await fetch(`${BASE_URL}/image-url?path=${encodeURIComponent(path)}`);
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/image-url?path=${encodeURIComponent(path)}`, {
+      headers: headers
+    });
     
     if (!response.ok) {
       throw new Error('No se pudo obtener la URL de imagen');
@@ -420,12 +584,20 @@ export const saveImageUrl = async (path, imageUrl) => {
     if (!path) {
       throw new Error('Se requiere una ruta para guardar la URL de imagen');
     }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
     const response = await fetch(`${BASE_URL}/image-url`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: JSON.stringify({
         filePath: path,
         imageUrl: imageUrl
@@ -462,8 +634,14 @@ export const viewDocx = async (path) => {
     
     console.log('Obteniendo visualización para DOCX:', path);
     
-    // Construir URL al endpoint view-docx en el backend
-    const viewUrl = `${BASE_URL}/view-docx?path=${encodeURIComponent(path)}`;
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    
+    // Ahora vamos a crear una URL directa al endpoint view-docx
+    // usando el path del documento y el token
+    const viewUrl = `${BASE_URL}/view-docx?path=${encodeURIComponent(path)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    
+    console.log('URL construida para visualizar DOCX:', viewUrl);
     
     return viewUrl;
   } catch (error) {

@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/Gracia_y_Vida/static/css/main.c314deff.css",
-    "main.js": "/Gracia_y_Vida/static/js/main.bd6f4790.js",
-    "static/js/453.4e7de0c0.chunk.js": "/Gracia_y_Vida/static/js/453.4e7de0c0.chunk.js",
-    "index.html": "/Gracia_y_Vida/index.html",
-    "main.c314deff.css.map": "/Gracia_y_Vida/static/css/main.c314deff.css.map",
-    "main.bd6f4790.js.map": "/Gracia_y_Vida/static/js/main.bd6f4790.js.map",
-    "453.4e7de0c0.chunk.js.map": "/Gracia_y_Vida/static/js/453.4e7de0c0.chunk.js.map"
+    "main.css": "/master/static/css/main.4d584b05.css",
+    "main.js": "/master/static/js/main.a22472b3.js",
+    "static/js/453.30d845d7.chunk.js": "/master/static/js/453.30d845d7.chunk.js",
+    "index.html": "/master/index.html",
+    "main.4d584b05.css.map": "/master/static/css/main.4d584b05.css.map",
+    "main.a22472b3.js.map": "/master/static/js/main.a22472b3.js.map",
+    "453.30d845d7.chunk.js.map": "/master/static/js/453.30d845d7.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.c314deff.css",
-    "static/js/main.bd6f4790.js"
+    "static/css/main.4d584b05.css",
+    "static/js/main.a22472b3.js"
   ]
 }

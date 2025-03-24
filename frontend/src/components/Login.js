@@ -33,11 +33,19 @@ const Login = ({ onLogin }) => {
       
       if (response.ok && data.success) {
         // Éxito en el inicio de sesión
+
+    
         onLogin({
           username: data.user.username,
           role: data.user.role,
+          bucket: data.user.bucket,  // Cambiado de bucketName a bucket para consistencia
           loggedInAt: new Date().toISOString()
         });
+        
+        // No es necesario guardar userBucket por separado, ya se guarda en el objeto de usuario
+        // localStorage.setItem('userBucket', data.user.bucket);
+
+        
       } else {
         setError(data.message || 'Credenciales incorrectas');
       }

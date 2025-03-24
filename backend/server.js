@@ -43,20 +43,145 @@ app.use((err, req, res, next) => {
   });
 });
 
-
-
 // Configuración de Supabase (sin valores predeterminados para garantizar separación)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const bucketName = process.env.BUCKET_NAME;
+const defaultBucketName = process.env.BUCKET_NAME || 'master';
+
+
+// Definir mapeo de usuarios a buckets
+const userBucketMap = {
+  // Bucket master (original)
+  'admin': 'master',
+  'usuario123': 'master',
+  
+  // Bucket contenedor001
+  'admin1': 'contenedor001',
+  'usuario001': 'contenedor001',
+  
+  // Bucket contenedor002
+  'admin2': 'contenedor002',
+  'usuario002': 'contenedor002',
+  
+  // Bucket contenedor003
+  'admin3': 'contenedor003',
+  'usuario003': 'contenedor003',
+  
+  // Bucket contenedor004
+  'admin4': 'contenedor004',
+  'usuario004': 'contenedor004',
+  
+  // Bucket contenedor005
+  'admin5': 'contenedor005',
+  'usuario005': 'contenedor005',
+  
+  // Bucket contenedor006
+  'admin6': 'contenedor006',
+  'usuario006': 'contenedor006',
+  
+  // Bucket contenedor007
+  'admin7': 'contenedor007',
+  'usuario007': 'contenedor007',
+  
+  // Bucket contenedor008
+  'admin8': 'contenedor008',
+  'usuario008': 'contenedor008',
+  
+  // Bucket contenedor009
+  'admin9': 'contenedor009',
+  'usuario009': 'contenedor009',
+  
+  // Bucket contenedor010
+  'admin10': 'contenedor010',
+  'usuario010': 'contenedor010',
+  
+  // Nuevos buckets
+  // Bucket contenedor011
+  'admin11': 'contenedor011',
+  'usuario011': 'contenedor011',
+  
+  // Bucket contenedor012
+  'admin12': 'contenedor012',
+  'usuario012': 'contenedor012',
+  
+  // Bucket contenedor013
+  'admin13': 'contenedor013',
+  'usuario013': 'contenedor013',
+  
+  // Bucket pruebas
+  'adminpruebas': 'pruebas',
+  'userpruebas': 'pruebas'
+};
+
+// Definir roles de usuario (admin o user)
+const userRoleMap = {
+  // Bucket master
+  'admin': 'admin',
+  'usuario123': 'user',
+  
+  // Bucket contenedor001
+  'admin1': 'admin',
+  'usuario001': 'user',
+  
+  // Bucket contenedor002
+  'admin2': 'admin',
+  'usuario002': 'user',
+  
+  // Bucket contenedor003
+  'admin3': 'admin',
+  'usuario003': 'user',
+  
+  // Bucket contenedor004
+  'admin4': 'admin',
+  'usuario004': 'user',
+  
+  // Bucket contenedor005
+  'admin5': 'admin',
+  'usuario005': 'user',
+  
+  // Bucket contenedor006
+  'admin6': 'admin',
+  'usuario006': 'user',
+  
+  // Bucket contenedor007
+  'admin7': 'admin',
+  'usuario007': 'user',
+  
+  // Bucket contenedor008
+  'admin8': 'admin',
+  'usuario008': 'user',
+  
+  // Bucket contenedor009
+  'admin9': 'admin',
+  'usuario009': 'user',
+  
+  // Bucket contenedor010
+  'admin10': 'admin',
+  'usuario010': 'user',
+  
+  // Nuevos buckets
+  // Bucket contenedor011
+  'admin11': 'admin',
+  'usuario011': 'user',
+  
+  // Bucket contenedor012
+  'admin12': 'admin',
+  'usuario012': 'user',
+  
+  // Bucket contenedor013
+  'admin13': 'admin',
+  'usuario013': 'user',
+  
+  // Bucket pruebas
+  'adminpruebas': 'admin',
+  'userpruebas': 'user'
+};
 
 // Verificar que las variables de entorno estén configuradas
-if (!supabaseUrl || !supabaseKey || !bucketName) {
-  console.error('ERROR: Variables de entorno faltantes. Asegúrate de configurar SUPABASE_URL, SUPABASE_KEY y BUCKET_NAME.');
+if (!supabaseUrl || !supabaseKey) {
+  console.error('ERROR: Variables de entorno faltantes. Asegúrate de configurar SUPABASE_URL y SUPABASE_KEY.');
   process.exit(1); // Terminar la aplicación si faltan las variables
 }
-
-
 
 // Crear cliente de Supabase con opciones avanzadas
 let supabase;
@@ -92,8 +217,6 @@ try {
   console.error('Error al configurar cliente de Supabase:', error);
 }
 
-
-
 // Configuración de Multer para manejo de archivos
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -102,8 +225,63 @@ const upload = multer({
   }
 });
 
-
-
+// Middleware para determinar el bucket a usar
+app.use((req, res, next) => {
+  // Obtener el bucket del token de autorización (si existe)
+  const authHeader = req.headers.authorization;
+  console.log(`[Auth] Headers completos para ${req.path}:`, JSON.stringify(req.headers));
+  
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7); // Eliminar 'Bearer ' del inicio
+      console.log(`[Auth] Token completo recibido para ${req.path}:`, token);
+      
+      const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
+      console.log(`[Auth] Token decodificado para ${req.path} (contenido completo):`, JSON.stringify(tokenData));
+      console.log(`[Auth] Username en token:`, tokenData.username);
+      console.log(`[Auth] Bucket en token:`, tokenData.bucket);
+      
+      // IMPORTANTE: Verificar que estamos usando la propiedad correcta del token
+      if (tokenData.username && tokenData.bucket && userBucketMap[tokenData.username]) {
+        // Verificar que el bucket en el token coincide con el mapeado para el usuario
+        const mappedBucket = userBucketMap[tokenData.username];
+        console.log(`[Auth] Bucket mapeado para ${tokenData.username} en userBucketMap:`, mappedBucket);
+        
+        if (tokenData.bucket !== mappedBucket) {
+          console.log(`[Auth] ADVERTENCIA: El bucket en el token (${tokenData.bucket}) no coincide con el mapeado (${mappedBucket})`);
+        }
+        
+        // Usar el bucket mapeado (más seguro) en lugar del que viene en el token
+        req.bucketName = mappedBucket;
+        req.userRole = userRoleMap[tokenData.username] || 'user';
+        req.username = tokenData.username;
+        console.log(`[Auth] Usuario ${tokenData.username} mapeado a bucket ${req.bucketName} (rol: ${req.userRole})`);
+      } else {
+        req.bucketName = defaultBucketName;
+        req.userRole = 'guest';
+        console.log(`[Auth] Usuario no mapeado o inválido ${tokenData.username || 'desconocido'}, usando bucket predeterminado ${defaultBucketName}`);
+        if (tokenData.username) {
+          console.log(`[Auth] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+        }
+      }
+    } catch (error) {
+      console.error('Error al decodificar token:', error);
+      console.error('Token problemático:', authHeader.substring(7));
+      req.bucketName = defaultBucketName;
+      req.userRole = 'guest';
+      console.log(`[Auth] Error en token, usando bucket predeterminado ${defaultBucketName}`);
+    }
+  } else {
+    // Si no hay token, usar el bucket predeterminado
+    req.bucketName = defaultBucketName;
+    req.userRole = 'guest';
+    console.log(`[Auth] Sin token para ${req.path}, usando bucket predeterminado ${defaultBucketName}`);
+  }
+  
+  // Log detallado de cada solicitud con información del bucket
+  console.log(`[Bucket] Request ${req.method} para ${req.path} - Usuario: ${req.username || 'invitado'}, Bucket: ${req.bucketName}, Rol: ${req.userRole}`);
+  next();
+});
 // Ruta de prueba
 app.get('/', (req, res) => {
   res.send({
@@ -147,12 +325,9 @@ app.get('/api/auth-test', async (req, res) => {
   }
 });
 
-
-
-
-
-
 // Ruta para buscar archivos y carpetas
+
+
 app.get('/api/search', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -163,6 +338,59 @@ app.get('/api/search', async (req, res) => {
       });
     }
     
+    // SOLUCIÓN: Verificar si hay un token en los parámetros de consulta
+    let bucketToUse = req.bucketName || defaultBucketName;
+    let tokenUsername = null;
+    
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[SEARCH] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          tokenUsername = tokenData.username;
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[SEARCH] Usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[SEARCH] Error al decodificar token de parámetros:', tokenError);
+      }
+    } else {
+      // Intento con el token de autorización
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.substring(7);
+          console.log(`[SEARCH] Token de autorización recibido: ${token}`);
+          
+          const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
+          console.log(`[SEARCH] Token decodificado:`, JSON.stringify(tokenData));
+          
+          if (tokenData.username && userBucketMap[tokenData.username]) {
+            tokenUsername = tokenData.username;
+            bucketToUse = userBucketMap[tokenData.username];
+            console.log(`[SEARCH] Forzando uso de bucket ${bucketToUse} para usuario ${tokenData.username}`);
+          } else {
+            console.log(`[SEARCH] No se pudo determinar el bucket para:`, JSON.stringify(tokenData));
+            if (tokenData.username) {
+              console.log(`[SEARCH] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+            }
+          }
+        } catch (error) {
+          console.error('[SEARCH] Error al procesar token para forzar bucket:', error);
+        }
+      } else {
+        console.log(`[SEARCH] No hay token de autorización`);
+      }
+    }
+    
+    console.log(`[SEARCH] Usando bucket final: ${bucketToUse} para búsqueda`);
+    
     const searchTerm = req.query.term;
     
     if (!searchTerm) {
@@ -172,20 +400,20 @@ app.get('/api/search', async (req, res) => {
       });
     }
 
-    console.log(`Buscando archivos/carpetas que coincidan con: "${searchTerm}"`);
+    console.log(`Buscando archivos/carpetas que coincidan con: "${searchTerm}" en bucket ${bucketToUse}`);
     
     // Función recursiva para buscar en carpetas
     const searchResults = [];
     
-    // Función auxiliar para buscar en una carpeta específica
+    // Función auxiliar para buscar en una carpeta específica (ahora con bucketToUse como parámetro)
     async function searchInFolder(prefix) {
       const { data: filesInFolder, error } = await supabase
         .storage
-        .from(bucketName)
+        .from(bucketToUse) // Ahora bucketToUse está definido en el ámbito superior
         .list(prefix, { 
           sortBy: { column: 'name', order: 'asc' }
         });
-      
+        
       if (error) {
         console.error(`Error al buscar en carpeta ${prefix}:`, error);
         return;
@@ -193,8 +421,13 @@ app.get('/api/search', async (req, res) => {
       
       // Procesar los resultados de esta carpeta
       for (const item of filesInFolder) {
-        // Ignorar archivos especiales .folder
-        if (item.name === '.folder') continue;
+        // Ignorar archivos especiales .folder y archivos de metadatos
+        if (item.name === '.folder' || 
+            item.name.endsWith('.youtube.metadata') || 
+            item.name.endsWith('.audio.metadata') || 
+            item.name.endsWith('.image.metadata')) {
+          continue;
+        }
         
         const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
         
@@ -223,7 +456,7 @@ app.get('/api/search', async (req, res) => {
     // Iniciar búsqueda desde la raíz
     await searchInFolder('');
     
-    console.log(`Se encontraron ${searchResults.length} resultados para "${searchTerm}"`);
+    console.log(`Se encontraron ${searchResults.length} resultados para "${searchTerm}" en bucket ${bucketToUse}`);
     
     return res.json(searchResults);
   } catch (error) {
@@ -235,23 +468,19 @@ app.get('/api/search', async (req, res) => {
     });
   }
 });
-
-
-
-
 // Función para calcular el tamaño total del bucket
-async function calculateBucketSize() {
+async function calculateBucketSize(bucketToCheck = defaultBucketName) {
   let totalSize = 0;
   
   // Función recursiva para procesar carpetas
   async function processFolder(prefix = '') {
     // Listar elementos en la carpeta actual
     const { data, error } = await supabase.storage
-      .from(bucketName)
+      .from(bucketToCheck)
       .list(prefix);
     
     if (error) {
-      console.error(`Error al listar contenido de ${prefix}:`, error);
+      console.error(`Error al listar contenido de ${prefix} en bucket ${bucketToCheck}:`, error);
       return 0;
     }
     
@@ -293,6 +522,8 @@ async function calculateBucketSize() {
 }
 
 // Ruta para subir archivos
+
+
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -303,16 +534,33 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
     
-    if (!req.file) {
-      return res.status(400).json({
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[UPLOAD] Verificando bucketName en request: ${req.bucketName}`);
+    console.log(`[UPLOAD] Verificando username en request: ${req.username}`);
+    console.log(`[UPLOAD] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+      console.error(`[UPLOAD] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+      return res.status(403).json({
         success: false,
-        message: 'No se ha enviado ningún archivo'
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }    
+    // Verificar permisos - solo admin puede subir archivos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para subir archivos. Se requiere rol de administrador.'
       });
     }
-    
+   
     // Calcular tamaño actual del bucket y verificar límite (800MB)
-    console.log('Calculando tamaño actual del bucket...');
-    const currentBucketSize = await calculateBucketSize();
+    console.log(`Calculando tamaño actual del bucket ${bucketToUse}...`);
+    const currentBucketSize = await calculateBucketSize(bucketToUse);
     const fileSizeInBytes = req.file.size;
     const maxBucketSize = 800 * 1024 * 1024; // 800MB en bytes
     
@@ -346,22 +594,23 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     
     console.log(`Subiendo archivo a: ${fullPath}`);
     
-    // Subir archivo a Supabase
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .upload(fullPath, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: true
-      });
-    
+  // Subir archivo a Supabase
+const { data, error } = await supabase.storage
+.from(bucketToUse)
+.upload(fullPath, req.file.buffer, {
+  contentType: req.file.mimetype,
+  upsert: true
+});
+
+   
     if (error) {
       throw error;
     }
     
-    // Obtener URL pública
-    const { data: publicUrlData } = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(fullPath);
+  // Obtener URL pública
+const { data: publicUrlData } = supabase.storage
+.from(bucketToUse)
+.getPublicUrl(fullPath);
     
     res.status(200).json({
       success: true,
@@ -381,10 +630,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-
-
-
 // Ruta para descargar o visualizar archivos
+
+
 app.get('/api/download', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -395,6 +643,43 @@ app.get('/api/download', async (req, res) => {
       });
     }
     
+    // SOLUCIÓN: Verificar si hay un token en los parámetros de consulta
+    let bucketToUse = req.bucketName || defaultBucketName;
+    let tokenUsername = null;
+    
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[DOWNLOAD] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          tokenUsername = tokenData.username;
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[DOWNLOAD] Usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[DOWNLOAD] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[DOWNLOAD] Verificando bucketName en request: ${bucketToUse}`);
+    console.log(`[DOWNLOAD] Verificando username en request: ${req.username}`);
+    console.log(`[DOWNLOAD] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && bucketToUse !== userBucketMap[req.username]) {
+      console.error(`[DOWNLOAD] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${bucketToUse}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }   
     const filePath = req.query.path;
     const view = req.query.view === 'true';
     
@@ -411,13 +696,13 @@ app.get('/api/download', async (req, res) => {
       normalizedPath = normalizedPath.substring(1);
     }
     
-    console.log(`Obteniendo URL para: ${normalizedPath}, visualizar: ${view}`);
+    console.log(`Obteniendo URL para: ${normalizedPath}, visualizar: ${view}, en bucket: ${bucketToUse}`);
     
     // Obtener la URL pública
     const { data } = supabase.storage
-      .from(bucketName)
+      .from(bucketToUse)
       .getPublicUrl(normalizedPath);
-    
+   
     if (!data || !data.publicUrl) {
       return res.status(404).json({
         success: false,
@@ -432,7 +717,8 @@ app.get('/api/download', async (req, res) => {
     return res.status(200).json({
       success: true,
       publicUrl: data.publicUrl,
-      fileType: fileExtension.slice(1) // Sin el punto
+      fileType: fileExtension.slice(1), // Sin el punto
+      bucket: bucketToUse // Incluir el bucket usado para diagnóstico
     });
   } catch (error) {
     console.error('Error al obtener URL del archivo:', error);
@@ -445,14 +731,9 @@ app.get('/api/download', async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
 // Ruta para crear carpetas
+
+
 app.post('/api/createFolder', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -463,6 +744,30 @@ app.post('/api/createFolder', async (req, res) => {
       });
     }
     
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[CREATE_FOLDER] Verificando bucketName en request: ${req.bucketName}`);
+    console.log(`[CREATE_FOLDER] Verificando username en request: ${req.username}`);
+    console.log(`[CREATE_FOLDER] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+      console.error(`[CREATE_FOLDER] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }    
+    // Verificar permisos - solo admin puede crear carpetas
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para crear carpetas. Se requiere rol de administrador.'
+      });
+    }
+   
     const { parentPath, folderName } = req.body;
     
     if (!folderName) {
@@ -485,14 +790,14 @@ app.post('/api/createFolder', async (req, res) => {
     
     console.log(`Creando carpeta en: ${folderPath}`);
     
-    // En Supabase Storage, las carpetas son implícitas
-    // Creamos un archivo vacío oculto para representar la carpeta
-    const { error } = await supabase.storage
-      .from(bucketName)
-      .upload(folderPath, new Uint8Array(0), {
-        contentType: 'application/x-directory',
-        upsert: true
-      });
+ // En Supabase Storage, las carpetas son implícitas
+// Creamos un archivo vacío oculto para representar la carpeta
+const { error } = await supabase.storage
+.from(bucketToUse)
+.upload(folderPath, new Uint8Array(0), {
+  contentType: 'application/x-directory',
+  upsert: true
+});
     
     if (error) {
       throw error;
@@ -516,29 +821,8 @@ app.post('/api/createFolder', async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Ruta específica para eliminar carpetas
+
 app.delete('/api/deleteFolder', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -546,6 +830,30 @@ app.delete('/api/deleteFolder', async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[DELETE_FOLDER] Verificando bucketName en request: ${req.bucketName}`);
+    console.log(`[DELETE_FOLDER] Verificando username en request: ${req.username}`);
+    console.log(`[DELETE_FOLDER] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+      console.error(`[DELETE_FOLDER] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }    
+    // Verificar permisos - solo admin puede eliminar carpetas
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para eliminar carpetas. Se requiere rol de administrador.'
       });
     }
     
@@ -569,11 +877,12 @@ app.delete('/api/deleteFolder', async (req, res) => {
     // Función recursiva para eliminar carpetas y su contenido
     const deleteRecursively = async (path) => {
       console.log(`Procesando: ${path}`);
+
       
-      // Listar contenido de la carpeta actual
-      const { data, error: listError } = await supabase.storage
-        .from(bucketName)
-        .list(path);
+ // Listar contenido de la carpeta actual
+const { data, error: listError } = await supabase.storage
+.from(bucketToUse)
+.list(path);
       
       if (listError) {
         console.error(`Error al listar contenido de ${path}:`, listError);
@@ -599,11 +908,11 @@ app.delete('/api/deleteFolder', async (req, res) => {
             }
           }
           
-          // Eliminar el elemento actual
-          console.log(`Eliminando: ${itemPath}`);
-          const { error: deleteError } = await supabase.storage
-            .from(bucketName)
-            .remove([itemPath]);
+     // Eliminar el elemento actual
+console.log(`Eliminando: ${itemPath}`);
+const { error: deleteError } = await supabase.storage
+  .from(bucketToUse)
+  .remove([itemPath]);
           
           if (deleteError && deleteError.message !== 'Object not found') {
             console.error(`Error al eliminar ${itemPath}:`, deleteError);
@@ -618,8 +927,8 @@ app.delete('/api/deleteFolder', async (req, res) => {
       console.log(`Eliminando marcador de carpeta: ${folderMarkerPath}`);
       
       const { error: markerError } = await supabase.storage
-        .from(bucketName)
-        .remove([folderMarkerPath]);
+  .from(bucketToUse)
+  .remove([folderMarkerPath]);
       
       if (markerError && markerError.message !== 'Object not found') {
         console.error(`Error al eliminar marcador ${folderMarkerPath}:`, markerError);
@@ -637,10 +946,10 @@ app.delete('/api/deleteFolder', async (req, res) => {
       throw result.error;
     }
     
-    // Eliminar la carpeta misma como último paso
-    const { error: finalError } = await supabase.storage
-      .from(bucketName)
-      .remove([normalizedPath]);
+ // Eliminar la carpeta misma como último paso
+const { error: finalError } = await supabase.storage
+.from(bucketToUse)
+.remove([normalizedPath]);
     
     if (finalError && finalError.message !== 'Object not found') {
       console.log('Nota: intento final de eliminar la carpeta principal:', finalError);
@@ -665,18 +974,8 @@ app.delete('/api/deleteFolder', async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
 // Ruta para eliminar archivos o carpetas
+
 app.delete('/api/delete', async (req, res) => {
   try {
     console.log('Endpoint delete llamado con query:', req.query);
@@ -687,6 +986,30 @@ app.delete('/api/delete', async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Cliente de Supabase no configurado correctamente. Verifica las variables de entorno SUPABASE_URL y SUPABASE_KEY.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[DELETE] Verificando bucketName en request: ${req.bucketName}`);
+    console.log(`[DELETE] Verificando username en request: ${req.username}`);
+    console.log(`[DELETE] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+      console.error(`[DELETE] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }    
+    // Verificar permisos - solo admin puede eliminar archivos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para eliminar archivos. Se requiere rol de administrador.'
       });
     }
     
@@ -713,11 +1036,11 @@ app.delete('/api/delete', async (req, res) => {
     
     if (isFolder) {
       console.log('Intentando eliminar carpeta:', normalizedPath);
-      
-      // Para carpetas, primero listamos su contenido
-      const listResult = await supabase.storage
-        .from(bucketName)
-        .list(normalizedPath);
+    
+   // Para carpetas, primero listamos su contenido
+const listResult = await supabase.storage
+.from(bucketToUse)
+.list(normalizedPath);
       
       console.log('Resultado de list:', listResult);
       
@@ -739,12 +1062,12 @@ app.delete('/api/delete', async (req, res) => {
       
       console.log('Items a eliminar:', itemsToDelete);
       
-      // Eliminamos todos los elementos
-      if (itemsToDelete.length > 0) {
-        const deleteResult = await supabase.storage
-          .from(bucketName)
-          .remove(itemsToDelete);
-        
+   // Eliminamos todos los elementos
+if (itemsToDelete.length > 0) {
+  const deleteResult = await supabase.storage
+    .from(bucketToUse)
+    .remove(itemsToDelete);
+       
         console.log('Resultado de eliminación múltiple:', deleteResult);
         
         if (deleteResult.error && deleteResult.error.message !== 'Object not found') {
@@ -753,10 +1076,10 @@ app.delete('/api/delete', async (req, res) => {
         }
       }
       
-      // Intento adicional de eliminar la carpeta misma
-      const deleteFolderResult = await supabase.storage
-        .from(bucketName)
-        .remove([normalizedPath]);
+    // Intento adicional de eliminar la carpeta misma
+const deleteFolderResult = await supabase.storage
+.from(bucketToUse)
+.remove([normalizedPath]);
       
       console.log('Resultado de eliminación de la carpeta misma:', deleteFolderResult);
       
@@ -768,10 +1091,10 @@ app.delete('/api/delete', async (req, res) => {
     } else {
       console.log('Intentando eliminar archivo:', normalizedPath);
       
-      // Para archivos individuales
-      const deleteResult = await supabase.storage
-        .from(bucketName)
-        .remove([normalizedPath]);
+   // Para archivos individuales
+const deleteResult = await supabase.storage
+.from(bucketToUse)
+.remove([normalizedPath]);
       
       console.log('Resultado de eliminación de archivo:', deleteResult);
       
@@ -796,10 +1119,10 @@ app.delete('/api/delete', async (req, res) => {
   }
 });
 
-
 // Rutas para manejar URLs de YouTube
 
 // Obtener URL de YouTube para un archivo
+
 app.get('/api/youtube-url', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -810,6 +1133,22 @@ app.get('/api/youtube-url', async (req, res) => {
       });
     }
     
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar explícitamente que el bucket sea el correcto
+    console.log(`[YOUTUBE_URL_GET] Verificando bucketName en request: ${req.bucketName}`);
+    console.log(`[YOUTUBE_URL_GET] Verificando username en request: ${req.username}`);
+    console.log(`[YOUTUBE_URL_GET] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+    
+    // Validación adicional de seguridad
+    if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+      console.error(`[YOUTUBE_URL_GET] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado: Bucket no válido para este usuario'
+      });
+    }    
     const filePath = req.query.path;
     
     if (!filePath) {
@@ -830,16 +1169,20 @@ app.get('/api/youtube-url', async (req, res) => {
     // Construir la ruta del archivo de metadatos
     const metadataPath = `${normalizedPath}.youtube.metadata`;
     
-    // Intentar obtener el archivo de metadatos
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .download(metadataPath);
-    
-    if (error && error.message !== 'The object was not found') {
-      console.error('Error al obtener metadatos:', error);
-      throw error;
-    }
-    
+   // Intentar obtener el archivo de metadatos
+   let data, error;
+   try {
+     const result = await supabase.storage
+       .from(bucketToUse)
+       .download(metadataPath);
+     
+     data = result.data;
+     error = result.error;
+   } catch (downloadError) {
+     console.error('Error al intentar descargar metadatos de imagen:', downloadError);
+     // No lanzar excepción, simplemente continuar con data=null
+   }
+
     if (!data) {
       return res.status(200).json({
         success: true,
@@ -866,6 +1209,7 @@ app.get('/api/youtube-url', async (req, res) => {
   }
 });
 
+
 // Guardar URL de YouTube para un archivo
 app.post('/api/youtube-url', express.json(), async (req, res) => {
   try {
@@ -874,6 +1218,17 @@ app.post('/api/youtube-url', express.json(), async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar permisos - solo admin puede modificar URL de YouTube
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar URL de YouTube. Se requiere rol de administrador.'
       });
     }
     
@@ -906,11 +1261,11 @@ app.post('/api/youtube-url', express.json(), async (req, res) => {
     // Convertir a JSON
     const metadataContent = JSON.stringify(metadata);
     
-    // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
-    if (!youtubeUrl) {
-      const { error } = await supabase.storage
-        .from(bucketName)
-        .remove([metadataPath]);
+   // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
+if (!youtubeUrl) {
+  const { error } = await supabase.storage
+    .from(bucketToUse)
+    .remove([metadataPath]);
       
       if (error && error.message !== 'The object was not found') {
         console.error('Error al eliminar metadatos:', error);
@@ -923,13 +1278,13 @@ app.post('/api/youtube-url', express.json(), async (req, res) => {
       });
     }
     
-    // Guardar archivo de metadatos
-    const { error } = await supabase.storage
-      .from(bucketName)
-      .upload(metadataPath, metadataContent, {
-        contentType: 'application/json',
-        upsert: true
-      });
+   // Guardar archivo de metadatos
+const { error } = await supabase.storage
+.from(bucketToUse)
+.upload(metadataPath, metadataContent, {
+  contentType: 'application/json',
+  upsert: true
+});
     
     if (error) {
       console.error('Error al guardar metadatos:', error);
@@ -965,6 +1320,9 @@ app.get('/api/audio-url', async (req, res) => {
       });
     }
     
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
     const filePath = req.query.path;
     
     if (!filePath) {
@@ -985,15 +1343,19 @@ app.get('/api/audio-url', async (req, res) => {
     // Construir la ruta del archivo de metadatos
     const metadataPath = `${normalizedPath}.audio.metadata`;
     
-    // Intentar obtener el archivo de metadatos
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .download(metadataPath);
-    
-    if (error && error.message !== 'The object was not found') {
-      console.error('Error al obtener metadatos de audio:', error);
-      throw error;
-    }
+ // Intentar obtener el archivo de metadatos
+ let data, error;
+ try {
+   const result = await supabase.storage
+     .from(bucketToUse)
+     .download(metadataPath);
+   
+   data = result.data;
+   error = result.error;
+ } catch (downloadError) {
+   console.error('Error al intentar descargar metadatos de audio:', downloadError);
+   // No lanzar excepción, simplemente continuar con data=null
+ }
     
     if (!data) {
       return res.status(200).json({
@@ -1021,6 +1383,7 @@ app.get('/api/audio-url', async (req, res) => {
   }
 });
 
+
 // Guardar URL de audio para un archivo
 app.post('/api/audio-url', express.json(), async (req, res) => {
   try {
@@ -1029,6 +1392,17 @@ app.post('/api/audio-url', express.json(), async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar permisos - solo admin puede modificar URL de audio
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar URL de audio. Se requiere rol de administrador.'
       });
     }
     
@@ -1061,11 +1435,11 @@ app.post('/api/audio-url', express.json(), async (req, res) => {
     // Convertir a JSON
     const metadataContent = JSON.stringify(metadata);
     
-    // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
-    if (!audioUrl) {
-      const { error } = await supabase.storage
-        .from(bucketName)
-        .remove([metadataPath]);
+   // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
+if (!audioUrl) {
+  const { error } = await supabase.storage
+    .from(bucketToUse)
+    .remove([metadataPath]);
       
       if (error && error.message !== 'The object was not found') {
         console.error('Error al eliminar metadatos de audio:', error);
@@ -1079,12 +1453,12 @@ app.post('/api/audio-url', express.json(), async (req, res) => {
     }
     
     // Guardar archivo de metadatos
-    const { error } = await supabase.storage
-      .from(bucketName)
-      .upload(metadataPath, metadataContent, {
-        contentType: 'application/json',
-        upsert: true
-      });
+const { error } = await supabase.storage
+.from(bucketToUse)
+.upload(metadataPath, metadataContent, {
+  contentType: 'application/json',
+  upsert: true
+});
     
     if (error) {
       console.error('Error al guardar metadatos de audio:', error);
@@ -1119,6 +1493,9 @@ app.get('/api/image-url', async (req, res) => {
       });
     }
     
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
     const filePath = req.query.path;
     
     if (!filePath) {
@@ -1140,14 +1517,18 @@ app.get('/api/image-url', async (req, res) => {
     const metadataPath = `${normalizedPath}.image.metadata`;
     
     // Intentar obtener el archivo de metadatos
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .download(metadataPath);
-    
-    if (error && error.message !== 'The object was not found') {
-      console.error('Error al obtener metadatos de imagen:', error);
-      throw error;
-    }
+let data, error;
+try {
+  const result = await supabase.storage
+    .from(bucketToUse)
+    .download(metadataPath);
+  
+  data = result.data;
+  error = result.error;
+} catch (downloadError) {
+  console.error('Error al intentar descargar metadatos de YouTube:', downloadError);
+  // No lanzar excepción, simplemente continuar con data=null
+}
     
     if (!data) {
       return res.status(200).json({
@@ -1186,6 +1567,16 @@ app.post('/api/image-url', express.json(), async (req, res) => {
       });
     }
     
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar permisos - solo admin puede modificar URL de imagen
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar URL de imagen. Se requiere rol de administrador.'
+      });
+    }
     const { filePath, imageUrl } = req.body;
     
     if (!filePath) {
@@ -1216,10 +1607,10 @@ app.post('/api/image-url', express.json(), async (req, res) => {
     const metadataContent = JSON.stringify(metadata);
     
     // Si la URL es null o vacía, eliminar el archivo de metadatos si existe
-    if (!imageUrl) {
-      const { error } = await supabase.storage
-        .from(bucketName)
-        .remove([metadataPath]);
+if (!imageUrl) {
+  const { error } = await supabase.storage
+    .from(bucketToUse)
+    .remove([metadataPath]);
       
       if (error && error.message !== 'The object was not found') {
         console.error('Error al eliminar metadatos de imagen:', error);
@@ -1232,13 +1623,13 @@ app.post('/api/image-url', express.json(), async (req, res) => {
       });
     }
     
-    // Guardar archivo de metadatos
-    const { error } = await supabase.storage
-      .from(bucketName)
-      .upload(metadataPath, metadataContent, {
-        contentType: 'application/json',
-        upsert: true
-      });
+  // Guardar archivo de metadatos
+const { error } = await supabase.storage
+.from(bucketToUse)
+.upload(metadataPath, metadataContent, {
+  contentType: 'application/json',
+  upsert: true
+});
     
     if (error) {
       console.error('Error al guardar metadatos de imagen:', error);
@@ -1261,6 +1652,8 @@ app.post('/api/image-url', express.json(), async (req, res) => {
 });
 
 // Modificación en la ruta de listado de archivos para ocultar archivos de metadatos
+
+
 app.get('/api/files', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -1271,6 +1664,39 @@ app.get('/api/files', async (req, res) => {
       });
     }
     
+    // SOLUCIÓN DIRECTA: Extraer directamente la información del token
+    const authHeader = req.headers.authorization;
+    let forcedBucket = defaultBucketName;
+    let username = null;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        console.log(`[FILES-EMERGENCY] Token recibido: ${token}`);
+        
+        const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
+        console.log(`[FILES-EMERGENCY] Token decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          username = tokenData.username;
+          forcedBucket = userBucketMap[tokenData.username];
+          console.log(`[FILES-EMERGENCY] Forzando uso de bucket ${forcedBucket} para usuario ${tokenData.username}`);
+        } else {
+          console.log(`[FILES-EMERGENCY] No se pudo determinar el bucket para:`, JSON.stringify(tokenData));
+          if (tokenData.username) {
+            console.log(`[FILES-EMERGENCY] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+          }
+        }
+      } catch (error) {
+        console.error('[FILES-EMERGENCY] Error al procesar token para forzar bucket:', error);
+      }
+    } else {
+      console.log(`[FILES-EMERGENCY] No hay token de autorización`);
+    }
+    
+    // Usar el bucket forzado en lugar de req.bucketName
+    const bucketToUse = forcedBucket;
+    console.log(`[FILES-EMERGENCY] Usando bucket: ${bucketToUse}`);    
     const prefix = req.query.prefix || '';
     
     // Normalizar el prefijo
@@ -1279,14 +1705,17 @@ app.get('/api/files', async (req, res) => {
       normalizedPrefix = normalizedPrefix.substring(1);
     }
     
-    console.log(`Listando archivos con prefijo: "${normalizedPrefix}"`);
+    console.log(`[FILES] Listando archivos con prefijo: "${normalizedPrefix}" en bucket: ${bucketToUse}`);
+    console.log(`[FILES] Usuario: ${req.username || 'invitado'}, Rol: ${req.userRole}`);
     
     const { data, error } = await supabase.storage
-      .from(bucketName)
+      .from(bucketToUse)
       .list(normalizedPrefix, {
         sortBy: { column: 'name', order: 'asc' }
       });
-    
+      
+    console.log(`[FILES] Respuesta de Supabase para ${bucketToUse}/${normalizedPrefix}: ${error ? 'ERROR' : 'Éxito'}, ${data ? data.length : 0} elementos`);
+
     if (error) {
       throw error;
     }
@@ -1312,7 +1741,7 @@ app.get('/api/files', async (req, res) => {
           isFolder: isFolder
         };
       });
-    
+
     res.status(200).json(formattedFiles);
   } catch (error) {
     console.error('Error al listar archivos:', error);
@@ -1322,15 +1751,23 @@ app.get('/api/files', async (req, res) => {
       message: `Error al listar archivos: ${error.message}`,
       error: error.message
     });
+
   }
 });
 
-
-
 // Endpoint para visualizar archivos DOCX como HTML
+
+
 app.get('/api/view-docx', async (req, res) => {
-  console.log('Endpoint view-docx llamado');
-  console.log('Query parameters:', req.query);
+  console.log('==========================================');
+  console.log('ENDPOINT VIEW-DOCX LLAMADO');
+  console.log('==========================================');
+  console.log('Query parameters completos:', req.query);
+  console.log('Path del documento:', req.query.path);
+  console.log('URL del documento:', req.query.url);
+  console.log('Token recibido:', req.query.token);
+  console.log('Headers completos:', req.headers);
+  console.log('==========================================');
   
   try {
     // Verificar si Supabase está configurado
@@ -1341,42 +1778,113 @@ app.get('/api/view-docx', async (req, res) => {
       });
     }
     
-    const filePath = req.query.path;
+    let buffer;
     
-    if (!filePath) {
+    // Manejar tanto la forma antigua (path) como la nueva (url)
+    if (req.query.path) {
+      // Método original usando path
+      console.log('Usando path para acceder al documento:', req.query.path);
+      
+      // Obtener el bucket específico del usuario desde el middleware
+      const bucketToUse = req.bucketName || defaultBucketName;
+      
+      // Verificar explícitamente que el bucket sea el correcto
+      console.log(`[VIEW_DOCX] Verificando bucketName en request: ${req.bucketName}`);
+      console.log(`[VIEW_DOCX] Verificando username en request: ${req.username}`);
+      console.log(`[VIEW_DOCX] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
+      
+      // Validación adicional de seguridad
+      if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
+        console.error(`[VIEW_DOCX] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
+        return res.status(403).json({
+          success: false,
+          message: 'Acceso denegado: Bucket no válido para este usuario'
+        });
+      }
+      
+      const filePath = req.query.path;
+      
+      if (!filePath) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se ha especificado la ruta del archivo'
+        });
+      }
+      
+      // Normalizar la ruta
+      let normalizedPath = filePath;
+      if (normalizedPath.startsWith('/')) {
+        normalizedPath = normalizedPath.substring(1);
+      }
+      
+      console.log(`Procesando DOCX para visualización: ${normalizedPath}`);
+      
+      // Descargar el archivo DOCX de Supabase
+      const { data, error } = await supabase.storage
+        .from(bucketToUse)
+        .download(normalizedPath);
+      
+      if (error) {
+        console.error('Error al descargar DOCX con path:', error);
+        throw error;
+      }
+      
+      if (!data) {
+        return res.status(404).json({
+          success: false,
+          message: 'Archivo no encontrado'
+        });
+      }
+      
+      // Convertir el arrayBuffer a Buffer para mammoth
+      buffer = Buffer.from(await data.arrayBuffer());
+      
+    } else if (req.query.url) {
+      // Nuevo método usando url directa
+      console.log('Usando URL para acceder al documento:', req.query.url);
+      
+      // Validar el token de autenticación si está presente
+      if (req.query.token) {
+        console.log('Token de autenticación proporcionado:', req.query.token);
+        
+        try {
+          const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+          console.log('Token decodificado:', JSON.stringify(tokenData));
+          
+          // Aquí podrías hacer validaciones adicionales con el token si es necesario
+        } catch (tokenError) {
+          console.error('Error al decodificar token:', tokenError);
+        }
+      }
+      
+      // Descargar el archivo usando fetch desde la URL proporcionada
+      try {
+        console.log('Descargando documento desde URL externa');
+        const response = await fetch(req.query.url);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
+        console.log('Documento descargado correctamente desde URL, tamaño:', buffer.length);
+        
+      } catch (fetchError) {
+        console.error('Error al descargar documento desde URL:', fetchError);
+        return res.status(500).json({
+          success: false,
+          message: 'Error al descargar el documento desde la URL proporcionada',
+          error: fetchError.message
+        });
+      }
+    } else {
       return res.status(400).json({
         success: false,
-        message: 'No se ha especificado la ruta del archivo'
+        message: 'Se requiere un parámetro "path" o "url" para identificar el documento'
       });
     }
     
-    // Normalizar la ruta
-    let normalizedPath = filePath;
-    if (normalizedPath.startsWith('/')) {
-      normalizedPath = normalizedPath.substring(1);
-    }
-    
-    console.log(`Procesando DOCX para visualización: ${normalizedPath}`);
-    
-    // Descargar el archivo DOCX de Supabase
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .download(normalizedPath);
-    
-    if (error) {
-      console.error('Error al descargar DOCX:', error);
-      throw error;
-    }
-    
-    if (!data) {
-      return res.status(404).json({
-        success: false,
-        message: 'Archivo no encontrado'
-      });
-    }
-    
-    // Convertir el arrayBuffer a Buffer para mammoth
-    const buffer = Buffer.from(await data.arrayBuffer());
     console.log('Buffer creado correctamente, tamaño:', buffer.length);
     
     // Importar mammoth
@@ -1391,6 +1899,11 @@ app.get('/api/view-docx', async (req, res) => {
       
       const html = result.value;
       
+      // Obtener el nombre del archivo para el título
+      const fileName = req.query.path 
+        ? path.basename(req.query.path)
+        : 'Documento';
+      
       // Enviar el HTML con estilos adicionales
       res.send(`
         <!DOCTYPE html>
@@ -1398,7 +1911,7 @@ app.get('/api/view-docx', async (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Visor de Documentos - ${path.basename(normalizedPath)}</title>
+          <title>Visor de Documentos - ${fileName}</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -1479,10 +1992,6 @@ app.get('/api/view-docx', async (req, res) => {
 });
 
 
-
-
-
-
 // Endpoint de diagnóstico para verificar la conectividad con Supabase
 app.get('/api/diagnose', async (req, res) => {
   console.log('Ejecutando diagnóstico de conectividad con Supabase...');
@@ -1542,12 +2051,12 @@ app.get('/api/diagnose', async (req, res) => {
     }
     
     // 4. Intentar listar archivos en el bucket específico
-    let filesResult;
-    try {
-      const { data, error } = await supabase.storage
-        .from(bucketName)
-        .list('', { limit: 5 });
-      
+let filesResult;
+try {
+  const bucketToCheck = req.bucketName || defaultBucketName;
+  const { data, error } = await supabase.storage
+    .from(bucketToCheck)
+    .list('', { limit: 5 });  
       if (error) {
         throw error;
       }
@@ -1592,24 +2101,91 @@ app.post('/api/login', express.json(), async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    // Credenciales válidas (deberías almacenar estas en variables de entorno)
-    const validCredentials = {
-      'admin': 'Pana811880',
-      'usuario': 'usuario123'
-    };
-    
+    // Credenciales válidas (estas pueden ser actualizadas aquí)
+const validCredentials = {
+  // Bucket master
+  'admin': 'Panica811880',     // Cambiada de 'Pana811880' a 'Panica811880'
+  'usuario123': 'usuario123',  
+  
+  // Bucket contenedor001
+  'admin1': 'df14T87lk44aqL',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
+  'usuario001': 'turpial1720', // Cambiada
+  
+  // Bucket contenedor002
+  'admin2': 'ff447EEdf441dP',       // Cambiada
+  'usuario002': 'leonidas4780', // Cambiada
+  
+  // Bucket contenedor003
+  'admin3': 'd44UYTddcws12',       // Cambiada
+  'usuario003': 'flor785412', // Cambiada
+  
+  // Bucket contenedor004
+  'admin4': 'vfHHdM7441eSw',       // Cambiada
+  'usuario004': 'montes4128', // Cambiada
+  
+  // Bucket contenedor005
+  'admin5': 'fdr11IUYTs1a',       // Cambiada
+  'usuario005': 'palomita47401', // Cambiada
+  
+  // Bucket contenedor006
+  'admin6': 'fffYe147787sa',       // Cambiada
+  'usuario006': 'dia2147846', // Cambiada
+  
+  // Bucket contenedor007
+  'admin7': '4517lkd0TRE',       // Cambiada
+  'usuario007': 'mesa10378', // Cambiada
+  
+  // Bucket contenedor008
+  'admin8': 'l718dUYsc4f',       // Cambiada
+  'usuario008': 'car4472', // Cambiada
+  
+  // Bucket contenedor009
+  'admin9': '4de7I1de5R',       // Cambiada
+  'usuario009': 'us14701', // Cambiada
+  
+  // Bucket contenedor010
+  'admin10': '44dwOuyr01',     // Cambiada
+  'usuario010': 'sol4710', // Cambiada
+  
+  // Nuevos usuarios para buckets adicionales
+  // Bucket contenedor011
+  'admin11': 'ClaveSegura11',
+  'usuario011': 'Usuario011Clave',
+  
+  // Bucket contenedor012
+  'admin12': 'ClaveSegura12',
+  'usuario012': 'Usuario012Clave',
+  
+  // Bucket contenedor013
+  'admin13': 'ClaveSegura13',
+  'usuario013': 'Usuario013Clave',
+  
+  // Bucket pruebas
+  'adminpruebas': 'ClavePruebas',
+  'userpruebas': 'UserPruebas'
+};
+
+
     // Verificar las credenciales
     if (validCredentials[username] && validCredentials[username] === password) {
+      // Determinar el bucket y rol del usuario
+      const userBucket = userBucketMap[username] || defaultBucketName;
+      const userRole = userRoleMap[username] || 'user';
+      
+      console.log(`Usuario ${username} autenticado con rol ${userRole} para bucket ${userBucket}`);
+      
       // Credenciales correctas
       res.status(200).json({
         success: true,
         user: {
           username: username,
-          role: username === 'admin' ? 'admin' : 'user'
+          role: userRole,
+          bucket: userBucket
         }
       });
     } else {
       // Credenciales incorrectas
+      console.log(`Intento de autenticación fallido para usuario: ${username}`);
       res.status(401).json({
         success: false,
         message: 'Nombre de usuario o contraseña incorrectos'
@@ -1624,48 +2200,182 @@ app.post('/api/login', express.json(), async (req, res) => {
   }
 });
 
-
-// Endpoint de autenticación
-app.post('/api/login', express.json(), async (req, res) => {
+// Endpoint para obtener el tamaño actual del bucket
+app.get('/api/bucket-size', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    
-    // Credenciales válidas (estas pueden ser actualizadas aquí)
-    const validCredentials = {
-      'admin': 'Jh811880',
-      'usuario': 'usuario123'
-    };
-    
-    // Verificar las credenciales
-    if (validCredentials[username] && validCredentials[username] === password) {
-      // Credenciales correctas
-      res.status(200).json({
-        success: true,
-        user: {
-          username: username,
-          role: username === 'admin' ? 'admin' : 'user'
-        }
-      });
-    } else {
-      // Credenciales incorrectas
-      res.status(401).json({
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
         success: false,
-        message: 'Nombre de usuario o contraseña incorrectos'
+        message: 'Cliente de Supabase no configurado correctamente.'
       });
     }
+
+    // Obtener el nombre del bucket desde el middleware
+    const bucketToCheck = req.bucketName || defaultBucketName;
+    
+    console.log(`Calculando tamaño total del bucket: ${bucketToCheck}`);
+    const totalSizeBytes = await calculateBucketSize(bucketToCheck);
+    const totalSizeMB = (totalSizeBytes / (1024 * 1024)).toFixed(2);
+    const maxBucketSize = 800 * 1024 * 1024; // 800MB en bytes
+    const percentUsed = ((totalSizeBytes / maxBucketSize) * 100).toFixed(2);
+    
+    res.status(200).json({
+      success: true,
+      bucket: bucketToCheck,
+      sizeBytes: totalSizeBytes,
+      sizeMB: parseFloat(totalSizeMB),
+      maxSizeMB: 800,
+      percentUsed: parseFloat(percentUsed),
+      remainingMB: (800 - parseFloat(totalSizeMB)).toFixed(2)
+    });
   } catch (error) {
-    console.error('Error en autenticación:', error);
+    console.error(`Error al calcular tamaño del bucket ${req.bucketName}:`, error);
+    
     res.status(500).json({
       success: false,
-      message: 'Error interno durante la autenticación'
+      message: `Error al calcular tamaño del bucket: ${error.message}`,
+      error: error.message
     });
+  }
+});
+
+// Nuevo endpoint simplificado para visualizar documentos DOCX
+app.get('/api/docx-viewer', async (req, res) => {
+  console.log('==========================================');
+  console.log('ENDPOINT DOCX-VIEWER LLAMADO');
+  console.log('==========================================');
+  console.log('Query parameters completos:', req.query);
+  
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).send('Error: Cliente de Supabase no configurado correctamente.');
+    }
+    
+    const filePath = req.query.path;
+    
+    if (!filePath) {
+      return res.status(400).send('Error: No se ha especificado la ruta del archivo');
+    }
+    
+    // Obtener el bucket específico del token si está disponible
+    let bucketToUse = defaultBucketName;
+    
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log('Token decodificado:', tokenData);
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          bucketToUse = userBucketMap[tokenData.username];
+          console.log(`Usando bucket ${bucketToUse} desde el token`);
+        }
+      } catch (tokenError) {
+        console.error('Error al decodificar token:', tokenError);
+      }
+    }
+    
+    console.log(`Descargando DOCX desde ${bucketToUse}/${filePath}`);
+    
+    // Descargar el archivo DOCX de Supabase
+    const { data, error } = await supabase.storage
+      .from(bucketToUse)
+      .download(filePath);
+    
+    if (error) {
+      console.error('Error al descargar DOCX:', error);
+      return res.status(500).send(`Error al descargar el documento: ${error.message}`);
+    }
+    
+    if (!data) {
+      return res.status(404).send('Archivo no encontrado');
+    }
+    
+    // Convertir el arrayBuffer a Buffer para mammoth
+    const buffer = Buffer.from(await data.arrayBuffer());
+    console.log('Buffer creado correctamente, tamaño:', buffer.length);
+    
+    // Importar mammoth
+    const mammoth = require('mammoth');
+    
+    // Convertir DOCX a HTML
+    const result = await mammoth.convertToHtml({ buffer });
+    const html = result.value;
+    
+    // Enviar el HTML directamente
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Visor de Documentos - ${filePath}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #f5f5f5;
+          }
+          h1, h2, h3, h4, h5, h6 {
+            color: #333;
+            margin-top: 24px;
+            margin-bottom: 16px;
+          }
+          p {
+            margin-bottom: 16px;
+          }
+          img {
+            max-width: 100%;
+            height: auto;
+          }
+          table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 16px;
+          }
+          th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+          }
+          th {
+            background-color: #f2f2f2;
+            text-align: left;
+          }
+          tr:nth-child(even) {
+            background-color: #f9f9f9;
+          }
+          .document-container {
+            background-color: white;
+            padding: 40px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 4px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="document-container">
+          ${html}
+        </div>
+      </body>
+      </html>
+    `);
+    
+  } catch (error) {
+    console.error('Error general en docx-viewer:', error);
+    res.status(500).send(`Error al procesar el documento: ${error.message}`);
   }
 });
 
 // Iniciar el servidor  
 app.listen(PORT, () => {
   console.log(`Servidor iniciado en el puerto ${PORT}`);
-  console.log(`Bucket configurado: ${bucketName}`);
+  console.log(`Bucket configurado: ${defaultBucketName}`);
   console.log(`Supabase URL: ${supabaseUrl}`);
   console.log(`Supabase Key configurada: ${!!supabaseKey}`);
 });
+

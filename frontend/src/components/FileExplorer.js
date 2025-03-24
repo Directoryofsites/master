@@ -5,7 +5,7 @@ import UploadForm from './UploadForm';
 import SearchForm from './SearchForm';  // Importar el nuevo componente
 import * as api from '../services/api';  // Importar todo el módulo api
 
-const FileExplorer = ({ userRole }) => {
+const FileExplorer = ({ userRole, username }) => {
   const [currentPath, setCurrentPath] = useState('');
   const [files, setFiles] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
