@@ -231,7 +231,7 @@ try {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 6 * 1024 * 1024, // Límite de 6MB
+    fileSize: 36 * 1024 * 1024, // Límite de 36MB
   }
 });
 
@@ -568,11 +568,11 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
    
-    // Calcular tamaño actual del bucket y verificar límite (800MB)
+    // Calcular tamaño actual del bucket y verificar límite (950MB)
     console.log(`Calculando tamaño actual del bucket ${bucketToUse}...`);
     const currentBucketSize = await calculateBucketSize(bucketToUse);
     const fileSizeInBytes = req.file.size;
-    const maxBucketSize = 800 * 1024 * 1024; // 800MB en bytes
+    const maxBucketSize = 950 * 1024 * 1024; // 950MB en bytes
     
     console.log(`Tamaño actual del bucket: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB`);
     console.log(`Tamaño del archivo a subir: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`);
