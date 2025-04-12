@@ -196,24 +196,24 @@ const userRoleMap = {
 const bucketSizeMap = {
   'master': 200,            // 200 MB para master
   'contenedor001': 500,     // 500 MB para contenedor001
-  'contenedor002': 300,     // 300 MB para los demás buckets contenedor
-  'contenedor003': 300,
-  'contenedor004': 300,
-  'contenedor005': 300,
-  'contenedor006': 300,
-  'contenedor007': 300,
-  'contenedor008': 300,
-  'contenedor009': 300,
-  'contenedor010': 300,
-  'contenedor011': 300,
-  'contenedor012': 300,
-  'contenedor013': 300,
+  'contenedor002': 100,     // 100 MB para los demás buckets contenedor
+  'contenedor003': 100,
+  'contenedor004': 100,
+  'contenedor005': 100,
+  'contenedor006': 100,
+  'contenedor007': 100,
+  'contenedor008': 100,
+  'contenedor009': 100,
+  'contenedor010': 100,
+  'contenedor011': 100,
+  'contenedor012': 100,
+  'contenedor013': 100,
   'pruebas': 100,          // 100 MB para pruebas
   'personal1': 150         // 150 MB para personal1
 };
 
 // Tamaño predeterminado para buckets no especificados (en MB)
-const defaultBucketMaxSize = 800;
+const defaultBucketMaxSize = 100;
 
 
 // Funciones para manejo de usuarios dinámicos
