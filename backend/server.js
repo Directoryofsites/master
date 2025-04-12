@@ -190,6 +190,32 @@ const userRoleMap = {
 
 };
 
+
+
+// Definir tamaños máximos para cada bucket (en MB)
+const bucketSizeMap = {
+  'master': 200,            // 200 MB para master
+  'contenedor001': 500,     // 500 MB para contenedor001
+  'contenedor002': 300,     // 300 MB para los demás buckets contenedor
+  'contenedor003': 300,
+  'contenedor004': 300,
+  'contenedor005': 300,
+  'contenedor006': 300,
+  'contenedor007': 300,
+  'contenedor008': 300,
+  'contenedor009': 300,
+  'contenedor010': 300,
+  'contenedor011': 300,
+  'contenedor012': 300,
+  'contenedor013': 300,
+  'pruebas': 100,          // 100 MB para pruebas
+  'personal1': 150         // 150 MB para personal1
+};
+
+// Tamaño predeterminado para buckets no especificados (en MB)
+const defaultBucketMaxSize = 800;
+
+
 // Funciones para manejo de usuarios dinámicos
 async function hashPassword(password) {
   const saltRounds = 10;
@@ -716,26 +742,30 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
    
-    // Calcular tamaño actual del bucket y verificar límite (950MB)
-    console.log(`Calculando tamaño actual del bucket ${bucketToUse}...`);
-    const currentBucketSize = await calculateBucketSize(bucketToUse);
-    const fileSizeInBytes = req.file.size;
-    const maxBucketSize = 950 * 1024 * 1024; // 950MB en bytes
-    
-    console.log(`Tamaño actual del bucket: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB`);
-    console.log(`Tamaño del archivo a subir: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`);
-    
-    // Verificar si el archivo excede el límite total
-    if (currentBucketSize + fileSizeInBytes > maxBucketSize) {
-      return res.status(413).json({
-        success: false,
-        message: `No se puede subir el archivo. Se excedería el límite de 800MB para el repositorio. Tamaño actual: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB, Tamaño del archivo: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`,
-        currentSize: currentBucketSize,
-        fileSize: fileSizeInBytes,
-        maxSize: maxBucketSize
-      });
-    }
-    
+    // Calcular tamaño actual del bucket y verificar límite para este bucket específico
+console.log(`Calculando tamaño actual del bucket ${bucketToUse}...`);
+const currentBucketSize = await calculateBucketSize(bucketToUse);
+const fileSizeInBytes = req.file.size;
+
+// Obtener el tamaño máximo para este bucket específico (en MB)
+const maxSizeMB = bucketSizeMap[bucketToUse] || defaultBucketMaxSize;
+const maxBucketSize = maxSizeMB * 1024 * 1024; // Convertir MB a bytes
+
+console.log(`Tamaño actual del bucket: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB`);
+console.log(`Tamaño del archivo a subir: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`);
+console.log(`Tamaño máximo del bucket ${bucketToUse}: ${maxSizeMB}MB`);
+
+// Verificar si el archivo excede el límite total
+if (currentBucketSize + fileSizeInBytes > maxBucketSize) {
+  return res.status(413).json({
+    success: false,
+    message: `No se puede subir el archivo. Se excedería el límite de ${maxSizeMB}MB para el bucket ${bucketToUse}. Tamaño actual: ${(currentBucketSize / (1024 * 1024)).toFixed(2)}MB, Tamaño del archivo: ${(fileSizeInBytes / (1024 * 1024)).toFixed(2)}MB`,
+    currentSize: currentBucketSize,
+    fileSize: fileSizeInBytes,
+    maxSize: maxBucketSize,
+    maxSizeMB: maxSizeMB
+  });
+}
     const filePath = req.body.path || '';
     const fileName = req.file.originalname;
     
@@ -2671,23 +2701,36 @@ app.get('/api/bucket-size', async (req, res) => {
       });
     }
 
+    // Verificar permisos - solo admin puede ver las estadísticas
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para ver estadísticas de almacenamiento. Se requiere rol de administrador.'
+      });
+    }
+
     // Obtener el nombre del bucket desde el middleware
     const bucketToCheck = req.bucketName || defaultBucketName;
     
     console.log(`Calculando tamaño total del bucket: ${bucketToCheck}`);
     const totalSizeBytes = await calculateBucketSize(bucketToCheck);
     const totalSizeMB = (totalSizeBytes / (1024 * 1024)).toFixed(2);
-    const maxBucketSize = 800 * 1024 * 1024; // 800MB en bytes
-    const percentUsed = ((totalSizeBytes / maxBucketSize) * 100).toFixed(2);
+    
+    // Obtener el tamaño máximo para este bucket específico (en MB)
+    const maxSizeMB = bucketSizeMap[bucketToCheck] || defaultBucketMaxSize;
+    const maxSizeBytes = maxSizeMB * 1024 * 1024;
+    
+    const percentUsed = ((totalSizeBytes / maxSizeBytes) * 100).toFixed(2);
+    const remainingMB = (maxSizeMB - parseFloat(totalSizeMB)).toFixed(2);
     
     res.status(200).json({
       success: true,
       bucket: bucketToCheck,
       sizeBytes: totalSizeBytes,
       sizeMB: parseFloat(totalSizeMB),
-      maxSizeMB: 800,
+      maxSizeMB: maxSizeMB,
       percentUsed: parseFloat(percentUsed),
-      remainingMB: (800 - parseFloat(totalSizeMB)).toFixed(2)
+      remainingMB: parseFloat(remainingMB)
     });
   } catch (error) {
     console.error(`Error al calcular tamaño del bucket ${req.bucketName}:`, error);
@@ -2699,7 +2742,6 @@ app.get('/api/bucket-size', async (req, res) => {
     });
   }
 });
-
 // Nuevo endpoint simplificado para visualizar documentos DOCX
 app.get('/api/docx-viewer', async (req, res) => {
   console.log('==========================================');
