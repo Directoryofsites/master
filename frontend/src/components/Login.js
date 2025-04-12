@@ -35,12 +35,17 @@ const Login = ({ onLogin }) => {
         // Éxito en el inicio de sesión
 
     
-        onLogin({
-          username: data.user.username,
-          role: data.user.role,
-          bucket: data.user.bucket,  // Cambiado de bucketName a bucket para consistencia
-          loggedInAt: new Date().toISOString()
-        });
+      // Guardar toda la información del usuario, incluyendo el token
+      onLogin({
+        username: data.user.username,
+        role: data.user.role,
+        bucket: data.user.bucket,
+        token: data.token,  // ¡IMPORTANTE! Guarda el token completo
+        type: data.user.type || 'static',  // Tipo de usuario (dinámico o estático)
+        folders: data.user.folders || [],  // Carpetas permitidas para usuarios dinámicos
+        userId: data.user.userId,  // ID de usuario para dinámicos
+        loggedInAt: new Date().toISOString()
+      });
         
         // No es necesario guardar userBucket por separado, ya se guarda en el objeto de usuario
         // localStorage.setItem('userBucket', data.user.bucket);

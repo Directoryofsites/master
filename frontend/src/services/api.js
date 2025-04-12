@@ -649,3 +649,194 @@ export const viewDocx = async (path) => {
     throw error;
   }
 };
+
+/**
+ * Obtiene la lista de usuarios dinámicos del sistema
+ * @returns {Promise<Array>} - Lista de usuarios
+ */
+export const getUsers = async () => {
+  try {
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/users`, {
+      headers: headers
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al obtener usuarios');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en getUsers:', error);
+    throw error;
+  }
+};
+
+/**
+ * Crea un nuevo usuario en el sistema
+ * @param {Object} userData - Datos del usuario a crear
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const createUser = async (userData) => {
+  try {
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/create-user`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(userData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al crear usuario');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en createUser:', error);
+    throw error;
+  }
+};
+
+/**
+ * Actualiza un usuario existente
+ * @param {string|number} userId - ID del usuario a actualizar
+ * @param {Object} userData - Nuevos datos del usuario
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const updateUser = async (userId, userData) => {
+  try {
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/update-user/${userId}`, {
+      method: 'PATCH',
+      headers: headers,
+      body: JSON.stringify(userData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al actualizar usuario');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en updateUser:', error);
+    throw error;
+  }
+};
+
+/**
+ * Elimina o desactiva un usuario
+ * @param {string|number} userId - ID del usuario a eliminar/desactivar
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const deleteUser = async (userId) => {
+  try {
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/delete-user/${userId}`, {
+      method: 'DELETE',
+      headers: headers
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al eliminar usuario');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en deleteUser:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene los permisos de carpeta para una ruta específica
+ * @param {string} folderPath - Ruta de la carpeta
+ * @returns {Promise<Object>} - Permisos de la carpeta
+ */
+export const getFolderPermissions = async (folderPath) => {
+  try {
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/folder-permissions?path=${encodeURIComponent(folderPath)}`, {
+      headers: headers
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al obtener permisos de carpeta');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en getFolderPermissions:', error);
+    throw error;
+  }
+};
+
+/**
+ * Actualiza los permisos de una carpeta
+ * @param {string} folderPath - Ruta de la carpeta
+ * @param {Array} permissions - Arreglo de permisos a asignar
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const updateFolderPermissions = async (folderPath, permissions) => {
+  try {
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/admin/folder-permissions`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        folderPath,
+        permissions
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Error al actualizar permisos de carpeta');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en updateFolderPermissions:', error);
+    throw error;
+  }
+};

@@ -96,11 +96,16 @@ export const getAuthToken = () => {
     return null;
   }
   
-  // Crear un token simple con la información del usuario
+  // Crear un token completo con toda la información del usuario
   const tokenData = {
     username: user.username,
     role: user.role,
-    bucket: user.bucket
+    bucket: user.bucket,
+    // Incluir datos adicionales para usuarios dinámicos
+    type: user.type || 'static',
+    folders: user.folders || [],
+    createdBy: user.createdBy,
+    userId: user.userId
   };
   
   console.log('[AUTH-DEBUG] getAuthToken - Token a codificar:', tokenData);

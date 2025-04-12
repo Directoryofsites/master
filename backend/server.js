@@ -3,6 +3,9 @@ require('dotenv').config();
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
 
+const bcrypt = require('bcrypt');
+
+
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -187,6 +190,116 @@ const userRoleMap = {
 
 };
 
+// Funciones para manejo de usuarios dinámicos
+async function hashPassword(password) {
+  const saltRounds = 10;
+  return await bcrypt.hash(password, saltRounds);
+}
+
+async function comparePassword(password, hash) {
+  return await bcrypt.compare(password, hash);
+}
+
+async function getUserByUsername(username) {
+  try {
+    const { data, error } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('username', username)
+      .eq('active', true)
+      .single();
+    
+    if (error) {
+      console.error('Error al buscar usuario:', error);
+      return null;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error en getUserByUsername:', error);
+    return null;
+  }
+}
+
+async function createUser(userData) {
+  try {
+    const { data, error } = await supabase
+      .from('user_accounts')
+      .insert([userData])
+      .select();
+    
+    if (error) {
+      console.error('Error al crear usuario:', error);
+      return { success: false, error };
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    console.error('Error en createUser:', error);
+    return { success: false, error };
+  }
+}
+
+async function updateUser(userId, userData) {
+  try {
+    const { data, error } = await supabase
+      .from('user_accounts')
+      .update(userData)
+      .eq('id', userId)
+      .select();
+    
+    if (error) {
+      console.error('Error al actualizar usuario:', error);
+      return { success: false, error };
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    console.error('Error en updateUser:', error);
+    return { success: false, error };
+  }
+}
+
+async function getUsersByAdmin(adminUsername) {
+  try {
+    const { data, error } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('created_by', adminUsername);
+    
+    if (error) {
+      console.error('Error al obtener usuarios del admin:', error);
+      return { success: false, error };
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    console.error('Error en getUsersByAdmin:', error);
+    return { success: false, error };
+  }
+}
+
+async function deleteUser(userId) {
+  try {
+    // En lugar de eliminar, marcamos como inactivo
+    const { data, error } = await supabase
+      .from('user_accounts')
+      .update({ active: false })
+      .eq('id', userId)
+      .select();
+    
+    if (error) {
+      console.error('Error al desactivar usuario:', error);
+      return { success: false, error };
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    console.error('Error en deleteUser:', error);
+    return { success: false, error };
+  }
+}
+
 // Verificar que las variables de entorno estén configuradas
 if (!supabaseUrl || !supabaseKey) {
   console.error('ERROR: Variables de entorno faltantes. Asegúrate de configurar SUPABASE_URL y SUPABASE_KEY.');
@@ -251,27 +364,61 @@ app.use((req, res, next) => {
       console.log(`[Auth] Username en token:`, tokenData.username);
       console.log(`[Auth] Bucket en token:`, tokenData.bucket);
       
-      // IMPORTANTE: Verificar que estamos usando la propiedad correcta del token
-      if (tokenData.username && tokenData.bucket && userBucketMap[tokenData.username]) {
-        // Verificar que el bucket en el token coincide con el mapeado para el usuario
-        const mappedBucket = userBucketMap[tokenData.username];
-        console.log(`[Auth] Bucket mapeado para ${tokenData.username} en userBucketMap:`, mappedBucket);
-        
-        if (tokenData.bucket !== mappedBucket) {
-          console.log(`[Auth] ADVERTENCIA: El bucket en el token (${tokenData.bucket}) no coincide con el mapeado (${mappedBucket})`);
+      // Determinar si es un usuario estático o dinámico
+      const userType = tokenData.type || 'static';
+      
+      if (userType === 'static') {
+        // USUARIO ESTÁTICO (funcionamiento original)
+        if (tokenData.username && tokenData.bucket && userBucketMap[tokenData.username]) {
+          // Verificar que el bucket en el token coincide con el mapeado para el usuario
+          const mappedBucket = userBucketMap[tokenData.username];
+          console.log(`[Auth] Bucket mapeado para ${tokenData.username} en userBucketMap:`, mappedBucket);
+          
+          if (tokenData.bucket !== mappedBucket) {
+            console.log(`[Auth] ADVERTENCIA: El bucket en el token (${tokenData.bucket}) no coincide con el mapeado (${mappedBucket})`);
+          }
+          
+          // Usar el bucket mapeado (más seguro) en lugar del que viene en el token
+          req.bucketName = mappedBucket;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+          req.username = tokenData.username;
+          console.log(`[Auth] Usuario ${tokenData.username} mapeado a bucket ${req.bucketName} (rol: ${req.userRole})`);
+        } else {
+          req.bucketName = defaultBucketName;
+          req.userRole = 'guest';
+          console.log(`[Auth] Usuario no mapeado o inválido ${tokenData.username || 'desconocido'}, usando bucket predeterminado ${defaultBucketName}`);
+          if (tokenData.username) {
+            console.log(`[Auth] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+          }
         }
-        
-        // Usar el bucket mapeado (más seguro) en lugar del que viene en el token
-        req.bucketName = mappedBucket;
-        req.userRole = userRoleMap[tokenData.username] || 'user';
-        req.username = tokenData.username;
-        console.log(`[Auth] Usuario ${tokenData.username} mapeado a bucket ${req.bucketName} (rol: ${req.userRole})`);
+
       } else {
-        req.bucketName = defaultBucketName;
-        req.userRole = 'guest';
-        console.log(`[Auth] Usuario no mapeado o inválido ${tokenData.username || 'desconocido'}, usando bucket predeterminado ${defaultBucketName}`);
-        if (tokenData.username) {
-          console.log(`[Auth] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+        // USUARIO DINÁMICO
+        if (tokenData.username && tokenData.bucket) {
+          // Verificar explícitamente el bucket para usuarios dinámicos
+          const bucketToUse = tokenData.bucket;
+          
+          console.log(`[Auth] Usuario dinámico ${tokenData.username} con bucket ${bucketToUse}`);
+          console.log(`[Auth] Carpetas asignadas: ${JSON.stringify(tokenData.folders || [])}`);
+          
+          // Asignar información del usuario dinámico
+          req.bucketName = bucketToUse;
+          req.userRole = 'user'; // Los usuarios dinámicos siempre tienen rol 'user'
+          req.username = tokenData.username;
+          req.userFolders = tokenData.folders || [];
+          req.userType = 'dynamic';
+          req.userId = tokenData.userId;
+          
+          // Verificación adicional de las carpetas asignadas
+          if (!req.userFolders || req.userFolders.length === 0) {
+            console.log(`[Auth] ADVERTENCIA: Usuario dinámico ${tokenData.username} no tiene carpetas asignadas`);
+          } else {
+            console.log(`[Auth] Usuario dinámico ${tokenData.username} tiene ${req.userFolders.length} carpetas asignadas en bucket ${req.bucketName}`);
+          }
+        } else {
+          req.bucketName = defaultBucketName;
+          req.userRole = 'guest';
+          console.log(`[Auth] Usuario dinámico inválido ${tokenData.username || 'desconocido'}, usando bucket predeterminado ${defaultBucketName}`);
         }
       }
     } catch (error) {
@@ -292,6 +439,7 @@ app.use((req, res, next) => {
   console.log(`[Bucket] Request ${req.method} para ${req.path} - Usuario: ${req.username || 'invitado'}, Bucket: ${req.bucketName}, Rol: ${req.userRole}`);
   next();
 });
+
 // Ruta de prueba
 app.get('/', (req, res) => {
   res.send({
@@ -653,42 +801,64 @@ app.get('/api/download', async (req, res) => {
       });
     }
     
-    // SOLUCIÓN: Verificar si hay un token en los parámetros de consulta
+    // SOLUCIÓN: Verificar el token para determinar el bucket correcto
     let bucketToUse = req.bucketName || defaultBucketName;
     let tokenUsername = null;
+    let userType = 'static';
     
+    // Procesar el token de la URL (si existe)
     if (req.query.token) {
       try {
         const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
         console.log(`[DOWNLOAD] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
         
-        if (tokenData.username && userBucketMap[tokenData.username]) {
+        // Verificar si es un usuario dinámico o estático
+        if (tokenData.type === 'dynamic') {
+          userType = 'dynamic';
           tokenUsername = tokenData.username;
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[DOWNLOAD] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
+          // Para usuarios dinámicos, usar el bucket especificado en el token
+          if (tokenData.bucket) {
+            bucketToUse = tokenData.bucket;
+            console.log(`[DOWNLOAD] Usuario dinámico ${tokenUsername} usando bucket ${bucketToUse} desde token en parámetros`);
+          }
           
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          // Actualizar req para validaciones posteriores
           req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
+          req.userRole = 'user';
+          req.userType = 'dynamic';
+          req.userFolders = tokenData.folders || [];
+          req.bucketName = bucketToUse;
+        } else {
+          // Para usuarios estáticos
+          if (tokenData.username && userBucketMap[tokenData.username]) {
+            tokenUsername = tokenData.username;
+            const tokenBucket = userBucketMap[tokenData.username];
+            console.log(`[DOWNLOAD] Usuario estático ${tokenUsername} usando bucket ${tokenBucket} desde token en parámetros`);
+            bucketToUse = tokenBucket;
+            
+            // Actualizar req para validaciones posteriores
+            req.username = tokenData.username;
+            req.userRole = userRoleMap[tokenData.username] || 'user';
+            req.bucketName = bucketToUse;
+          }
         }
       } catch (tokenError) {
         console.error('[DOWNLOAD] Error al decodificar token de parámetros:', tokenError);
       }
+    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      // Si no hay token en URL pero hay en headers, usar la info del middleware
+      console.log(`[DOWNLOAD] No hay token en URL, usando datos del middleware: bucket=${req.bucketName}, userType=${req.userType || 'static'}`);
+      
+      // Garantizar que estamos usando el bucket correcto del middleware
+      bucketToUse = req.bucketName;
+      userType = req.userType || 'static';
     }
     
-    // Verificar explícitamente que el bucket sea el correcto
-    console.log(`[DOWNLOAD] Verificando bucketName en request: ${bucketToUse}`);
-    console.log(`[DOWNLOAD] Verificando username en request: ${req.username}`);
-    console.log(`[DOWNLOAD] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
-    
-    // Validación adicional de seguridad
-    if (req.username && userBucketMap[req.username] && bucketToUse !== userBucketMap[req.username]) {
-      console.error(`[DOWNLOAD] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${bucketToUse}`);
-      return res.status(403).json({
-        success: false,
-        message: 'Acceso denegado: Bucket no válido para este usuario'
-      });
+    // Log detallado para diagnóstico
+    console.log(`[DOWNLOAD] Tipo de usuario: ${userType}`);
+    console.log(`[DOWNLOAD] Bucket a usar: ${bucketToUse}`);
+    if (userType === 'dynamic') {
+      console.log(`[DOWNLOAD] Carpetas permitidas: ${JSON.stringify(req.userFolders || [])}`);
     }   
     const filePath = req.query.path;
     const view = req.query.view === 'true';
@@ -708,17 +878,46 @@ app.get('/api/download', async (req, res) => {
     
     console.log(`Obteniendo URL para: ${normalizedPath}, visualizar: ${view}, en bucket: ${bucketToUse}`);
     
-    // Obtener la URL pública
-    const { data } = supabase.storage
-      .from(bucketToUse)
-      .getPublicUrl(normalizedPath);
-   
-    if (!data || !data.publicUrl) {
-      return res.status(404).json({
+  // Verificar que la ruta esté permitida para usuarios dinámicos
+  if (userType === 'dynamic' && req.userFolders && req.userFolders.length > 0) {
+    const itemPath = normalizedPath;
+    let hasPermission = false;
+    
+    // Comprobar si el archivo está en una carpeta permitida
+    for (const folder of req.userFolders) {
+      // Normalizar carpeta permitida
+      const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+      
+      // El archivo debe estar dentro de una carpeta permitida
+      if (itemPath === normalizedFolder || 
+          itemPath.startsWith(normalizedFolder + '/')) {
+        hasPermission = true;
+        break;
+      }
+    }
+    
+    // Si no tiene permiso, denegar acceso
+    if (!hasPermission) {
+      console.log(`[DOWNLOAD] ACCESO DENEGADO: Usuario ${req.username} intentó acceder a ${itemPath} en bucket ${bucketToUse}`);
+      return res.status(403).json({
         success: false,
-        message: `No se pudo generar URL para ${normalizedPath}`
+        message: 'No tienes permiso para acceder a este archivo'
       });
     }
+  }
+
+  // Obtener la URL pública
+  console.log(`[DOWNLOAD] Generando URL pública para archivo ${normalizedPath} en bucket ${bucketToUse}`);
+  const { data } = supabase.storage
+    .from(bucketToUse)
+    .getPublicUrl(normalizedPath);
+ 
+  if (!data || !data.publicUrl) {
+    return res.status(404).json({
+      success: false,
+      message: `No se pudo generar URL para ${normalizedPath}`
+    });
+  }
     
     // Determinar el tipo de archivo
     const fileExtension = path.extname(normalizedPath).toLowerCase();
@@ -1663,7 +1862,6 @@ const { error } = await supabase.storage
 
 // Modificación en la ruta de listado de archivos para ocultar archivos de metadatos
 
-
 app.get('/api/files', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -1674,39 +1872,50 @@ app.get('/api/files', async (req, res) => {
       });
     }
     
-    // SOLUCIÓN DIRECTA: Extraer directamente la información del token
+    // Extracción de información del token de autenticación
     const authHeader = req.headers.authorization;
-    let forcedBucket = defaultBucketName;
     let username = null;
+    let userType = 'static';
+    let userRole = 'guest';
+    let userFolders = [];
+    let bucketToUse = defaultBucketName;
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
         const token = authHeader.substring(7);
-        console.log(`[FILES-EMERGENCY] Token recibido: ${token}`);
+        console.log(`[FILES] Token recibido: ${token}`);
         
         const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
-        console.log(`[FILES-EMERGENCY] Token decodificado:`, JSON.stringify(tokenData));
+        console.log(`[FILES] Token decodificado:`, JSON.stringify(tokenData));
         
-        if (tokenData.username && userBucketMap[tokenData.username]) {
+        // Determinar tipo de usuario y configuración
+        if (tokenData.username) {
           username = tokenData.username;
-          forcedBucket = userBucketMap[tokenData.username];
-          console.log(`[FILES-EMERGENCY] Forzando uso de bucket ${forcedBucket} para usuario ${tokenData.username}`);
-        } else {
-          console.log(`[FILES-EMERGENCY] No se pudo determinar el bucket para:`, JSON.stringify(tokenData));
-          if (tokenData.username) {
-            console.log(`[FILES-EMERGENCY] ¿Existe ${tokenData.username} en userBucketMap?`, !!userBucketMap[tokenData.username]);
+          
+          if (tokenData.type === 'dynamic') {
+            // Usuario dinámico
+            userType = 'dynamic';
+            userRole = 'user';
+            userFolders = tokenData.folders || [];
+            bucketToUse = tokenData.bucket || defaultBucketName;
+            console.log(`[FILES] Usuario dinámico ${username} con bucket ${bucketToUse} y ${userFolders.length} carpetas asignadas`);
+            console.log(`[FILES] Carpetas asignadas: ${JSON.stringify(userFolders)}`);
+          } else {
+            // Usuario estático
+            if (userBucketMap[username]) {
+              bucketToUse = userBucketMap[username];
+              userRole = userRoleMap[username] || 'user';
+            }
+            console.log(`[FILES] Usuario estático ${username} con bucket ${bucketToUse} y rol ${userRole}`);
           }
         }
       } catch (error) {
-        console.error('[FILES-EMERGENCY] Error al procesar token para forzar bucket:', error);
+        console.error('[FILES] Error al procesar token:', error);
       }
     } else {
-      console.log(`[FILES-EMERGENCY] No hay token de autorización`);
+      console.log(`[FILES] No hay token de autorización, usando bucket predeterminado ${bucketToUse}`);
     }
     
-    // Usar el bucket forzado en lugar de req.bucketName
-    const bucketToUse = forcedBucket;
-    console.log(`[FILES-EMERGENCY] Usando bucket: ${bucketToUse}`);    
     const prefix = req.query.prefix || '';
     
     // Normalizar el prefijo
@@ -1716,8 +1925,92 @@ app.get('/api/files', async (req, res) => {
     }
     
     console.log(`[FILES] Listando archivos con prefijo: "${normalizedPrefix}" en bucket: ${bucketToUse}`);
-    console.log(`[FILES] Usuario: ${req.username || 'invitado'}, Rol: ${req.userRole}`);
+    console.log(`[FILES] Usuario: ${username || 'invitado'}, Tipo: ${userType}`);
     
+    // VERIFICACIÓN DE PERMISOS PARA USUARIOS DINÁMICOS
+    if (userType === 'dynamic') {
+      // Si estamos en la raíz, solo mostrar carpetas a las que tiene acceso
+      if (!normalizedPrefix) {
+        console.log(`[FILES] Usuario dinámico ${username} accediendo a raíz del bucket ${bucketToUse}`);
+        
+        // Obtener todas las carpetas del bucket para filtrar
+        const { data, error } = await supabase.storage
+          .from(bucketToUse)
+          .list('', {
+            sortBy: { column: 'name', order: 'asc' }
+          });
+          
+        if (error) {
+          console.error('[FILES] Error al listar directorio raíz:', error);
+          throw error;
+        }
+        
+        // Filtrar solo las carpetas a las que el usuario tiene acceso
+        const permittedFolders = data
+          .filter(item => {
+            // Solo mostrar carpetas (no archivos) en la raíz
+            if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+              const folderName = item.name;
+              
+              // Verificar si esta carpeta está en la lista de carpetas permitidas
+              for (const allowedFolder of userFolders) {
+                // Eliminar / inicial si existe
+                const cleanAllowedFolder = allowedFolder.startsWith('/') 
+                  ? allowedFolder.substring(1) 
+                  : allowedFolder;
+                
+                // Si la carpeta actual es exactamente una permitida o es un padre de una permitida
+                if (cleanAllowedFolder === folderName || 
+                    cleanAllowedFolder.startsWith(folderName + '/')) {
+                  return true;
+                }
+              }
+              return false; // No mostrar carpetas a las que no tiene acceso
+            }
+            return false; // No mostrar archivos en la raíz para usuarios dinámicos
+          })
+          .filter(item => item.name !== '.folder') // Filtramos archivos de sistema
+          .map(item => {
+            return {
+              name: item.name,
+              path: `/${item.name}`,
+              size: (item.metadata && item.metadata.size) || 0,
+              contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+              updated: item.updated_at,
+              isFolder: true // En la raíz, solo mostramos carpetas para usuarios dinámicos
+            };
+          });
+        
+        return res.status(200).json(permittedFolders);
+      } else {
+        // Estamos en una subcarpeta, verificar permisos
+        let hasPermission = false;
+        
+        // Verificar si la carpeta actual está permitida
+        for (const folder of userFolders) {
+          // Normalizar carpeta permitida
+          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+          
+          // La carpeta actual debe ser exactamente una permitida o una subcarpeta de una permitida
+          if (normalizedPrefix === normalizedFolder || 
+              normalizedPrefix.startsWith(normalizedFolder + '/')) {
+            hasPermission = true;
+            break;
+          }
+        }
+        
+        // Si no tiene permiso, devolver error de acceso denegado
+        if (!hasPermission) {
+          console.log(`[FILES] ACCESO DENEGADO: Usuario ${username} intentó acceder a ${normalizedPrefix} en bucket ${bucketToUse}`);
+          return res.status(403).json({
+            success: false,
+            message: 'No tienes permiso para acceder a esta carpeta'
+          });
+        }
+      }
+    }
+    
+    // Proceder con la lista de archivos (tanto para usuarios estáticos como dinámicos)
     const { data, error } = await supabase.storage
       .from(bucketToUse)
       .list(normalizedPrefix, {
@@ -1730,13 +2023,15 @@ app.get('/api/files', async (req, res) => {
       throw error;
     }
     
-    // Formatear la respuesta y filtrar archivos de metadatos
-    const formattedFiles = data
+    // Filtrar contenido según tipo de usuario
+    let formattedFiles = data
       .filter(item => {
-        // Filtrar archivos de metadatos (.youtube.metadata, .audio.metadata, .image.metadata)
+        // Filtrar archivos de sistema y metadatos
         return !item.name.endsWith('.youtube.metadata') && 
                !item.name.endsWith('.audio.metadata') && 
-               !item.name.endsWith('.image.metadata');
+               !item.name.endsWith('.image.metadata') &&
+               !item.name.endsWith('.access.metadata') &&
+               item.name !== '.folder';
       })
       .map(item => {
         // Identificar si es carpeta o archivo
@@ -1752,6 +2047,26 @@ app.get('/api/files', async (req, res) => {
         };
       });
 
+    // Para usuarios dinámicos en subcarpetas, verificar contenido adicional
+    if (userType === 'dynamic' && normalizedPrefix) {
+      // Filtrar adicionalmente si es una subcarpeta para asegurar que solo ve archivos en carpetas permitidas
+      formattedFiles = formattedFiles.filter(item => {
+        const itemFullPath = item.path.startsWith('/') ? item.path.substring(1) : item.path;
+        
+        // Si es una carpeta, verificar que al menos una carpeta permitida comience con esta ruta
+        if (item.isFolder) {
+          for (const folder of userFolders) {
+            const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+            if (normalizedFolder === itemFullPath || normalizedFolder.startsWith(itemFullPath + '/')) {
+              return true;
+            }
+          }
+        } 
+        // Para archivos, la verificación ya se hizo en la ruta padre
+        return !item.isFolder || true;
+      });
+    }
+
     res.status(200).json(formattedFiles);
   } catch (error) {
     console.error('Error al listar archivos:', error);
@@ -1761,7 +2076,6 @@ app.get('/api/files', async (req, res) => {
       message: `Error al listar archivos: ${error.message}`,
       error: error.message
     });
-
   }
 });
 
@@ -1792,26 +2106,90 @@ app.get('/api/view-docx', async (req, res) => {
     
     // Manejar tanto la forma antigua (path) como la nueva (url)
     if (req.query.path) {
+
       // Método original usando path
-      console.log('Usando path para acceder al documento:', req.query.path);
-      
-      // Obtener el bucket específico del usuario desde el middleware
-      const bucketToUse = req.bucketName || defaultBucketName;
-      
-      // Verificar explícitamente que el bucket sea el correcto
-      console.log(`[VIEW_DOCX] Verificando bucketName en request: ${req.bucketName}`);
-      console.log(`[VIEW_DOCX] Verificando username en request: ${req.username}`);
-      console.log(`[VIEW_DOCX] Bucket mapeado para usuario ${req.username}: ${userBucketMap[req.username]}`);
-      
-      // Validación adicional de seguridad
-      if (req.username && userBucketMap[req.username] && req.bucketName !== userBucketMap[req.username]) {
-        console.error(`[VIEW_DOCX] ERROR: Discrepancia de bucket - Usuario ${req.username} debería usar ${userBucketMap[req.username]} pero está usando ${req.bucketName}`);
-        return res.status(403).json({
-          success: false,
-          message: 'Acceso denegado: Bucket no válido para este usuario'
-        });
+    console.log('Usando path para acceder al documento:', req.query.path);
+    
+    // Determinar el bucket correcto a usar
+    let bucketToUse = req.bucketName || defaultBucketName;
+    let userType = req.userType || 'static';
+    
+    // Si hay un token en la URL, procesarlo
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[VIEW_DOCX] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        // Verificar si es un usuario dinámico o estático
+        if (tokenData.type === 'dynamic') {
+          userType = 'dynamic';
+          // Para usuarios dinámicos, usar el bucket especificado en el token
+          if (tokenData.bucket) {
+            bucketToUse = tokenData.bucket;
+            console.log(`[VIEW_DOCX] Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
+          }
+          
+          // Actualizar req para validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = 'user';
+          req.userType = 'dynamic';
+          req.userFolders = tokenData.folders || [];
+          req.bucketName = bucketToUse;
+        } else {
+          // Para usuarios estáticos
+          if (tokenData.username && userBucketMap[tokenData.username]) {
+            const tokenBucket = userBucketMap[tokenData.username];
+            console.log(`[VIEW_DOCX] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token`);
+            bucketToUse = tokenBucket;
+            
+            // Actualizar req para validaciones posteriores
+            req.username = tokenData.username;
+            req.userRole = userRoleMap[tokenData.username] || 'user';
+            req.bucketName = bucketToUse;
+          }
+        }
+      } catch (tokenError) {
+        console.error('[VIEW_DOCX] Error al decodificar token de URL:', tokenError);
       }
-      
+    }
+    
+    console.log(`[VIEW_DOCX] Tipo de usuario: ${userType}`);
+    console.log(`[VIEW_DOCX] Bucket a usar: ${bucketToUse}`);
+    
+    // Verificar permisos para usuarios dinámicos
+    if (userType === 'dynamic' && req.userFolders && req.userFolders.length > 0) {
+      const filePath = req.query.path;
+      if (filePath) {
+        // Normalizar la ruta
+        let normalizedPath = filePath;
+        if (normalizedPath.startsWith('/')) {
+          normalizedPath = normalizedPath.substring(1);
+        }
+        
+        // Verificar si está en carpeta permitida
+        let hasPermission = false;
+        for (const folder of req.userFolders) {
+          // Normalizar carpeta permitida
+          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+          
+          // El archivo debe estar dentro de una carpeta permitida
+          if (normalizedPath === normalizedFolder || 
+              normalizedPath.startsWith(normalizedFolder + '/')) {
+            hasPermission = true;
+            break;
+          }
+        }
+        
+        // Si no tiene permiso, denegar acceso
+        if (!hasPermission) {
+          console.log(`[VIEW_DOCX] ACCESO DENEGADO: Usuario ${req.username} intentó acceder a ${normalizedPath} en bucket ${bucketToUse}`);
+          return res.status(403).json({
+            success: false,
+            message: 'No tienes permiso para acceder a este archivo'
+          });
+        }
+      }
+    }      
       const filePath = req.query.path;
       
       if (!filePath) {
@@ -2112,82 +2490,88 @@ app.post('/api/login', express.json(), async (req, res) => {
     const { username, password } = req.body;
     
     // Credenciales válidas (estas pueden ser actualizadas aquí)
-const validCredentials = {
-  // Bucket master
-  'admin': 'olga811880',     // Cambiada de 'Pana811880' a 'Panica811880'
-  'usuario123': 'usuario123',  
-  
-  // Bucket contenedor001
-  'admin1': 'Panica811880',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
-  'usuario001': 'turpial1720', // Cambiada
-  
-  // Bucket contenedor002
-  'admin2': 'ff447EEdf441dP',       // Cambiada
-  'usuario002': 'leonidas4780', // Cambiada
-  
-  // Bucket contenedor003
-  'admin3': 'd44UYTddcws12',       // Cambiada
-  'usuario003': 'flor785412', // Cambiada
-  
-  // Bucket contenedor004
-  'admin4': 'vfHHdM7441eSw',       // Cambiada
-  'usuario004': 'montes4128', // Cambiada
-  
-  // Bucket contenedor005
-  'admin5': 'fdr11IUYTs1a',       // Cambiada
-  'usuario005': 'palomita47401', // Cambiada
-  
-  // Bucket contenedor006
-  'admin6': 'fffYe147787sa',       // Cambiada
-  'usuario006': 'dia2147846', // Cambiada
-  
-  // Bucket contenedor007
-  'admin7': '4517lkd0TRE',       // Cambiada
-  'usuario007': 'mesa10378', // Cambiada
-  
-  // Bucket contenedor008
-  'admin8': 'l718dUYsc4f',       // Cambiada
-  'usuario008': 'car4472', // Cambiada
-  
-  // Bucket contenedor009
-  'admin9': '4de7I1de5R',       // Cambiada
-  'usuario009': 'us14701', // Cambiada
-  
-  // Bucket contenedor010
-  'admin10': '44dwOuyr01',     // Cambiada
-  'usuario010': 'sol4710', // Cambiada
-  
-  // Nuevos usuarios para buckets adicionales
-  // Bucket contenedor011
-  'admin11': 'ClaveSegura11',
-  'usuario011': 'Usuario011Clave',
-  
-  // Bucket contenedor012
-  'admin12': 'ClaveSegura12',
-  'usuario012': 'Usuario012Clave',
-  
-  // Bucket contenedor013
-  'admin13': 'ClaveSegura13',
-  'usuario013': 'Usuario013Clave',
-  
-  // Bucket pruebas
-  'adminpruebas': 'ClavePruebas',
-  'userpruebas': 'UserPruebas',
+    const validCredentials = {
+      // Bucket master
+      'admin': 'olga811880',     // Cambiada de 'Pana811880' a 'Panica811880'
+      'usuario123': 'usuario123',  
+      
+      // Bucket contenedor001
+      'admin1': 'Panica811880',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
+      'usuario001': 'turpial1720', // Cambiada
+      
+      // Bucket contenedor002
+      'admin2': 'ff447EEdf441dP',       // Cambiada
+      'usuario002': 'leonidas4780', // Cambiada
+      
+      // Bucket contenedor003
+      'admin3': 'd44UYTddcws12',       // Cambiada
+      'usuario003': 'flor785412', // Cambiada
+      
+      // Bucket contenedor004
+      'admin4': 'vfHHdM7441eSw',       // Cambiada
+      'usuario004': 'montes4128', // Cambiada
+      
+      // Bucket contenedor005
+      'admin5': 'fdr11IUYTs1a',       // Cambiada
+      'usuario005': 'palomita47401', // Cambiada
+      
+      // Bucket contenedor006
+      'admin6': 'fffYe147787sa',       // Cambiada
+      'usuario006': 'dia2147846', // Cambiada
+      
+      // Bucket contenedor007
+      'admin7': '4517lkd0TRE',       // Cambiada
+      'usuario007': 'mesa10378', // Cambiada
+      
+      // Bucket contenedor008
+      'admin8': 'l718dUYsc4f',       // Cambiada
+      'usuario008': 'car4472', // Cambiada
+      
+      // Bucket contenedor009
+      'admin9': '4de7I1de5R',       // Cambiada
+      'usuario009': 'us14701', // Cambiada
+      
+      // Bucket contenedor010
+      'admin10': '44dwOuyr01',     // Cambiada
+      'usuario010': 'sol4710', // Cambiada
+      
+      // Nuevos usuarios para buckets adicionales
+      // Bucket contenedor011
+      'admin11': 'ClaveSegura11',
+      'usuario011': 'Usuario011Clave',
+      
+      // Bucket contenedor012
+      'admin12': 'ClaveSegura12',
+      'usuario012': 'Usuario012Clave',
+      
+      // Bucket contenedor013
+      'admin13': 'ClaveSegura13',
+      'usuario013': 'Usuario013Clave',
+      
+      // Bucket pruebas
+      'adminpruebas': 'ClavePruebas',
+      'userpruebas': 'UserPruebas',
+    
+      // Bucket personal1
+      'adminpersonal1': 'Jh811881',
+      'usuariopersonal1': '811880'
+    };
 
-// Bucket personal1
-'adminpersonal1': 'Jh811881',
-'usuariopersonal1': '811880'
-
-};
-
-
-    // Verificar las credenciales
+    // Primero verificar usuarios estáticos
     if (validCredentials[username] && validCredentials[username] === password) {
       // Determinar el bucket y rol del usuario
       const userBucket = userBucketMap[username] || defaultBucketName;
       const userRole = userRoleMap[username] || 'user';
       
-      console.log(`Usuario ${username} autenticado con rol ${userRole} para bucket ${userBucket}`);
+      console.log(`Usuario estático ${username} autenticado con rol ${userRole} para bucket ${userBucket}`);
+      
+      // Generar token con información del usuario
+      const token = Buffer.from(JSON.stringify({
+        username: username,
+        role: userRole,
+        bucket: userBucket,
+        type: 'static'
+      })).toString('base64');
       
       // Credenciales correctas
       res.status(200).json({
@@ -2195,16 +2579,76 @@ const validCredentials = {
         user: {
           username: username,
           role: userRole,
-          bucket: userBucket
-        }
+          bucket: userBucket,
+          type: 'static'
+        },
+        token: token
       });
     } else {
-      // Credenciales incorrectas
-      console.log(`Intento de autenticación fallido para usuario: ${username}`);
-      res.status(401).json({
-        success: false,
-        message: 'Nombre de usuario o contraseña incorrectos'
-      });
+      
+              // Verificar usuarios dinámicos (en la base de datos)
+        console.log(`Usuario ${username} no encontrado en usuarios estáticos, verificando en BD...`);
+        
+        const user = await getUserByUsername(username);
+        
+        if (user && await comparePassword(password, user.password_hash)) {
+          // Verificar explícitamente que el bucket asignado al usuario sea válido
+          if (!user.bucket) {
+            console.error(`Error: Usuario dinámico ${username} no tiene bucket asignado`);
+            return res.status(401).json({
+              success: false,
+              message: 'Error de configuración: Usuario no tiene bucket asignado'
+            });
+          }
+          
+          console.log(`Usuario dinámico ${username} autenticado para bucket ${user.bucket}`);
+          console.log(`Carpetas asignadas: ${JSON.stringify(user.assigned_folders || [])}`);
+          
+          // Construir información de carpetas asignadas
+          const userFolders = user.assigned_folders || [];
+          
+          // Generar token con información del usuario
+          const token = Buffer.from(JSON.stringify({
+            username: user.username,
+            role: 'user', // Los usuarios dinámicos siempre tienen rol 'user'
+            bucket: user.bucket,
+            folders: userFolders,
+            createdBy: user.created_by,
+            type: 'dynamic',
+            userId: user.id
+          })).toString('base64');
+        
+        // Log adicional para depuración
+        console.log(`[LOGIN] Éxito: Usuario dinámico ${user.username}`);
+        console.log(`[LOGIN] Bucket asignado: ${user.bucket}`);
+        console.log(`[LOGIN] Carpetas permitidas: ${JSON.stringify(userFolders)}`);
+        
+        // Credenciales correctas
+        const responseData = {
+          success: true,
+          user: {
+            username: user.username,
+            role: 'user',
+            bucket: user.bucket,
+            folders: userFolders,
+            createdBy: user.created_by,
+            type: 'dynamic',
+            userId: user.id
+          },
+          token: token
+        };
+        
+        console.log(`[LOGIN] Respuesta: ${JSON.stringify(responseData)}`);
+        res.status(200).json(responseData);
+
+      } else {
+        // Credenciales incorrectas
+        console.log(`Intento de autenticación fallido para usuario: ${username}`);
+        res.status(401).json({
+          success: false,
+          message: 'Nombre de usuario o contraseña incorrectos'
+        });
+      }
     }
   } catch (error) {
     console.error('Error en autenticación:', error);
@@ -2214,6 +2658,7 @@ const validCredentials = {
     });
   }
 });
+
 
 // Endpoint para obtener el tamaño actual del bucket
 app.get('/api/bucket-size', async (req, res) => {
@@ -2276,18 +2721,67 @@ app.get('/api/docx-viewer', async (req, res) => {
     
     // Obtener el bucket específico del token si está disponible
     let bucketToUse = defaultBucketName;
+    let userType = 'static';
+    let userFolders = [];
     
     if (req.query.token) {
       try {
         const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log('Token decodificado:', tokenData);
+        console.log('Token decodificado:', JSON.stringify(tokenData));
         
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          bucketToUse = userBucketMap[tokenData.username];
-          console.log(`Usando bucket ${bucketToUse} desde el token`);
+        // Verificar si es un usuario dinámico o estático
+        if (tokenData.type === 'dynamic') {
+          userType = 'dynamic';
+          // Para usuarios dinámicos, usar el bucket especificado en el token
+          if (tokenData.bucket) {
+            bucketToUse = tokenData.bucket;
+            console.log(`Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
+          }
+          
+          // Guardar información de carpetas para verificación de permisos
+          userFolders = tokenData.folders || [];
+          console.log(`Carpetas permitidas: ${JSON.stringify(userFolders)}`);
+        } else {
+          // Para usuarios estáticos
+          if (tokenData.username && userBucketMap[tokenData.username]) {
+            bucketToUse = userBucketMap[tokenData.username];
+            console.log(`Usuario estático ${tokenData.username} usando bucket ${bucketToUse} desde token`);
+          }
         }
       } catch (tokenError) {
         console.error('Error al decodificar token:', tokenError);
+      }
+    }
+    
+    // Verificar permisos para usuarios dinámicos
+    if (userType === 'dynamic' && userFolders.length > 0) {
+      const filePath = req.query.path;
+      if (filePath) {
+        // Normalizar la ruta
+        let normalizedPath = filePath;
+        if (normalizedPath.startsWith('/')) {
+          normalizedPath = normalizedPath.substring(1);
+        }
+        
+        // Verificar si está en carpeta permitida
+        let hasPermission = false;
+        for (const folder of userFolders) {
+          // Normalizar carpeta permitida
+          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+          
+          // El archivo debe estar dentro de una carpeta permitida
+          if (normalizedPath === normalizedFolder || 
+              normalizedPath.startsWith(normalizedFolder + '/')) {
+            hasPermission = true;
+            break;
+          }
+        }
+        
+        // Si no tiene permiso, denegar acceso
+        if (!hasPermission) {
+          console.log(`ACCESO DENEGADO: Intento de acceder a ${normalizedPath} en bucket ${bucketToUse}`);
+          return res.status(403).send('Acceso denegado: No tienes permiso para ver este archivo');
+        }
       }
     }
     
@@ -2383,6 +2877,507 @@ app.get('/api/docx-viewer', async (req, res) => {
   } catch (error) {
     console.error('Error general en docx-viewer:', error);
     res.status(500).send(`Error al procesar el documento: ${error.message}`);
+  }
+});
+
+// ========================================================
+// ENDPOINTS PARA GESTIÓN DE USUARIOS DINÁMICOS
+// ========================================================
+
+// Middleware para verificar permisos de administrador
+const isAdmin = (req, res, next) => {
+  if (req.userRole !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Acceso denegado. Se requiere rol de administrador.'
+    });
+  }
+  next();
+};
+
+// Crear un nuevo usuario (solo administradores)
+app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => {
+  try {
+    const adminUsername = req.username;
+    const adminBucket = req.bucketName;
+    
+    if (!adminUsername || !adminBucket) {
+      return res.status(401).json({
+        success: false,
+        message: 'No se pudo identificar al administrador'
+      });
+    }
+    
+    const { username, password, assigned_folders, group_name } = req.body;
+    
+    // Validar datos requeridos
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere nombre de usuario y contraseña'
+      });
+    }
+    
+    // Verificar si el usuario ya existe
+    const existingUser = await getUserByUsername(username);
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: 'El nombre de usuario ya está en uso'
+      });
+    }
+    
+    // Encriptar contraseña
+    const password_hash = await hashPassword(password);
+    
+    // Crear nuevo usuario
+    const userData = {
+      username,
+      password_hash,
+      bucket: adminBucket, // Usar el mismo bucket del administrador
+      created_by: adminUsername,
+      assigned_folders: assigned_folders || [],
+      group_name: group_name || null,
+      active: true
+    };
+    
+    // Verificación adicional del bucket
+    console.log(`[CREATE_USER] Creando usuario ${username} en bucket ${adminBucket}`);
+    console.log(`[CREATE_USER] Carpetas asignadas: ${JSON.stringify(assigned_folders || [])}`);
+    
+    if (!adminBucket) {
+      return res.status(400).json({
+        success: false,
+        message: 'Error: No se pudo determinar el bucket para el nuevo usuario'
+      });
+    }
+    
+    const result = await createUser(userData);
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al crear el usuario',
+        error: result.error
+      });
+    }
+    
+    res.status(201).json({
+      success: true,
+      message: 'Usuario creado correctamente',
+      user: {
+        id: result.data[0].id,
+        username: result.data[0].username,
+        bucket: result.data[0].bucket,
+        assigned_folders: result.data[0].assigned_folders,
+        group_name: result.data[0].group_name,
+        created_at: result.data[0].created_at
+      }
+    });
+  } catch (error) {
+    console.error('Error al crear usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al crear usuario',
+      error: error.message
+    });
+  }
+});
+
+// Listar usuarios creados por el administrador actual
+app.get('/api/admin/users', isAdmin, async (req, res) => {
+  try {
+    const adminUsername = req.username;
+    
+    if (!adminUsername) {
+      return res.status(401).json({
+        success: false,
+        message: 'No se pudo identificar al administrador'
+      });
+    }
+    
+    // Obtener usuarios creados por este administrador
+    const result = await getUsersByAdmin(adminUsername);
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al obtener usuarios',
+        error: result.error
+      });
+    }
+    
+    // Filtrar información sensible como contraseñas
+    const usersData = result.data.map(user => ({
+      id: user.id,
+      username: user.username,
+      bucket: user.bucket,
+      assigned_folders: user.assigned_folders,
+      group_name: user.group_name,
+      created_at: user.created_at,
+      active: user.active
+    }));
+    
+    res.status(200).json({
+      success: true,
+      users: usersData
+    });
+  } catch (error) {
+    console.error('Error al listar usuarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al listar usuarios',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar un usuario existente
+app.patch('/api/admin/update-user/:id', isAdmin, express.json(), async (req, res) => {
+  try {
+    const adminUsername = req.username;
+    const userId = req.params.id;
+    
+    if (!adminUsername) {
+      return res.status(401).json({
+        success: false,
+        message: 'No se pudo identificar al administrador'
+      });
+    }
+    
+    // Obtener usuario existente
+    const { data: existingUser, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado',
+        error: userError?.message
+      });
+    }
+    
+    // Verificar que el usuario pertenezca a este administrador
+    if (existingUser.created_by !== adminUsername) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para modificar este usuario'
+      });
+    }
+    
+    // Preparar datos a actualizar
+    const updateData = {};
+    
+    // Actualizar contraseña si se proporciona
+    if (req.body.password) {
+      updateData.password_hash = await hashPassword(req.body.password);
+    }
+    
+    // Actualizar otros campos
+    if (req.body.assigned_folders !== undefined) {
+      updateData.assigned_folders = req.body.assigned_folders;
+    }
+    
+    if (req.body.group_name !== undefined) {
+      updateData.group_name = req.body.group_name;
+    }
+    
+    if (req.body.active !== undefined) {
+      updateData.active = req.body.active;
+    }
+    
+    // Si no hay datos para actualizar
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionaron datos para actualizar'
+      });
+    }
+    
+    // Actualizar usuario
+    const result = await updateUser(userId, updateData);
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al actualizar el usuario',
+        error: result.error
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Usuario actualizado correctamente',
+      user: {
+        id: result.data[0].id,
+        username: result.data[0].username,
+        bucket: result.data[0].bucket,
+        assigned_folders: result.data[0].assigned_folders,
+        group_name: result.data[0].group_name,
+        active: result.data[0].active,
+        updated_at: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error al actualizar usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al actualizar usuario',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar (desactivar) un usuario
+app.delete('/api/admin/delete-user/:id', isAdmin, async (req, res) => {
+  try {
+    const adminUsername = req.username;
+    const userId = req.params.id;
+    
+    if (!adminUsername) {
+      return res.status(401).json({
+        success: false,
+        message: 'No se pudo identificar al administrador'
+      });
+    }
+    
+    // Obtener usuario existente
+    const { data: existingUser, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado',
+        error: userError?.message
+      });
+    }
+    
+    // Verificar que el usuario pertenezca a este administrador
+    if (existingUser.created_by !== adminUsername) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para eliminar este usuario'
+      });
+    }
+    
+    // Desactivar usuario (no eliminar)
+    const result = await deleteUser(userId);
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al desactivar el usuario',
+        error: result.error
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Usuario desactivado correctamente'
+    });
+  } catch (error) {
+    console.error('Error al eliminar usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al eliminar usuario',
+      error: error.message
+    });
+  }
+});
+
+// Obtener permisos de carpeta
+app.get('/api/admin/folder-permissions', isAdmin, async (req, res) => {
+  try {
+    const folderPath = req.query.path;
+    
+    if (!folderPath) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta de la carpeta'
+      });
+    }
+    
+    // Normalizar ruta
+    let normalizedPath = folderPath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Construir ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}/.access.metadata`;
+    
+    // Obtener archivo de permisos si existe
+    const { data, error } = await supabase.storage
+      .from(req.bucketName)
+      .download(metadataPath);
+    
+    if (error && error.message !== 'The object was not found') {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al obtener permisos de carpeta',
+        error: error.message
+      });
+    }
+    
+    let permissions = { users: [], groups: [] };
+    
+    if (data) {
+      // Archivo existe, convertir a objeto
+      const text = await data.text();
+      try {
+        permissions = JSON.parse(text);
+      } catch (parseError) {
+        console.error('Error al parsear metadata de permisos:', parseError);
+      }
+    }
+    
+    res.status(200).json({
+      success: true,
+      permissions
+    });
+  } catch (error) {
+    console.error('Error al obtener permisos de carpeta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al obtener permisos',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar permisos de carpeta
+app.post('/api/admin/folder-permissions', isAdmin, express.json(), async (req, res) => {
+  try {
+    const { folderPath, permissions } = req.body;
+    
+    if (!folderPath || !permissions) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta de la carpeta y los permisos'
+      });
+    }
+    
+    // Normalizar ruta
+    let normalizedPath = folderPath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Validar estructura de permisos
+    if (!permissions.users || !Array.isArray(permissions.users) ||
+        !permissions.groups || !Array.isArray(permissions.groups)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de permisos inválido'
+      });
+    }
+    
+    // Construir ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}/.access.metadata`;
+    
+    // Convertir permisos a JSON
+    const metadataContent = JSON.stringify(permissions);
+    
+    // Guardar archivo de metadatos
+    const { error } = await supabase.storage
+      .from(req.bucketName)
+      .upload(metadataPath, metadataContent, {
+        contentType: 'application/json',
+        upsert: true
+      });
+    
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al guardar permisos de carpeta',
+        error: error.message
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Permisos de carpeta actualizados correctamente'
+    });
+  } catch (error) {
+    console.error('Error al actualizar permisos de carpeta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al actualizar permisos',
+      error: error.message
+    });
+  }
+});
+
+// Asignar carpetas a un usuario
+app.patch('/api/admin/assign-folders', isAdmin, express.json(), async (req, res) => {
+  try {
+    const adminUsername = req.username;
+    const { userId, folders } = req.body;
+    
+    if (!userId || !folders || !Array.isArray(folders)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere ID de usuario y lista de carpetas'
+      });
+    }
+    
+    // Obtener usuario existente
+    const { data: existingUser, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado',
+        error: userError?.message
+      });
+    }
+    
+    // Verificar que el usuario pertenezca a este administrador
+    if (existingUser.created_by !== adminUsername) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para modificar este usuario'
+      });
+    }
+    
+    // Actualizar carpetas asignadas
+    const result = await updateUser(userId, { assigned_folders: folders });
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al asignar carpetas al usuario',
+        error: result.error
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Carpetas asignadas correctamente',
+      user: {
+        id: result.data[0].id,
+        username: result.data[0].username,
+        assigned_folders: result.data[0].assigned_folders
+      }
+    });
+  } catch (error) {
+    console.error('Error al asignar carpetas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al asignar carpetas',
+      error: error.message
+    });
   }
 });
 
