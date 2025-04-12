@@ -2527,7 +2527,7 @@ app.post('/api/login', express.json(), async (req, res) => {
       
       // Bucket contenedor001
       'admin1': 'Panica811880',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
-      'usuario001': 'turpial1720', // Cambiada
+      'usuario001': 'Panica811880', // Cambiada
       
       // Bucket contenedor002
       'admin2': 'ff447EEdf441dP',       // Cambiada
