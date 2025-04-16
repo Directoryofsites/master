@@ -30,20 +30,38 @@ useEffect(() => {
 // Obtener el bucket actual del token en localStorage
 const getCurrentBucket = () => {
   try {
+    // Intentar primero obtener desde user_session (nuevo formato)
+    const userSession = localStorage.getItem('user_session');
+    if (userSession) {
+      const userData = JSON.parse(userSession);
+      if (userData.bucket) {
+        console.log('Obteniendo bucket desde user_session:', userData.bucket);
+        return userData.bucket;
+      }
+    }
+    
+    // Si no funciona, intentar desde authToken (formato usado en otros componentes)
     const token = localStorage.getItem('authToken');
     if (token) {
-      const tokenData = JSON.parse(atob(token));
-      return tokenData.bucket || 'master';
+      try {
+        const tokenData = JSON.parse(atob(token));
+        if (tokenData.bucket) {
+          console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
+          return tokenData.bucket;
+        }
+      } catch (tokenError) {
+        console.error('Error al decodificar authToken:', tokenError);
+      }
     }
   } catch (error) {
-    console.error('Error al obtener bucket del token:', error);
+    console.error('Error al obtener bucket del almacenamiento:', error);
   }
+  
+  console.log('Usando bucket por defecto: master');
   return 'master'; // valor por defecto
 };
 
-// Migrar etiquetas de la clave antigua a la nueva clave específica del bucket
-useEffect(() => {
-  const migrateTagsToNewFormat = () => {
+const migrateTagsToNewFormat = () => {
     try {
       // Verificar si existen etiquetas en el formato antiguo
       const oldTags = localStorage.getItem('docubox_saved_tags');

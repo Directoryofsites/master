@@ -114,5 +114,38 @@ export const getAuthToken = () => {
   const token = btoa(JSON.stringify(tokenData));
   console.log('[AUTH-DEBUG] getAuthToken - Token codificado:', token);
   
+  // Almacenar en localStorage para asegurar consistencia
+  localStorage.setItem('authToken', token);
+  
   return token;
 };
+
+export const getCurrentBucket = () => {
+  try {
+    // Primero intentar obtener desde user_session
+    const user = getCurrentUser();
+    if (user && user.bucket) {
+      console.log('[AUTH-DEBUG] Bucket obtenido de user_session:', user.bucket);
+      return user.bucket;
+    }
+    
+    // Si no funciona, intentar desde authToken
+    const authToken = localStorage.getItem('authToken');
+    if (authToken) {
+      try {
+        const tokenData = JSON.parse(atob(authToken));
+        if (tokenData.bucket) {
+          console.log('[AUTH-DEBUG] Bucket obtenido de authToken:', tokenData.bucket);
+          return tokenData.bucket;
+        }
+      } catch (error) {
+        console.error('[AUTH-DEBUG] Error al decodificar authToken:', error);
+      }
+    }
+  } catch (error) {
+    console.error('[AUTH-DEBUG] Error al obtener bucket:', error);
+  }
+  
+  console.log('[AUTH-DEBUG] Usando bucket por defecto: master');
+  return 'master'; // valor por defecto
+}

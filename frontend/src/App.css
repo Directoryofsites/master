@@ -2084,3 +2084,75 @@ body {
 .tag-suggestion:hover {
   background-color: #f0f0f0;
 }
+
+/* Estilos para el modal del gestor de etiquetas */
+.tag-manager-modal {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1100;
+}
+
+.tag-manager-modal-content {
+  width: 95%;
+  max-width: 1000px;
+  height: auto;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 15px;
+}
+
+/* Mejoras responsivas para el gestor de etiquetas */
+@media (max-width: 768px) {
+  .tag-manager-layout {
+    flex-direction: column;
+  }
+  
+  .categories-section, .tags-section {
+    width: 100%;
+  }
+  
+  .modal-content {
+    width: 95%;
+    padding: 15px;
+    height: auto;
+    max-height: 85vh;
+  }
+  
+  .close-modal {
+    top: 5px;
+    right: 10px;
+  }
+}
+
+/* Estilos específicos para móviles */
+@media (max-width: 480px) {
+  .add-category-form, .add-tag-form {
+    flex-direction: column;
+  }
+  
+  .add-btn {
+    margin-left: 0;
+    margin-top: 5px;
+    width: 100%;
+  }
+  
+  .category-input, .tag-input {
+    width: 100%;
+  }
+  
+  .tag-manager-container h2 {
+    font-size: 1.3rem;
+  }
+  
+  .tags-btn, .users-btn, .settings-btn {
+    font-size: 12px;
+    padding: 4px 8px;
+    margin: 5px;
+  }
+  
+  .user-info {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}

@@ -21,25 +21,41 @@ const SearchForm = ({ onSearch, isLoading }) => {
   const [loadingTags, setLoadingTags] = useState(false);
 
   // Obtener el bucket actual del token en localStorage
-  const getCurrentBucket = () => {
-    try {
-      const token = localStorage.getItem('authToken');
-      if (token) {
-        const tokenData = JSON.parse(atob(token));
-        return tokenData.bucket || 'master';
+const getCurrentBucket = () => {
+  try {
+    // Intentar primero obtener desde user_session (nuevo formato)
+    const userSession = localStorage.getItem('user_session');
+    if (userSession) {
+      const userData = JSON.parse(userSession);
+      if (userData.bucket) {
+        console.log('Obteniendo bucket desde user_session:', userData.bucket);
+        return userData.bucket;
       }
-    } catch (error) {
-      console.error('Error al obtener bucket del token:', error);
     }
-    return 'master'; // valor por defecto
-  };
-
-  // Cargar etiquetas disponibles
-  useEffect(() => {
-    if (isTagSearch && availableTags.length === 0) {
-      fetchAvailableTags();
+    
+    // Si no funciona, intentar desde authToken (formato usado en otros componentes)
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      try {
+        const tokenData = JSON.parse(atob(token));
+        if (tokenData.bucket) {
+          console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
+          return tokenData.bucket;
+        }
+      } catch (tokenError) {
+        console.error('Error al decodificar authToken:', tokenError);
+      }
     }
-  }, [isTagSearch]);
+  } catch (error) {
+    console.error('Error al obtener bucket del almacenamiento:', error);
+  }
+  
+// Cargar etiquetas disponibles cuando cambia el tipo de búsqueda o se activan búsquedas combinadas
+useEffect(() => {
+  if (isTagSearch || isCombinedSearch) {
+    fetchAvailableTags();
+  }
+}, [isTagSearch, isCombinedSearch]);
 
   // Función para cargar todas las etiquetas disponibles
 const fetchAvailableTags = async () => {
@@ -213,13 +229,61 @@ const getYearOptions = () => {
     e.preventDefault();
     if (searchTerm.trim()) {
       try {
-        // Guardar la etiqueta en localStorage si es una búsqueda por etiqueta y no existe ya
-        if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
-          const newTag = searchTerm.trim();
-          const updatedTags = [...availableTags, newTag];
-          setAvailableTags(updatedTags);
-          localStorage.setItem('availableTags', JSON.stringify(updatedTags));
+
+       // Guardar la etiqueta en localStorage si es una búsqueda por etiqueta y no existe ya
+if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
+  const newTag = searchTerm.trim();
+  const updatedTags = [...availableTags, newTag];
+  setAvailableTags(updatedTags);
+  
+  try {
+    // Obtener el bucket actual
+    const currentBucket = getCurrentBucket();
+    const categoriesStorageKey = `docubox_tags_categories_${currentBucket}`;
+    
+    // Intentar guardar en el formato de categorías
+    const savedCategories = localStorage.getItem(categoriesStorageKey);
+    
+    if (savedCategories) {
+      const parsedCategories = JSON.parse(savedCategories);
+      // Buscar la categoría General o crear una nueva
+      let defaultCategoryIndex = parsedCategories.findIndex(cat => cat.name === 'General');
+      
+      if (defaultCategoryIndex === -1) {
+        // Si no existe la categoría General, crearla
+        parsedCategories.push({
+          id: 'default',
+          name: 'General',
+          tags: [newTag]
+        });
+      } else {
+        // Asegurarse de que la categoría tiene un array de tags
+        if (!parsedCategories[defaultCategoryIndex].tags) {
+          parsedCategories[defaultCategoryIndex].tags = [];
         }
+        // Añadir la nueva etiqueta si no existe ya
+        if (!parsedCategories[defaultCategoryIndex].tags.includes(newTag)) {
+          parsedCategories[defaultCategoryIndex].tags.push(newTag);
+        }
+      }
+      
+      // Guardar categorías actualizadas
+      localStorage.setItem(categoriesStorageKey, JSON.stringify(parsedCategories));
+      console.log(`Etiqueta "${newTag}" guardada en la categoría General para bucket ${currentBucket}`);
+    } else {
+      // Si no hay formato de categorías, crear uno nuevo con una categoría General
+      const newCategories = [{
+        id: 'default',
+        name: 'General',
+        tags: [newTag]
+      }];
+      localStorage.setItem(categoriesStorageKey, JSON.stringify(newCategories));
+      console.log(`Creado nuevo almacén de categorías con etiqueta "${newTag}" para bucket ${currentBucket}`);
+    }
+  } catch (error) {
+    console.error('Error al guardar etiqueta en localStorage:', error);
+  }
+}
         
         // Para búsqueda combinada, realizar la búsqueda especializada directamente
         if (isCombinedSearch && combinedSearchTag && combinedSearchDate) {

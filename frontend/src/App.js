@@ -186,14 +186,14 @@ function App() {
         </div>
       )}
 
-      {showTagManager && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <button onClick={toggleTagManager} className="close-modal">×</button>
-            <TagManager />
-          </div>
-        </div>
-      )}
+{showTagManager && (
+  <div className="modal-overlay tag-manager-modal">
+    <div className="modal-content tag-manager-modal-content">
+      <button onClick={toggleTagManager} className="close-modal">×</button>
+      <TagManager />
+    </div>
+  </div>
+)}
     </div>
   );
 }
