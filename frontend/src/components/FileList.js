@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
+import FileMetadataEditor from './FileMetadataEditor'; // Importar el componente de editor de metadatos
+
 const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, isSearchResults = false }) => {
   // Estado para almacenar las URLs de YouTube para cada archivo
   const [youtubeUrls, setYoutubeUrls] = useState({});
   // Estado para controlar la carga de URLs
   const [loadingUrls, setLoadingUrls] = useState(false);
+  // Estado para controlar el editor de metadatos
+  const [showMetadataEditor, setShowMetadataEditor] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFilePath, setSelectedFilePath] = useState('');
  
-
 // Estado para almacenar las URLs de audio para cada archivo
 const [audioUrls, setAudioUrls] = useState({});
+
 // Estado para almacenar las URLs de imagen para cada archivo
 const [imageUrls, setImageUrls] = useState({});
+
+// Estado para almacenar los metadatos (incluidas etiquetas) para cada archivo
+const [fileMetadata, setFileMetadata] = useState({});
 
   // Función para cargar la URL de YouTube de un archivo
   const loadYoutubeUrl = async (filePath) => {
@@ -64,6 +73,23 @@ const [imageUrls, setImageUrls] = useState({});
     }
   };
 
+  // Función para cargar los metadatos de un archivo
+const loadFileMetadata = async (filePath) => {
+  try {
+    const metadata = await api.getFileMetadata(filePath);
+    if (metadata) {
+      setFileMetadata(prev => ({
+        ...prev,
+        [filePath]: metadata
+      }));
+    }
+    return metadata;
+  } catch (error) {
+    console.error('Error al cargar metadatos:', error);
+    return null;
+  }
+};
+
   // Estado para controlar qué archivo está siendo editado
   const [editingUrlFile, setEditingUrlFile] = useState(null);
   // Estado para almacenar la URL temporal mientras se edita
@@ -92,6 +118,8 @@ useEffect(() => {
     const newYoutubeUrls = {};
     const newAudioUrls = {};
     const newImageUrls = {};
+
+    const newFileMetadata = {};
     
     const promises = files.map(async (file) => {
       // Solo procesar archivos (no carpetas)
@@ -122,6 +150,17 @@ useEffect(() => {
           if (imageUrl) {
             newImageUrls[filePath] = imageUrl;
           }
+
+// Cargar metadatos (incluyendo etiquetas)
+try {
+  const metadata = await api.getFileMetadata(filePath);
+  if (metadata) {
+    newFileMetadata[filePath] = metadata;
+  }
+} catch (metadataError) {
+  console.error(`Error al cargar metadatos para ${filePath}:`, metadataError);
+}
+
         } catch (error) {
           console.error(`Error al cargar URLs para ${filePath}:`, error);
         }
@@ -137,6 +176,9 @@ useEffect(() => {
     console.log('URLs de YouTube cargadas:', newYoutubeUrls);
     console.log('URLs de audio cargadas:', newAudioUrls);
     console.log('URLs de imagen cargadas:', newImageUrls);
+
+    setFileMetadata(newFileMetadata);
+console.log('Metadatos cargados:', newFileMetadata);
     
     setLoadingUrls(false);
   }
@@ -724,6 +766,46 @@ const handleOpenImageUrl = (filePath, e) => {
   }
 };
 
+// FUNCIONES PARA METADATOS
+
+// Función para abrir el editor de metadatos
+const handleOpenMetadataEditor = (file, e) => {
+  e.stopPropagation(); // Evitar que se propague el clic
+  
+  // Determinar la ruta del archivo
+  let filePath;
+  if (isSearchResults) {
+    filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
+  } else {
+    filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+  }
+  
+  // Guardar el archivo seleccionado y su ruta
+  setSelectedFile(file);
+  setSelectedFilePath(filePath);
+  
+  // Mostrar el editor de metadatos
+  setShowMetadataEditor(true);
+};
+
+// Función para cerrar el editor de metadatos
+const handleCloseMetadataEditor = () => {
+  setShowMetadataEditor(false);
+  setSelectedFile(null);
+  setSelectedFilePath('');
+};
+
+// Función para manejar cuando se completa la edición de metadatos
+const handleMetadataEdited = () => {
+  // Cerrar el editor
+  handleCloseMetadataEditor();
+  
+  // Refrescar la lista de archivos
+  if (onActionComplete) {
+    onActionComplete();
+  }
+};
+
 
   return (
     <div className="file-list-container">
@@ -771,9 +853,33 @@ const handleOpenImageUrl = (filePath, e) => {
                 <div className="file-icon">
                   {file.isFolder ? '📁' : (file.name.toLowerCase().endsWith('.pdf') ? '📑' : '📄')}
                 </div>
-                <div className="file-name" title={file.name}>
-                  {file.name}
-                </div>
+
+
+             <div className="file-info">
+  <div className="file-name" title={file.name}>
+    {file.name}
+  </div>
+  
+  {/* Mostrar etiquetas si existen */}
+  {!file.isFolder && (() => {
+    // Determinar la ruta correcta del archivo
+    const filePath = isSearchResults 
+      ? (file.path.startsWith('/') ? file.path.substring(1) : file.path)
+      : (currentPath ? `${currentPath}/${file.name}` : file.name);
+    
+    // Obtener metadatos y etiquetas
+    const metadata = fileMetadata[filePath];
+    const tags = metadata?.tags || [];
+    
+    return tags.length > 0 ? (
+      <div className="file-tags">
+        {tags.map((tag, index) => (
+          <span key={index} className="file-tag">{tag}</span>
+        ))}
+      </div>
+    ) : null;
+  })()}
+</div>
                 
                 {/* Mostrar ruta para resultados de búsqueda */}
                 {isSearchResults && (
@@ -967,9 +1073,16 @@ const handleOpenImageUrl = (filePath, e) => {
   </>
 )}
 
-
-
-
+{/* Botón para editar metadatos (solo para archivos, no carpetas) */}
+{!file.isFolder && userRole === 'admin' && (
+  <button
+    className="edit-metadata-btn"
+    onClick={(e) => handleOpenMetadataEditor(file, e)}
+    title="Editar metadatos"
+  >
+    📋
+  </button>
+)}
                   </>
                 )}
                 
@@ -991,6 +1104,15 @@ const handleOpenImageUrl = (filePath, e) => {
           ))}
         </div>
       )}
+
+{/* Editor de metadatos */}
+<FileMetadataEditor
+        filePath={selectedFilePath}
+        isOpen={showMetadataEditor}
+        onClose={handleCloseMetadataEditor}
+        onSave={handleMetadataEdited}
+      />
+
     </div>
   );
 };

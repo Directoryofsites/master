@@ -341,6 +341,7 @@ export const getDownloadUrl = async (path, forceDownload = false) => {
  * @param {string} searchTerm - Término de búsqueda
  * @returns {Promise<Array>} - Lista de archivos y carpetas que coinciden
  */
+
 export const searchFiles = async (searchTerm) => {
   try {
     // Verificar que el término de búsqueda no esté vacío
@@ -374,6 +375,165 @@ export const searchFiles = async (searchTerm) => {
     return await response.json();
   } catch (error) {
     console.error('Error en searchFiles:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos por etiqueta (tag)
+ * @param {string} tagSearch - Etiqueta a buscar
+ * @returns {Promise<Array>} - Lista de archivos que contienen la etiqueta
+ */
+
+export const searchFilesByTag = async (tagSearch) => {
+  try {
+    console.log('INICIANDO búsqueda por etiqueta:', tagSearch);
+    
+    // Verificar que el término de búsqueda no esté vacío
+    if (!tagSearch || !tagSearch.trim()) {
+      throw new Error('Se requiere una etiqueta para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con el término de búsqueda
+    let url = `${BASE_URL}/search-by-tags?tag=${encodeURIComponent(tagSearch.trim())}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda por etiqueta:', url);
+    
+    console.log('Enviando solicitud al endpoint de búsqueda por etiquetas...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchFilesByTag:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos por fecha
+ * @param {string} dateValue - Valor de fecha a buscar
+ * @param {string} searchType - Tipo de búsqueda: 'specific', 'month', o 'year'
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con la fecha
+ */
+export const searchFilesByDate = async (dateValue, searchType = 'specific') => {
+  try {
+    console.log(`INICIANDO búsqueda por fecha: ${dateValue}, tipo: ${searchType}`);
+    
+    // Verificar que el valor de fecha no esté vacío
+    if (!dateValue || !dateValue.trim()) {
+      throw new Error('Se requiere una fecha para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-by-date?date=${encodeURIComponent(dateValue.trim())}&type=${encodeURIComponent(searchType)}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda por fecha:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda por fecha...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchFilesByDate:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos que coincidan con una etiqueta y una fecha simultáneamente
+ * @param {string} tagValue - Etiqueta a buscar
+ * @param {string} dateValue - Valor de fecha a buscar
+ * @param {string} dateType - Tipo de búsqueda de fecha: 'specific', 'month', o 'year'
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con ambos criterios
+ */
+export const searchFilesCombined = async (tagValue, dateValue, dateType = 'specific') => {
+  try {
+    console.log(`INICIANDO búsqueda combinada: etiqueta: ${tagValue}, fecha: ${dateValue}, tipo: ${dateType}`);
+    
+    // Verificar que ambos valores no estén vacíos
+    if (!tagValue || !tagValue.trim()) {
+      throw new Error('Se requiere una etiqueta para la búsqueda combinada');
+    }
+    
+    if (!dateValue || !dateValue.trim()) {
+      throw new Error('Se requiere una fecha para la búsqueda combinada');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-combined?tag=${encodeURIComponent(tagValue.trim())}&date=${encodeURIComponent(dateValue.trim())}&dateType=${encodeURIComponent(dateType)}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda combinada:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda combinada...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchFilesCombined:', error);
     throw error;
   }
 };
@@ -837,6 +997,85 @@ export const updateFolderPermissions = async (folderPath, permissions) => {
     return await response.json();
   } catch (error) {
     console.error('Error en updateFolderPermissions:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene los metadatos de un archivo
+ * @param {string} path - Ruta del archivo
+ * @returns {Promise<Object>} - Metadatos del archivo
+ */
+export const getFileMetadata = async (path) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para obtener los metadatos');
+    }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/file-metadata?path=${encodeURIComponent(path)}`, {
+      headers: headers
+    });
+    
+    if (!response.ok) {
+      throw new Error('No se pudo obtener los metadatos del archivo');
+    }
+
+    const data = await response.json();
+    return data.metadata;
+  } catch (error) {
+    console.error('Error en getFileMetadata:', error);
+    throw error;
+  }
+};
+
+/**
+ * Actualiza los metadatos de un archivo
+ * @param {string} path - Ruta del archivo
+ * @param {Object} metadata - Metadatos actualizados
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const updateFileMetadata = async (path, metadata) => {
+  try {
+    // Verificar que la ruta no esté vacía
+    if (!path) {
+      throw new Error('Se requiere una ruta para actualizar los metadatos');
+    }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/file-metadata`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        filePath: path,
+        metadata: metadata
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('No se pudo actualizar los metadatos del archivo');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error en updateFileMetadata:', error);
     throw error;
   }
 };

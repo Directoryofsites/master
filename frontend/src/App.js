@@ -3,6 +3,7 @@ import FileExplorer from './components/FileExplorer';
 import Login from './components/Login';
 import SiteSettings from './components/SiteSettings';
 import UserManagement from './components/UserManagement';
+import TagManager from './components/TagManager';
 import './App.css';
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showTagManager, setShowTagManager] = useState(false);
   const [siteSettings, setSiteSettings] = useState({
     title: 'Contenedor de Documentos',
     subtitle: 'Sistema Integral de Gestion',
@@ -85,6 +87,7 @@ function App() {
     // Cerrar otros paneles si están abiertos
     if (!showSettings) {
       setShowUserManagement(false);
+      setShowTagManager(false);
     }
   };
 
@@ -93,6 +96,16 @@ function App() {
     // Cerrar otros paneles si están abiertos
     if (!showUserManagement) {
       setShowSettings(false);
+      setShowTagManager(false);
+    }
+  };
+
+  const toggleTagManager = () => {
+    setShowTagManager(!showTagManager);
+    // Cerrar otros paneles si están abiertos
+    if (!showTagManager) {
+      setShowSettings(false);
+      setShowUserManagement(false);
     }
   };
 
@@ -137,6 +150,9 @@ function App() {
                 </button>
               </>
             )}
+            <button onClick={toggleTagManager} className="tags-btn">
+              🏷️ Gestión Etiquetas
+            </button>
             <button onClick={handleLogout} className="logout-btn">Cerrar Sesión</button>
           </div>
         )}
@@ -166,6 +182,15 @@ function App() {
           <div className="modal-content">
             <button onClick={toggleUserManagement} className="close-modal">×</button>
             <UserManagement />
+          </div>
+        </div>
+      )}
+
+      {showTagManager && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <button onClick={toggleTagManager} className="close-modal">×</button>
+            <TagManager />
           </div>
         </div>
       )}

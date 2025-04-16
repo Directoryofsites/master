@@ -2011,3 +2011,76 @@ body {
   margin-left: 10px;
   padding: 6px 12px;
 }
+
+/* Estilos para etiquetas de archivos */
+.file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.file-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 5px;
+  max-width: 100%;
+}
+
+.file-tag {
+  background-color: #e9f5fe;
+  color: #2196F3;
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+/* Estilos para selector de tipo de búsqueda */
+.search-type-selector {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.search-type-selector label {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.search-type-selector input {
+  margin-right: 8px;
+}
+
+/* Estilos para el editor de metadatos y sugerencias de etiquetas */
+.tag-input-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.tag-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  max-height: 150px;
+  overflow-y: auto;
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+}
+
+.tag-suggestion {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.tag-suggestion:hover {
+  background-color: #f0f0f0;
+}

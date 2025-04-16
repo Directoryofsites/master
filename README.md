@@ -1,3 +1,13 @@
 # Master
 
-Sistema de administración de archivos para Master.
+Sistema de administraciï¿½n de archivos para Master.
+
+## InstalaciÃ³n del backend
+
+```bash
+cd backend
+npm install
+npm start
+
+
+

@@ -196,24 +196,24 @@ const userRoleMap = {
 const bucketSizeMap = {
   'master': 200,            // 200 MB para master
   'contenedor001': 500,     // 500 MB para contenedor001
-  'contenedor002': 100,     // 100 MB para los demás buckets contenedor
-  'contenedor003': 100,
-  'contenedor004': 100,
-  'contenedor005': 100,
-  'contenedor006': 100,
-  'contenedor007': 100,
-  'contenedor008': 100,
-  'contenedor009': 100,
-  'contenedor010': 100,
-  'contenedor011': 100,
-  'contenedor012': 100,
-  'contenedor013': 100,
+  'contenedor002': 300,     // 300 MB para los demás buckets contenedor
+  'contenedor003': 300,
+  'contenedor004': 300,
+  'contenedor005': 300,
+  'contenedor006': 300,
+  'contenedor007': 300,
+  'contenedor008': 300,
+  'contenedor009': 300,
+  'contenedor010': 300,
+  'contenedor011': 300,
+  'contenedor012': 300,
+  'contenedor013': 300,
   'pruebas': 100,          // 100 MB para pruebas
   'personal1': 150         // 150 MB para personal1
 };
 
 // Tamaño predeterminado para buckets no especificados (en MB)
-const defaultBucketMaxSize = 100;
+const defaultBucketMaxSize = 800;
 
 
 // Funciones para manejo de usuarios dinámicos
@@ -652,6 +652,712 @@ app.get('/api/search', async (req, res) => {
     });
   }
 });
+
+// Endpoint para buscar archivos por etiquetas - Versión optimizada
+app.get('/api/search-by-tags', async (req, res) => {
+  const startTime = new Date().getTime();
+  console.log(`[SEARCH_TAGS] Inicio búsqueda por etiquetas: ${startTime}`);
+  
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario (misma lógica que en /api/search)
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[SEARCH_TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[SEARCH_TAGS] Usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[SEARCH_TAGS] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+
+    const tagSearch = req.query.tag;
+    
+    if (!tagSearch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere una etiqueta para la búsqueda'
+      });
+    }
+
+    console.log(`Buscando archivos con etiqueta: "${tagSearch}" en bucket ${bucketToUse}`);
+    const searchTermLower = tagSearch.toLowerCase();
+    
+    // Resultados de la búsqueda
+    const searchResults = [];
+    const processedFiles = new Set(); // Para evitar procesar el mismo archivo dos veces
+    const processedPaths = new Set(); // Para rastrear rutas ya procesadas
+
+    // Optimización: obtener todos los archivos metadata de una vez en lugar de uno por uno
+    console.log(`[SEARCH_TAGS] Listando archivos *.metadata en bucket ${bucketToUse}`);
+    const stageTime1 = new Date().getTime();
+    console.log(`[SEARCH_TAGS] Etapa inicial - Tiempo transcurrido: ${stageTime1 - startTime}ms`);
+
+    // En lugar de buscar recursivamente, primero buscamos todos los archivos .metadata
+    // con una función que obtenga la lista rápidamente
+    async function getAllMetadataFiles() {
+      const metadataFiles = [];
+      
+      // Función para obtener archivos .metadata en una carpeta
+      async function getMetadataInFolder(prefix = '') {
+        const { data, error } = await supabase.storage
+          .from(bucketToUse)
+          .list(prefix, {
+            sortBy: { column: 'name', order: 'asc' }
+          });
+        
+        if (error) {
+          console.error(`Error al listar ${prefix}:`, error);
+          return;
+        }
+        
+        const folders = [];
+        
+        for (const item of data) {
+          // Si es una carpeta, guardarla para procesarla después
+          if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+            const folderPath = prefix ? `${prefix}/${item.name}` : item.name;
+            if (!processedPaths.has(folderPath)) {
+              processedPaths.add(folderPath);
+              folders.push(folderPath);
+            }
+            continue;
+          }
+          
+          // Solo nos interesan los archivos .metadata (pero no los especiales)
+          if (item.name.endsWith('.metadata') && 
+              !item.name.endsWith('.youtube.metadata') && 
+              !item.name.endsWith('.audio.metadata') && 
+              !item.name.endsWith('.image.metadata')) {
+            const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+            metadataFiles.push(itemPath);
+          }
+        }
+        
+        // Procesar subcarpetas (pero en lotes para no bloquear demasiado)
+        const batchSize = 10;
+        for (let i = 0; i < folders.length; i += batchSize) {
+          const batch = folders.slice(i, i + batchSize);
+          await Promise.all(batch.map(folder => getMetadataInFolder(folder)));
+        }
+      }
+      
+      await getMetadataInFolder();
+      return metadataFiles;
+    }
+    
+    const metadataFiles = await getAllMetadataFiles();
+    const stageTime2 = new Date().getTime();
+    console.log(`[SEARCH_TAGS] Encontrados ${metadataFiles.length} archivos .metadata en ${stageTime2 - stageTime1}ms`);
+    
+    // Procesar los archivos .metadata en lotes para buscar etiquetas
+    const batchSize = 20; // Ajustar según sea necesario
+    for (let i = 0; i < metadataFiles.length; i += batchSize) {
+      const batch = metadataFiles.slice(i, i + batchSize);
+      
+      // Procesar lotes en paralelo para mayor velocidad
+      await Promise.all(batch.map(async (metadataPath) => {
+        try {
+          // Obtener el archivo original al que pertenece este metadata
+          const originalFilePath = metadataPath.slice(0, -9); // Quitar '.metadata'
+          
+          // Verificar si ya hemos procesado este archivo
+          if (processedFiles.has(originalFilePath)) {
+            return;
+          }
+          processedFiles.add(originalFilePath);
+          
+          // Descargar y procesar el archivo de metadatos
+          const { data, error } = await supabase.storage
+            .from(bucketToUse)
+            .download(metadataPath);
+          
+          if (error) {
+            console.error(`Error al descargar metadatos de ${metadataPath}:`, error);
+            return;
+          }
+          
+          // Parsear los metadatos y verificar etiquetas
+          const text = await data.text();
+          const metadata = JSON.parse(text);
+          
+          if (metadata && metadata.tags && Array.isArray(metadata.tags)) {
+            const hasMatchingTag = metadata.tags.some(tag =>
+              tag.toLowerCase().includes(searchTermLower)
+            );
+            
+            if (hasMatchingTag) {
+              // Obtener información básica del archivo
+              const fileNameParts = originalFilePath.split('/');
+              const fileName = fileNameParts[fileNameParts.length - 1];
+              
+              // Obtener metadatos actualizados del archivo
+              const { data: fileData } = await supabase.storage
+                .from(bucketToUse)
+                .list(originalFilePath.substring(0, originalFilePath.lastIndexOf('/')), {
+                  search: fileName
+                });
+              
+              const fileInfo = fileData && fileData[0];
+              
+              searchResults.push({
+                name: fileName,
+                path: `/${originalFilePath}`,
+                size: (fileInfo && fileInfo.metadata && fileInfo.metadata.size) || 0,
+                contentType: (fileInfo && fileInfo.metadata && fileInfo.metadata.mimetype) || 'application/octet-stream',
+                updated: (fileInfo && fileInfo.updated_at) || new Date().toISOString(),
+                isFolder: false,
+                metadata: metadata // Incluir metadatos para mostrar etiquetas en resultados
+              });
+            }
+          }
+        } catch (error) {
+          console.error(`Error al procesar ${metadataPath}:`, error);
+        }
+      }));
+    }
+    
+    const endTime = new Date().getTime();
+    console.log(`[SEARCH_TAGS] Se encontraron ${searchResults.length} resultados con etiqueta "${tagSearch}" en bucket ${bucketToUse}`);
+    console.log(`[SEARCH_TAGS] Tiempo total de búsqueda: ${endTime - startTime}ms`);
+    
+    return res.json(searchResults);
+  } catch (error) {
+    const endTime = new Date().getTime();
+    console.error('Error en la búsqueda por etiquetas:', error);
+    console.error(`[SEARCH_TAGS] Error tras ${endTime - startTime}ms`);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al realizar la búsqueda por etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para buscar archivos por fecha - Versión optimizada
+app.get('/api/search-by-date', async (req, res) => {
+  const startTime = new Date().getTime();
+  console.log(`[SEARCH_DATE] Inicio búsqueda por fecha: ${startTime}`);
+  
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[SEARCH_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[SEARCH_DATE] Usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[SEARCH_DATE] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+
+    // Obtener los parámetros de búsqueda
+    const dateValue = req.query.date;
+    const searchType = req.query.type || 'specific'; // specific, month, year
+    
+    if (!dateValue) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere una fecha para la búsqueda'
+      });
+    }
+
+    console.log(`Buscando archivos con fecha: "${dateValue}" (tipo: ${searchType}) en bucket ${bucketToUse}`);
+    
+    // Resultados de la búsqueda
+    const searchResults = [];
+    const processedFiles = new Set(); // Para evitar procesar el mismo archivo dos veces
+    const processedPaths = new Set(); // Para rastrear rutas ya procesadas
+
+    // Optimización: obtener todos los archivos metadata de una vez en lugar de uno por uno
+    console.log(`[SEARCH_DATE] Listando archivos *.metadata en bucket ${bucketToUse}`);
+    const stageTime1 = new Date().getTime();
+    console.log(`[SEARCH_DATE] Etapa inicial - Tiempo transcurrido: ${stageTime1 - startTime}ms`);
+
+    // Función para obtener todos los archivos .metadata (similar a la búsqueda por etiquetas)
+    async function getAllMetadataFiles() {
+      const metadataFiles = [];
+      
+      // Función para obtener archivos .metadata en una carpeta
+      async function getMetadataInFolder(prefix = '') {
+        const { data, error } = await supabase.storage
+          .from(bucketToUse)
+          .list(prefix, {
+            sortBy: { column: 'name', order: 'asc' }
+          });
+        
+        if (error) {
+          console.error(`Error al listar ${prefix}:`, error);
+          return;
+        }
+        
+        const folders = [];
+        
+        for (const item of data) {
+          // Si es una carpeta, guardarla para procesarla después
+          if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+            const folderPath = prefix ? `${prefix}/${item.name}` : item.name;
+            if (!processedPaths.has(folderPath)) {
+              processedPaths.add(folderPath);
+              folders.push(folderPath);
+            }
+            continue;
+          }
+          
+          // Solo nos interesan los archivos .metadata (pero no los especiales)
+          if (item.name.endsWith('.metadata') && 
+              !item.name.endsWith('.youtube.metadata') && 
+              !item.name.endsWith('.audio.metadata') && 
+              !item.name.endsWith('.image.metadata')) {
+            const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+            metadataFiles.push(itemPath);
+          }
+        }
+        
+        // Procesar subcarpetas (pero en lotes para no bloquear demasiado)
+        const batchSize = 10;
+        for (let i = 0; i < folders.length; i += batchSize) {
+          const batch = folders.slice(i, i + batchSize);
+          await Promise.all(batch.map(folder => getMetadataInFolder(folder)));
+        }
+      }
+      
+      await getMetadataInFolder();
+      return metadataFiles;
+    }
+    
+    const metadataFiles = await getAllMetadataFiles();
+    const stageTime2 = new Date().getTime();
+    console.log(`[SEARCH_DATE] Encontrados ${metadataFiles.length} archivos .metadata en ${stageTime2 - stageTime1}ms`);
+    
+    // Función para validar fechas
+    function isDateMatch(fileDate, searchDate, searchType) {
+      if (!fileDate) return false;
+      
+      try {
+        // Asegurarse de que fileDate tiene el formato adecuado (YYYY-MM-DD)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fileDate)) {
+          return false;
+        }
+        
+        // Extraer componentes de la fecha del archivo
+        const [fileYear, fileMonth, fileDay] = fileDate.split('-').map(n => parseInt(n, 10));
+        
+        if (searchType === 'specific') {
+          // Para búsqueda de fecha específica, formato esperado: YYYY-MM-DD
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(searchDate)) {
+            return false;
+          }
+          const [searchYear, searchMonth, searchDay] = searchDate.split('-').map(n => parseInt(n, 10));
+          return fileYear === searchYear && fileMonth === searchMonth && fileDay === searchDay;
+        } 
+        else if (searchType === 'month') {
+          // Para búsqueda por mes, formatos esperados: MM-YYYY o solo MM
+          let searchYear, searchMonth;
+          
+          if (searchDate.includes('-')) {
+            // Formato MM-YYYY
+            [searchMonth, searchYear] = searchDate.split('-').map(n => parseInt(n, 10));
+          } else {
+            // Solo MM, usar año actual
+            searchMonth = parseInt(searchDate, 10);
+            searchYear = new Date().getFullYear();
+          }
+          
+          return fileYear === searchYear && fileMonth === searchMonth;
+        } 
+        else if (searchType === 'year') {
+          // Para búsqueda por año, formato esperado: YYYY
+          const searchYear = parseInt(searchDate, 10);
+          return fileYear === searchYear;
+        }
+        
+        return false;
+      } catch (error) {
+        console.error('Error al comparar fechas:', error);
+        return false;
+      }
+    }
+    
+    // Procesar los archivos .metadata en lotes para buscar fechas
+    const batchSize = 20; // Ajustar según sea necesario
+    for (let i = 0; i < metadataFiles.length; i += batchSize) {
+      const batch = metadataFiles.slice(i, i + batchSize);
+      
+      // Procesar lotes en paralelo para mayor velocidad
+      await Promise.all(batch.map(async (metadataPath) => {
+        try {
+          // Obtener el archivo original al que pertenece este metadata
+          const originalFilePath = metadataPath.slice(0, -9); // Quitar '.metadata'
+          
+          // Verificar si ya hemos procesado este archivo
+          if (processedFiles.has(originalFilePath)) {
+            return;
+          }
+          processedFiles.add(originalFilePath);
+          
+          // Descargar y procesar el archivo de metadatos
+          const { data, error } = await supabase.storage
+            .from(bucketToUse)
+            .download(metadataPath);
+          
+          if (error) {
+            console.error(`Error al descargar metadatos de ${metadataPath}:`, error);
+            return;
+          }
+          
+          // Parsear los metadatos y verificar fecha
+          const text = await data.text();
+          const metadata = JSON.parse(text);
+          
+          // Verificar si hay una fecha y si coincide con el criterio de búsqueda
+          if (metadata && metadata.fileDate) {
+            const isMatch = isDateMatch(metadata.fileDate, dateValue, searchType);
+            
+            if (isMatch) {
+              // Obtener información básica del archivo
+              const fileNameParts = originalFilePath.split('/');
+              const fileName = fileNameParts[fileNameParts.length - 1];
+              
+              // Obtener metadatos actualizados del archivo
+              const folderPath = originalFilePath.substring(0, originalFilePath.lastIndexOf('/') || 0);
+              const { data: fileData } = await supabase.storage
+                .from(bucketToUse)
+                .list(folderPath, {
+                  search: fileName
+                });
+              
+              const fileInfo = fileData && fileData[0];
+              
+              searchResults.push({
+                name: fileName,
+                path: `/${originalFilePath}`,
+                size: (fileInfo && fileInfo.metadata && fileInfo.metadata.size) || 0,
+                contentType: (fileInfo && fileInfo.metadata && fileInfo.metadata.mimetype) || 'application/octet-stream',
+                updated: (fileInfo && fileInfo.updated_at) || new Date().toISOString(),
+                isFolder: false,
+                metadata: metadata // Incluir metadatos para mostrar información en resultados
+              });
+            }
+          }
+        } catch (error) {
+          console.error(`Error al procesar ${metadataPath}:`, error);
+        }
+      }));
+    }
+    
+    const endTime = new Date().getTime();
+    console.log(`[SEARCH_DATE] Se encontraron ${searchResults.length} resultados con fecha "${dateValue}" en bucket ${bucketToUse}`);
+    console.log(`[SEARCH_DATE] Tiempo total de búsqueda: ${endTime - startTime}ms`);
+    
+    return res.json(searchResults);
+  } catch (error) {
+    const endTime = new Date().getTime();
+    console.error('Error en la búsqueda por fecha:', error);
+    console.error(`[SEARCH_DATE] Error tras ${endTime - startTime}ms`);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al realizar la búsqueda por fecha',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para búsqueda combinada de etiquetas y fechas
+app.get('/api/search-combined', async (req, res) => {
+  const startTime = new Date().getTime();
+  console.log(`[SEARCH_COMBINED] Inicio búsqueda combinada: ${startTime}`);
+  
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[SEARCH_COMBINED] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[SEARCH_COMBINED] Usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[SEARCH_COMBINED] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+
+    // Obtener los parámetros de búsqueda
+    const tagSearch = req.query.tag;
+    const dateValue = req.query.date;
+    const dateType = req.query.dateType || 'specific'; // specific, month, year
+    
+    if (!tagSearch || !dateValue) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere tanto una etiqueta como una fecha para la búsqueda combinada'
+      });
+    }
+
+    console.log(`Buscando archivos con etiqueta: "${tagSearch}" y fecha: "${dateValue}" (tipo: ${dateType}) en bucket ${bucketToUse}`);
+    const searchTagLower = tagSearch.toLowerCase();
+    
+    // Resultados de la búsqueda
+    const searchResults = [];
+    const processedFiles = new Set(); // Para evitar procesar el mismo archivo dos veces
+    const processedPaths = new Set(); // Para rastrear rutas ya procesadas
+
+    // Optimización: obtener todos los archivos metadata de una vez
+    console.log(`[SEARCH_COMBINED] Listando archivos *.metadata en bucket ${bucketToUse}`);
+    const stageTime1 = new Date().getTime();
+    console.log(`[SEARCH_COMBINED] Etapa inicial - Tiempo transcurrido: ${stageTime1 - startTime}ms`);
+
+    // Función para obtener todos los archivos .metadata
+    async function getAllMetadataFiles() {
+      const metadataFiles = [];
+      
+      // Función para obtener archivos .metadata en una carpeta
+      async function getMetadataInFolder(prefix = '') {
+        const { data, error } = await supabase.storage
+          .from(bucketToUse)
+          .list(prefix, {
+            sortBy: { column: 'name', order: 'asc' }
+          });
+        
+        if (error) {
+          console.error(`Error al listar ${prefix}:`, error);
+          return;
+        }
+        
+        const folders = [];
+        
+        for (const item of data) {
+          // Si es una carpeta, guardarla para procesarla después
+          if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+            const folderPath = prefix ? `${prefix}/${item.name}` : item.name;
+            if (!processedPaths.has(folderPath)) {
+              processedPaths.add(folderPath);
+              folders.push(folderPath);
+            }
+            continue;
+          }
+          
+          // Solo nos interesan los archivos .metadata (pero no los especiales)
+          if (item.name.endsWith('.metadata') && 
+              !item.name.endsWith('.youtube.metadata') && 
+              !item.name.endsWith('.audio.metadata') && 
+              !item.name.endsWith('.image.metadata')) {
+            const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+            metadataFiles.push(itemPath);
+          }
+        }
+        
+        // Procesar subcarpetas (pero en lotes para no bloquear demasiado)
+        const batchSize = 10;
+        for (let i = 0; i < folders.length; i += batchSize) {
+          const batch = folders.slice(i, i + batchSize);
+          await Promise.all(batch.map(folder => getMetadataInFolder(folder)));
+        }
+      }
+      
+      await getMetadataInFolder();
+      return metadataFiles;
+    }
+    
+    const metadataFiles = await getAllMetadataFiles();
+    const stageTime2 = new Date().getTime();
+    console.log(`[SEARCH_COMBINED] Encontrados ${metadataFiles.length} archivos .metadata en ${stageTime2 - stageTime1}ms`);
+    
+    // Función para validar fechas
+    function isDateMatch(fileDate, searchDate, searchType) {
+      if (!fileDate) return false;
+      
+      try {
+        // Asegurarse de que fileDate tiene el formato adecuado (YYYY-MM-DD)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fileDate)) {
+          return false;
+        }
+        
+        // Extraer componentes de la fecha del archivo
+        const [fileYear, fileMonth, fileDay] = fileDate.split('-').map(n => parseInt(n, 10));
+        
+        if (searchType === 'specific') {
+          // Para búsqueda de fecha específica, formato esperado: YYYY-MM-DD
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(searchDate)) {
+            return false;
+          }
+          const [searchYear, searchMonth, searchDay] = searchDate.split('-').map(n => parseInt(n, 10));
+          return fileYear === searchYear && fileMonth === searchMonth && fileDay === searchDay;
+        } 
+        else if (searchType === 'month') {
+          // Para búsqueda por mes, formatos esperados: YYYY-MM o solo MM
+          let searchYear, searchMonth;
+          
+          if (searchDate.includes('-')) {
+            // Formato YYYY-MM
+            [searchYear, searchMonth] = searchDate.split('-').map(n => parseInt(n, 10));
+          } else {
+            // Solo MM, usar año actual
+            searchMonth = parseInt(searchDate, 10);
+            searchYear = new Date().getFullYear();
+          }
+          
+          return fileYear === searchYear && fileMonth === searchMonth;
+        } 
+        else if (searchType === 'year') {
+          // Para búsqueda por año, formato esperado: YYYY
+          const searchYear = parseInt(searchDate, 10);
+          return fileYear === searchYear;
+        }
+        
+        return false;
+      } catch (error) {
+        console.error('Error al comparar fechas:', error);
+        return false;
+      }
+    }
+    
+    // Procesar los archivos .metadata en lotes
+    const batchSize = 20;
+    for (let i = 0; i < metadataFiles.length; i += batchSize) {
+      const batch = metadataFiles.slice(i, i + batchSize);
+      
+      // Procesar lotes en paralelo para mayor velocidad
+      await Promise.all(batch.map(async (metadataPath) => {
+        try {
+          // Obtener el archivo original al que pertenece este metadata
+          const originalFilePath = metadataPath.slice(0, -9); // Quitar '.metadata'
+          
+          // Verificar si ya hemos procesado este archivo
+          if (processedFiles.has(originalFilePath)) {
+            return;
+          }
+          processedFiles.add(originalFilePath);
+          
+          // Descargar y procesar el archivo de metadatos
+          const { data, error } = await supabase.storage
+            .from(bucketToUse)
+            .download(metadataPath);
+          
+          if (error) {
+            console.error(`Error al descargar metadatos de ${metadataPath}:`, error);
+            return;
+          }
+          
+          // Parsear los metadatos
+          const text = await data.text();
+          const metadata = JSON.parse(text);
+          
+          // Verificar si el archivo coincide con ambos criterios: etiqueta y fecha
+          const hasMatchingTag = metadata.tags && Array.isArray(metadata.tags) && 
+              metadata.tags.some(tag => tag.toLowerCase().includes(searchTagLower));
+          
+          const hasMatchingDate = metadata.fileDate && 
+              isDateMatch(metadata.fileDate, dateValue, dateType);
+          
+          // Solo incluir si coincide con ambos criterios
+          if (hasMatchingTag && hasMatchingDate) {
+            // Obtener información básica del archivo
+            const fileNameParts = originalFilePath.split('/');
+            const fileName = fileNameParts[fileNameParts.length - 1];
+            
+            // Obtener metadatos actualizados del archivo
+            const { data: fileData } = await supabase.storage
+              .from(bucketToUse)
+              .list(originalFilePath.substring(0, originalFilePath.lastIndexOf('/')), {
+                search: fileName
+              });
+            
+            const fileInfo = fileData && fileData[0];
+            
+            searchResults.push({
+              name: fileName,
+              path: `/${originalFilePath}`,
+              size: (fileInfo && fileInfo.metadata && fileInfo.metadata.size) || 0,
+              contentType: (fileInfo && fileInfo.metadata && fileInfo.metadata.mimetype) || 'application/octet-stream',
+              updated: (fileInfo && fileInfo.updated_at) || new Date().toISOString(),
+              isFolder: false,
+              metadata: metadata // Incluir metadatos para mostrar información en resultados
+            });
+          }
+        } catch (error) {
+          console.error(`Error al procesar ${metadataPath}:`, error);
+        }
+      }));
+    }
+    
+    const endTime = new Date().getTime();
+    console.log(`[SEARCH_COMBINED] Se encontraron ${searchResults.length} resultados con etiqueta "${tagSearch}" y fecha "${dateValue}" en bucket ${bucketToUse}`);
+    console.log(`[SEARCH_COMBINED] Tiempo total de búsqueda: ${endTime - startTime}ms`);
+    
+    return res.json(searchResults);
+  } catch (error) {
+    const endTime = new Date().getTime();
+    console.error('Error en la búsqueda combinada:', error);
+    console.error(`[SEARCH_COMBINED] Error tras ${endTime - startTime}ms`);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al realizar la búsqueda combinada',
+      error: error.message
+    });
+  }
+});
+
 // Función para calcular el tamaño total del bucket
 async function calculateBucketSize(bucketToCheck = defaultBucketName) {
   let totalSize = 0;
@@ -1358,6 +2064,81 @@ const deleteResult = await supabase.storage
   }
 });
 
+// Copia de seguridad de todos los archivos del bucket del admin
+const archiver = require('archiver');
+const { tmpdir } = require('os');
+const { promisify } = require('util');
+const stream = require('stream');
+const pipeline = promisify(stream.pipeline);
+
+// Endpoint: descarga ZIP con todos los archivos del bucket
+app.get('/api/admin/backup', async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ success: false, message: 'Supabase no está configurado.' });
+    }
+
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Solo administradores pueden generar copias de seguridad.' });
+    }
+
+    const bucketName = req.bucketName;
+    const zipName = `backup_${new Date().toISOString().split('T')[0]}.zip`;
+
+    // Configurar headers para descarga directa
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    // Función recursiva para agregar archivos al ZIP
+    async function addFiles(prefix = '') {
+      const { data, error } = await supabase.storage.from(bucketName).list(prefix);
+      if (error) {
+        console.error(`Error al listar ${prefix}:`, error);
+        return;
+      }
+
+      for (const item of data) {
+        const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+
+        // Omitir archivos de metadatos
+        if (
+          item.name.endsWith('.metadata') ||
+          item.name.endsWith('.youtube.metadata') ||
+          item.name.endsWith('.audio.metadata') ||
+          item.name.endsWith('.image.metadata') ||
+          item.name === '.folder'
+        ) {
+          continue;
+        }
+
+        // Si es carpeta, llamada recursiva
+        if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+          await addFiles(itemPath);
+        } else {
+          // Descargar el archivo y añadirlo al ZIP
+          const { data: fileData, error: downloadError } = await supabase.storage.from(bucketName).download(itemPath);
+          if (downloadError) {
+            console.error(`Error al descargar ${itemPath}:`, downloadError);
+            continue;
+          }
+          archive.append(fileData, { name: itemPath });
+        }
+      }
+    }
+
+    // Inicia desde la raíz
+    await addFiles('');
+    await archive.finalize();
+  } catch (err) {
+    console.error('Error al generar backup:', err);
+    res.status(500).json({ success: false, message: 'Error al generar backup', error: err.message });
+  }
+});
+
+
 // Rutas para manejar URLs de YouTube
 
 // Obtener URL de YouTube para un archivo
@@ -1885,6 +2666,170 @@ const { error } = await supabase.storage
     res.status(500).json({
       success: false,
       message: `Error al guardar URL de imagen: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Rutas para manejar metadatos de archivos
+
+// Obtener metadatos de un archivo
+app.get('/api/file-metadata', async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const filePath = req.query.path;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha especificado la ruta del archivo'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Obteniendo metadatos para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.metadata`;
+    
+    // Intentar obtener el archivo de metadatos
+    let data, error;
+    try {
+      const result = await supabase.storage
+        .from(bucketToUse)
+        .download(metadataPath);
+      
+      data = result.data;
+      error = result.error;
+    } catch (downloadError) {
+      console.error('Error al intentar descargar metadatos del archivo:', downloadError);
+      // No lanzar excepción, simplemente continuar con data=null
+    }
+    
+    if (!data) {
+      // Si no hay metadatos, crear unos predeterminados
+      const defaultMetadata = {
+        uploadDate: new Date().toISOString().split('T')[0],
+        fileDate: new Date().toISOString().split('T')[0],
+        uploadedBy: req.username || 'admin1',
+        tags: [],
+        lastModified: new Date().toISOString().split('T')[0]
+      };
+      
+      return res.status(200).json({
+        success: true,
+        metadata: defaultMetadata
+      });
+    }
+    
+    // Convertir a texto y parsear JSON
+    const text = await data.text();
+    const metadata = JSON.parse(text);
+    
+    return res.status(200).json({
+      success: true,
+      metadata: metadata
+    });
+  } catch (error) {
+    console.error('Error al obtener metadatos del archivo:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al obtener metadatos del archivo: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Guardar metadatos de un archivo
+app.post('/api/file-metadata', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar permisos - solo admin puede modificar metadatos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar metadatos. Se requiere rol de administrador.'
+      });
+    }
+    
+    const { filePath, metadata } = req.body;
+    
+    if (!filePath || !metadata) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta del archivo y los metadatos'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`Guardando metadatos para: ${normalizedPath}`);
+    
+    // Construir la ruta del archivo de metadatos
+    const metadataPath = `${normalizedPath}.metadata`;
+    
+    // Asegurar que metadata tenga la fecha de última modificación actualizada
+    const updatedMetadata = {
+      ...metadata,
+      lastModified: new Date().toISOString().split('T')[0]
+    };
+    
+    // Convertir a JSON
+    const metadataContent = JSON.stringify(updatedMetadata);
+    
+    // Guardar archivo de metadatos
+    const { error } = await supabase.storage
+      .from(bucketToUse)
+      .upload(metadataPath, metadataContent, {
+        contentType: 'application/json',
+        upsert: true
+      });
+    
+    if (error) {
+      console.error('Error al guardar metadatos:', error);
+      throw error;
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Metadatos guardados correctamente'
+    });
+  } catch (error) {
+    console.error('Error al guardar metadatos del archivo:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al guardar metadatos del archivo: ${error.message}`,
       error: error.message
     });
   }
@@ -2527,7 +3472,7 @@ app.post('/api/login', express.json(), async (req, res) => {
       
       // Bucket contenedor001
       'admin1': 'Panica811880',       // Cambiada de 'admin1' a 'df14T87lk44aqL'
-      'usuario001': 'Panica811880', // Cambiada
+      'usuario001': 'turpial1720', // Cambiada
       
       // Bucket contenedor002
       'admin2': 'ff447EEdf441dP',       // Cambiada
