@@ -539,6 +539,194 @@ export const searchFilesCombined = async (tagValue, dateValue, dateType = 'speci
 };
 
 /**
+ * Busca archivos que coincidan con múltiples etiquetas simultáneamente
+ * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con todas las etiquetas especificadas
+ */
+export const searchFilesByMultipleTags = async (tags) => {
+  try {
+    console.log('INICIANDO búsqueda por múltiples etiquetas:', tags);
+    
+    // Verificar que el parámetro no esté vacío
+    if (!tags) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Manejar tanto string (formato "tag1,tag2,tag3") como arrays de etiquetas
+    let tagsParam;
+    if (Array.isArray(tags)) {
+      tagsParam = tags.join(',');
+    } else {
+      tagsParam = tags;
+    }
+    
+    // Verificar que no esté vacío después de procesar
+    if (!tagsParam.trim()) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con el parámetro de etiquetas
+    let url = `${BASE_URL}/search-by-multiple-tags?tags=${encodeURIComponent(tagsParam.trim())}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda por múltiples etiquetas:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda por múltiples etiquetas...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda con múltiples etiquetas`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchFilesByMultipleTags:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos que coincidan con múltiples etiquetas y una fecha simultáneamente
+ * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
+ * @param {string} dateValue - Valor de fecha a buscar
+ * @param {string} dateType - Tipo de búsqueda de fecha: 'specific', 'month', o 'year'
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con todos los criterios
+ */
+export const searchMultipleTagsWithDate = async (tags, dateValue, dateType = 'specific') => {
+  try {
+    console.log(`INICIANDO búsqueda combinada de múltiples etiquetas y fecha: tags=${tags}, fecha=${dateValue}, tipo=${dateType}`);
+    
+    // Verificar que los parámetros no estén vacíos
+    if (!tags) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    if (!dateValue || !dateValue.trim()) {
+      throw new Error('Se requiere una fecha para la búsqueda combinada');
+    }
+    
+    // Manejar tanto string (formato "tag1,tag2,tag3") como arrays de etiquetas
+    let tagsParam;
+    if (Array.isArray(tags)) {
+      tagsParam = tags.join(',');
+    } else {
+      tagsParam = tags;
+    }
+    
+    // Verificar que no esté vacío después de procesar
+    if (!tagsParam.trim()) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-multiple-tags-with-date?tags=${encodeURIComponent(tagsParam.trim())}&date=${encodeURIComponent(dateValue.trim())}&dateType=${encodeURIComponent(dateType)}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda combinada de múltiples etiquetas y fecha:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda combinada...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda combinada`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchMultipleTagsWithDate:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos que coincidan con un texto y una fecha simultáneamente
+ * @param {string} searchText - Texto a buscar en los nombres de archivos
+ * @param {string} dateValue - Valor de fecha a buscar
+ * @param {string} dateType - Tipo de búsqueda de fecha: 'specific', 'month', o 'year'
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con ambos criterios
+ */
+export const searchTextWithDate = async (searchText, dateValue, dateType = 'specific') => {
+  try {
+    console.log(`INICIANDO búsqueda de texto con fecha: texto: ${searchText}, fecha: ${dateValue}, tipo: ${dateType}`);
+    
+    // Verificar que los valores no estén vacíos
+    if (!searchText || !searchText.trim()) {
+      throw new Error('Se requiere un texto para la búsqueda combinada');
+    }
+    
+    if (!dateValue || !dateValue.trim()) {
+      throw new Error('Se requiere una fecha para la búsqueda combinada');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-text-with-date?text=${encodeURIComponent(searchText.trim())}&date=${encodeURIComponent(dateValue.trim())}&dateType=${encodeURIComponent(dateType)}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda de texto con fecha:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda de texto con fecha...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchTextWithDate:', error);
+    throw error;
+  }
+};
+
+/**
  * Obtiene la URL de YouTube asociada a un archivo
  * @param {string} path - Ruta del archivo
  * @returns {Promise<string|null>} - URL de YouTube o null si no hay ninguna
@@ -1076,6 +1264,208 @@ export const updateFileMetadata = async (path, metadata) => {
     return await response.json();
   } catch (error) {
     console.error('Error en updateFileMetadata:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene todas las etiquetas disponibles para el bucket del usuario actual
+ * @returns {Promise<Object>} - Etiquetas del bucket
+ */
+export const getTags = async () => {
+  try {
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL para obtener etiquetas
+    let url = `${BASE_URL}/tags`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('Obteniendo etiquetas del servidor...');
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Obtenidas ${data.tags?.length || 0} etiquetas del servidor`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en getTags:', error);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene categorías de etiquetas disponibles para el bucket del usuario actual
+ * @returns {Promise<Array>} - Lista de categorías
+ */
+export const getTagCategories = async () => {
+  try {
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL para obtener categorías
+    let url = `${BASE_URL}/tags/categories`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('Obteniendo categorías de etiquetas...');
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Obtenidas ${data.categories?.length || 0} categorías de etiquetas`);
+    
+    return data.categories || [];
+  } catch (error) {
+    console.error('Error en getTagCategories:', error);
+    throw error;
+  }
+};
+
+/**
+ * Crea una nueva etiqueta
+ * @param {string} tagName - Nombre de la etiqueta
+ * @param {string} category - Categoría a la que pertenece la etiqueta
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const createTag = async (tagName, category) => {
+  try {
+    if (!tagName || !category) {
+      throw new Error('Se requiere nombre de etiqueta y categoría');
+    }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    console.log(`Creando etiqueta "${tagName}" en categoría "${category}"`);
+    
+    const response = await fetch(`${BASE_URL}/tags`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        tag_name: tagName,
+        category: category
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en createTag:', error);
+    throw error;
+  }
+};
+
+/**
+ * Elimina una etiqueta
+ * @param {string} tagId - ID de la etiqueta a eliminar
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const deleteTag = async (tagId) => {
+  try {
+    if (!tagId) {
+      throw new Error('Se requiere ID de etiqueta');
+    }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    console.log(`Eliminando etiqueta con ID: ${tagId}`);
+    
+    const response = await fetch(`${BASE_URL}/tags/${tagId}`, {
+      method: 'DELETE',
+      headers: headers
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en deleteTag:', error);
+    throw error;
+  }
+};
+
+/**
+ * Crea una nueva categoría de etiquetas
+ * @param {string} categoryName - Nombre de la categoría
+ * @param {Array} [initialTags] - Lista de etiquetas iniciales (opcional)
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const createTagCategory = async (categoryName, initialTags = []) => {
+  try {
+    if (!categoryName) {
+      throw new Error('Se requiere nombre de categoría');
+    }
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    console.log(`Creando categoría "${categoryName}" con ${initialTags.length} etiquetas iniciales`);
+    
+    const response = await fetch(`${BASE_URL}/tags/categories`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        category_name: categoryName,
+        tags: initialTags
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en createTagCategory:', error);
     throw error;
   }
 };

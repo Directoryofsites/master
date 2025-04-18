@@ -98,54 +98,48 @@ const migrateTagsToNewFormat = () => {
     }
   };
   
-  migrateTagsToNewFormat();
-}, []);
+  useEffect(() => {
+    migrateTagsToNewFormat();
+  }, []);
 
-
-// Cargar etiquetas sugeridas desde el gestor de etiquetas por categorías
+  // Cargar etiquetas sugeridas desde la API
 useEffect(() => {
-  const loadSavedTags = () => {
+  const loadSavedTags = async () => {
     try {
-      const currentBucket = getCurrentBucket();
-      const storageKey = `docubox_tags_categories_${currentBucket}`;
+      console.log('Cargando etiquetas desde la API...');
       
-      console.log(`Cargando categorías de etiquetas para bucket: ${currentBucket}`);
+      // Obtener etiquetas desde la API
+      const response = await api.getTags();
       
-      const savedCategories = localStorage.getItem(storageKey);
-      if (savedCategories) {
-        const parsedCategories = JSON.parse(savedCategories);
-        if (Array.isArray(parsedCategories)) {
-          // Extraer todas las etiquetas de todas las categorías
-          const allTags = [];
-          parsedCategories.forEach(category => {
-            if (category.tags && Array.isArray(category.tags)) {
-              allTags.push(...category.tags);
-            }
-          });
-          
-          // Eliminar duplicados
-          const uniqueTags = [...new Set(allTags)];
-          setSuggestedTags(uniqueTags);
-          console.log(`${uniqueTags.length} etiquetas cargadas de ${parsedCategories.length} categorías para bucket ${currentBucket}`);
-        }
-      } else {
-        // Intentar cargar del formato antiguo como respaldo
-        const oldStorageKey = `docubox_saved_tags_${currentBucket}`;
-        const oldSavedTags = localStorage.getItem(oldStorageKey);
+      console.log('Respuesta de la API getTags:', response);
+      
+      if (response && response.success && response.tags) {
+        // Extraer todas las etiquetas
+        const allTags = response.tags.map(tag => tag.tag_name);
         
-        if (oldSavedTags) {
-          const parsedTags = JSON.parse(oldSavedTags);
-          if (Array.isArray(parsedTags)) {
-            setSuggestedTags(parsedTags);
-            console.log(`${parsedTags.length} etiquetas cargadas del formato antiguo para bucket ${currentBucket}`);
-          }
-        } else {
-          console.log(`No hay etiquetas guardadas para el bucket ${currentBucket}`);
-          setSuggestedTags([]);
-        }
+        // Eliminar duplicados
+        const uniqueTags = [...new Set(allTags)];
+        console.log('Etiquetas únicas extraídas:', uniqueTags);
+        setSuggestedTags(uniqueTags);
+        console.log(`${uniqueTags.length} etiquetas cargadas desde la API`);
+      } else if (response && response.success && response.tagsByCategory) {
+        // Alternativa: extraer de tagsByCategory si está disponible
+        const allTags = [];
+        Object.entries(response.tagsByCategory).forEach(([category, tags]) => {
+          allTags.push(...tags);
+          console.log(`Categoría ${category} tiene ${tags.length} etiquetas`);
+        });
+        
+        const uniqueTags = [...new Set(allTags)];
+        console.log('Etiquetas únicas extraídas de tagsByCategory:', uniqueTags);
+        setSuggestedTags(uniqueTags);
+        console.log(`${uniqueTags.length} etiquetas cargadas desde la API (usando tagsByCategory)`);
+      } else {
+        console.log('No se pudieron cargar etiquetas desde la API. Respuesta:', response);
+        setSuggestedTags([]);
       }
     } catch (error) {
-      console.error('Error al cargar etiquetas guardadas:', error);
+      console.error('Error al cargar etiquetas desde la API:', error);
       setSuggestedTags([]);
     }
   };
@@ -216,99 +210,8 @@ const handleSave = () => {
       lastModified: new Date().toISOString().split('T')[0]
     };
     
-    // Guardar cualquier etiqueta nueva en localStorage
-if (tags.length > 0) {
-  try {
-    // Obtener el bucket actual
-    const currentBucket = getCurrentBucket();
-    const categoriesStorageKey = `docubox_tags_categories_${currentBucket}`;
-    const oldStorageKey = `docubox_saved_tags_${currentBucket}`;
-    
-    // Primero intentar actualizar en el nuevo formato de categorías
-    const savedCategories = localStorage.getItem(categoriesStorageKey);
-    if (savedCategories) {
-      let parsedCategories = JSON.parse(savedCategories);
-      let defaultCategory = parsedCategories.find(cat => cat.name === 'General');
-      let tagsUpdated = false;
-      
-      // Si no existe la categoría General, crearla
-      if (!defaultCategory) {
-        defaultCategory = {
-          id: 'default',
-          name: 'General',
-          tags: []
-        };
-        parsedCategories.push(defaultCategory);
-      }
-      
-      // Añadir solo etiquetas que no existan ya en ninguna categoría
-      const allExistingTags = [];
-      parsedCategories.forEach(cat => {
-        if (cat.tags && Array.isArray(cat.tags)) {
-          allExistingTags.push(...cat.tags);
-        }
-      });
-      
-      tags.forEach(tag => {
-        if (!allExistingTags.includes(tag)) {
-          // Buscar el índice de la categoría General
-          const defaultCatIndex = parsedCategories.findIndex(cat => cat.name === 'General');
-          if (defaultCatIndex !== -1) {
-            // Asegurarse de que tags es un array
-            if (!parsedCategories[defaultCatIndex].tags) {
-              parsedCategories[defaultCatIndex].tags = [];
-            }
-            parsedCategories[defaultCatIndex].tags.push(tag);
-            tagsUpdated = true;
-          }
-        }
-      });
-      
-      // Guardar categorías actualizadas
-      if (tagsUpdated) {
-        localStorage.setItem(categoriesStorageKey, JSON.stringify(parsedCategories));
-        console.log(`Categorías de etiquetas actualizadas para el bucket ${currentBucket}`);
-      }
-      
-      // Extraer todas las etiquetas para actualizar las sugerencias
-      const allTags = [];
-      parsedCategories.forEach(cat => {
-        if (cat.tags && Array.isArray(cat.tags)) {
-          allTags.push(...cat.tags);
-        }
-      });
-      const uniqueTags = [...new Set(allTags)];
-      setSuggestedTags(uniqueTags);
-    } else {
-      // Si no hay categorías, usar el formato antiguo como respaldo
-      // Recuperar etiquetas existentes para este bucket específico
-      const savedTags = localStorage.getItem(oldStorageKey);
-      let existingTags = [];
-      
-      if (savedTags) {
-        existingTags = JSON.parse(savedTags);
-      }
-      
-      // Añadir solo etiquetas que no existan ya
-      let tagsUpdated = false;
-      tags.forEach(tag => {
-        if (!existingTags.includes(tag)) {
-          existingTags.push(tag);
-          tagsUpdated = true;
-        }
-      });
-      
-      // Guardar en localStorage si hubo cambios
-      if (tagsUpdated) {
-        localStorage.setItem(oldStorageKey, JSON.stringify(existingTags));
-        setSuggestedTags(existingTags);
-        console.log(`Etiquetas actualizadas para el bucket ${currentBucket} (formato antiguo)`);
-      }
-    }
-  } catch (error) {
-    console.error('Error al actualizar etiquetas guardadas:', error);
-  }
-}
+    // Ya no guardamos nuevas etiquetas aquí, solo se añaden etiquetas existentes
+console.log('Guardando archivo con etiquetas:', tags);
     
     console.log('Metadatos actualizados localmente:', updatedMetadata);
     
@@ -342,64 +245,13 @@ alert("Metadatos guardados correctamente");
   }
 };
 
-  // Función para añadir una nueva etiqueta y guardarla en localStorage
+// Función para añadir la etiqueta seleccionada al archivo
 const handleAddTag = () => {
-  if (newTag.trim() && !tags.includes(newTag.trim())) {
-    const trimmedTag = newTag.trim();
-    
-    // Añadir a las etiquetas actuales
-    setTags([...tags, trimmedTag]);
-    
-    // Guardar en localStorage si es una etiqueta nueva
-    if (!suggestedTags.includes(trimmedTag)) {
-      const updatedSuggestions = [...suggestedTags, trimmedTag];
-      setSuggestedTags(updatedSuggestions);
-      
-      try {
-        // Obtener el bucket actual
-        const currentBucket = getCurrentBucket();
-        const categoriesStorageKey = `docubox_tags_categories_${currentBucket}`;
-        const oldStorageKey = `docubox_saved_tags_${currentBucket}`;
-        
-        // Primero intentar guardar en el nuevo formato de categorías
-        const savedCategories = localStorage.getItem(categoriesStorageKey);
-        if (savedCategories) {
-          let parsedCategories = JSON.parse(savedCategories);
-          // Buscar la categoría General o crear una nueva
-          let defaultCategoryIndex = parsedCategories.findIndex(cat => cat.name === 'General');
-          
-          if (defaultCategoryIndex === -1) {
-            // Si no existe la categoría General, crearla
-            parsedCategories.push({
-              id: 'default',
-              name: 'General',
-              tags: [trimmedTag]
-            });
-          } else {
-            // Asegurarse de que la categoría tiene un array de tags
-            if (!parsedCategories[defaultCategoryIndex].tags) {
-              parsedCategories[defaultCategoryIndex].tags = [];
-            }
-            // Añadir la nueva etiqueta
-            parsedCategories[defaultCategoryIndex].tags.push(trimmedTag);
-          }
-          
-          // Guardar categorías actualizadas
-          localStorage.setItem(categoriesStorageKey, JSON.stringify(parsedCategories));
-          console.log(`Etiqueta "${trimmedTag}" guardada en la categoría General para bucket ${currentBucket}`);
-        } else {
-          // Si no hay formato de categorías, usar el formato antiguo
-          localStorage.setItem(oldStorageKey, JSON.stringify(updatedSuggestions));
-          console.log(`Etiqueta "${trimmedTag}" guardada para el bucket ${currentBucket} (formato antiguo)`);
-        }
-      } catch (error) {
-        console.error('Error al guardar etiqueta en localStorage:', error);
-      }
-    }
-    
-    // Limpiar input y ocultar sugerencias
+  if (newTag && !tags.includes(newTag)) {
+    // Añadir a las etiquetas actuales del archivo
+    setTags([...tags, newTag]);
+    // Resetear el selector
     setNewTag('');
-    setShowSuggestions(false);
   }
 };
 
@@ -480,37 +332,29 @@ const handleSelectSuggestion = (tag) => {
               </div>
               
               <div className="add-tag-container">
-                <div className="tag-input-wrapper">
-                  <input
-                    type="text"
-                    value={newTag}
-                    onChange={handleTagInputChange}
-                    placeholder="Nueva etiqueta"
-                    className="tag-input"
-                  />
-                  {showSuggestions && (
-                    <div className="tag-suggestions">
-                      {filteredSuggestions.map((tag, index) => (
-                        <div 
-                          key={index} 
-                          className="tag-suggestion"
-                          onClick={() => handleSelectSuggestion(tag)}
-                        >
-                          {tag}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={handleAddTag}
-                  className="add-tag-btn"
-                >
-                  Añadir
-                </button>
-              </div>
-
+  <div className="tag-select-wrapper">
+    <select
+      value={newTag}
+      onChange={(e) => setNewTag(e.target.value)}
+      className="tag-select"
+    >
+      <option value="">-- Seleccionar etiqueta --</option>
+      {suggestedTags.map((tag, index) => (
+        <option key={index} value={tag}>
+          {tag}
+        </option>
+      ))}
+    </select>
+  </div>
+  <button
+    type="button"
+    onClick={handleAddTag}
+    className="add-tag-btn"
+    disabled={!newTag}
+  >
+    Añadir
+  </button>
+</div>
 
             </div>
             

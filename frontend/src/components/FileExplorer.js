@@ -21,7 +21,17 @@ const FileExplorer = ({ userRole, username }) => {
     setError(null);
     try {
       const data = await api.listFiles(path);  // Usar api.listFiles
-      setFiles(data);
+      
+      // Filtrar archivos .metadata para que no se muestren
+      const filteredData = data.filter(file => {
+        return !file.name.endsWith('.metadata') && 
+               !file.name.endsWith('.youtube.metadata') && 
+               !file.name.endsWith('.audio.metadata') &&
+               !file.name.endsWith('.image.metadata') &&
+               !file.name.endsWith('.access.metadata');
+      });
+      
+      setFiles(filteredData);
     } catch (err) {
       console.error('Error al cargar archivos:', err);
       setError('No se pudieron cargar los archivos. Por favor intente nuevamente.');
@@ -51,7 +61,7 @@ const FileExplorer = ({ userRole, username }) => {
 
   // Función mejorada para manejar la búsqueda (normal, por etiquetas y por fecha)
 
-  const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false) => {
+  const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false, filterMetadata = true) => {
     setIsLoading(true);
     setError(null);
     
@@ -62,7 +72,7 @@ const FileExplorer = ({ userRole, username }) => {
       if (isDirectResults) {
         console.log('Recibidos resultados directos de búsqueda combinada:', term.length);
         results = term; // En este caso, term contiene directamente los resultados
-        setSearchTerm('Búsqueda combinada: Etiqueta + Fecha');
+        setSearchTerm('Búsqueda combinada');
       }
       else if (isTagSearch) {
         console.log('Iniciando búsqueda por etiqueta:', term);
@@ -110,31 +120,43 @@ const FileExplorer = ({ userRole, username }) => {
         setSearchTerm(term);
         results = await api.searchFiles(term);
       }
-    
-    setSearchResults(results);
-    setIsSearchMode(true);
-    
-    // Mostrar mensaje si no hay resultados
-    if (results.length === 0) {
-      if (isTagSearch) {
-        setError(`No se encontraron archivos con la etiqueta "${term}"`);
-      } else if (isDateSearch) {
-        setError(`No se encontraron archivos para la fecha especificada`);
-      } else {
-        setError(`No se encontraron resultados para "${term}"`);
+  
+      // Filtrar archivos de metadata si es necesario
+      if (filterMetadata) {
+        results = results.filter(file => {
+          return !file.name.endsWith('.metadata') && 
+                 !file.name.endsWith('.youtube.metadata') && 
+                 !file.name.endsWith('.audio.metadata') &&
+                 !file.name.endsWith('.image.metadata') &&
+                 !file.name.endsWith('.access.metadata');
+        });
+        console.log('Resultados después de filtrar archivos metadata:', results.length);
       }
-    } else {
-      // Limpiar el mensaje de error si hay resultados
-      setError(null);
+    
+      setSearchResults(results);
+      setIsSearchMode(true);
+      
+      // Mostrar mensaje si no hay resultados
+      if (results.length === 0) {
+        if (isTagSearch) {
+          setError(`No se encontraron archivos con la etiqueta "${term}"`);
+        } else if (isDateSearch) {
+          setError(`No se encontraron archivos para la fecha especificada`);
+        } else {
+          setError(`No se encontraron resultados para "${term}"`);
+        }
+      } else {
+        // Limpiar el mensaje de error si hay resultados
+        setError(null);
+      }
+    } catch (err) {
+      console.error('Error en la búsqueda:', err);
+      setError(`Error al realizar la búsqueda: ${err.message}`);
+      setIsSearchMode(false);
+    } finally {
+      setIsLoading(false);
     }
-  } catch (err) {
-    console.error('Error en la búsqueda:', err);
-    setError(`Error al realizar la búsqueda: ${err.message}`);
-    setIsSearchMode(false);
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
   // Función para obtener todos los archivos de forma recursiva
   const fetchAllFiles = async (path = '') => {

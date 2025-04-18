@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './TagManager.css'; // Crearemos este archivo después
+import * as api from '../services/api';
 
 const TagManager = () => {
   const [categories, setCategories] = useState([]);
@@ -9,73 +10,88 @@ const TagManager = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-// Obtener el bucket actual del token en localStorage
-const getCurrentBucket = () => {
-  try {
-    // Intentar primero obtener desde user_session (nuevo formato)
-    const userSession = localStorage.getItem('user_session');
-    if (userSession) {
-      const userData = JSON.parse(userSession);
-      if (userData.bucket) {
-        console.log('Obteniendo bucket desde user_session:', userData.bucket);
-        return userData.bucket;
+  // Obtener el bucket actual del token en localStorage
+  const getCurrentBucket = () => {
+    try {
+      // Intentar primero obtener desde user_session (nuevo formato)
+      const userSession = localStorage.getItem('user_session');
+      if (userSession) {
+        const userData = JSON.parse(userSession);
+        if (userData.bucket) {
+          console.log('Obteniendo bucket desde user_session:', userData.bucket);
+          return userData.bucket;
+        }
       }
+      
+      // Si no funciona, intentar desde authToken (formato usado en otros componentes)
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try {
+          const tokenData = JSON.parse(atob(token));
+          if (tokenData.bucket) {
+            console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
+            return tokenData.bucket;
+          }
+        } catch (tokenError) {
+          console.error('Error al decodificar authToken:', tokenError);
+        }
+      }
+    } catch (error) {
+      console.error('Error al obtener bucket del almacenamiento:', error);
     }
     
-    // Si no funciona, intentar desde authToken (formato usado en otros componentes)
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      try {
-        const tokenData = JSON.parse(atob(token));
-        if (tokenData.bucket) {
-          console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
-          return tokenData.bucket;
-        }
-      } catch (tokenError) {
-        console.error('Error al decodificar authToken:', tokenError);
-      }
-    }
-  } catch (error) {
-    console.error('Error al obtener bucket del almacenamiento:', error);
-  }
-  
-  console.log('Usando bucket por defecto: master');
-  return 'master'; // valor por defecto
-};
-
-// Construir la clave para almacenar etiquetas en localStorage
-const getTagsStorageKey = () => {
-  const currentBucket = getCurrentBucket();
-  return `docubox_tags_categories_${currentBucket}`;
-};
+    console.log('Usando bucket por defecto: master');
+    return 'master'; // valor por defecto
+  };
 
   // Cargar categorías y etiquetas al iniciar
   useEffect(() => {
-    loadTagsAndCategories();
+    // Función autoejecutada asíncrona
+    (async () => {
+      try {
+        await loadTagsAndCategories();
+      } catch (error) {
+        console.error('Error al cargar datos iniciales:', error);
+        setError('Error al cargar etiquetas. Por favor, recarga la página.');
+      }
+    })();
   }, []);
 
-  // Función para cargar categorías y etiquetas desde localStorage
-  const loadTagsAndCategories = () => {
+  // Función para cargar categorías y etiquetas desde el servidor
+  const loadTagsAndCategories = async () => {
     try {
-      const storageKey = getTagsStorageKey();
-      const savedData = localStorage.getItem(storageKey);
+      setError('');
+      // Obtener datos del servidor
+      const response = await api.getTags();
       
-      if (savedData) {
-        const parsedData = JSON.parse(savedData);
-        setCategories(parsedData);
-        console.log(`Se cargaron ${parsedData.length} categorías de etiquetas`);
-      } else {
-        // Si no hay datos, inicializar con una categoría por defecto
-        const defaultCategories = [
-          {
-            id: 'default',
+      if (response && response.success) {
+        // Transformar los datos al formato que espera el componente
+        const transformedData = [];
+        const tagsByCategory = response.tagsByCategory || {};
+        
+        // Convertir de formato de API a formato del componente
+        Object.keys(tagsByCategory).forEach(categoryName => {
+          transformedData.push({
+            id: categoryName, // Usamos el nombre como ID para simplificar
+            name: categoryName,
+            tags: tagsByCategory[categoryName] || []
+          });
+        });
+        
+        // Si no hay categorías, inicializar con una categoría por defecto
+        if (transformedData.length === 0) {
+          transformedData.push({
+            id: 'General',
             name: 'General',
             tags: []
-          }
-        ];
-        setCategories(defaultCategories);
-        localStorage.setItem(storageKey, JSON.stringify(defaultCategories));
-        console.log('Se inicializó con categoría por defecto');
+          });
+        }
+        
+        setCategories(transformedData);
+        console.log(`Se cargaron ${transformedData.length} categorías de etiquetas`);
+      } else {
+        console.error('Error en la respuesta del servidor:', response);
+        setError('Error al cargar etiquetas del servidor');
       }
     } catch (error) {
       console.error('Error al cargar etiquetas:', error);
@@ -83,20 +99,8 @@ const getTagsStorageKey = () => {
     }
   };
 
-  // Guardar cambios en localStorage
-  const saveTagsAndCategories = (updatedCategories) => {
-    try {
-      const storageKey = getTagsStorageKey();
-      localStorage.setItem(storageKey, JSON.stringify(updatedCategories));
-      setCategories(updatedCategories);
-    } catch (error) {
-      console.error('Error al guardar etiquetas:', error);
-      setError('Error al guardar los cambios. Por favor, intenta de nuevo.');
-    }
-  };
-
   // Añadir una nueva categoría
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
     if (!newCategory.trim()) {
       setError('Por favor, ingresa un nombre para la categoría');
       return;
@@ -108,39 +112,74 @@ const getTagsStorageKey = () => {
       return;
     }
 
-    const updatedCategories = [
-      ...categories,
-      {
-        id: Date.now().toString(),
-        name: newCategory.trim(),
-        tags: []
+    try {
+      setError('');
+      const response = await api.createTagCategory(newCategory.trim());
+      
+      if (response && response.success) {
+        // Recargar todas las categorías y etiquetas
+        await loadTagsAndCategories();
+        setNewCategory('');
+        setSuccess('Categoría creada correctamente');
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        console.error('Error al crear categoría:', response);
+        setError('Error al crear categoría. Por favor, intenta de nuevo.');
       }
-    ];
-
-    saveTagsAndCategories(updatedCategories);
-    setNewCategory('');
-    setError('');
-    setSuccess('Categoría creada correctamente');
-    setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error al crear categoría:', error);
+      setError('Error al crear categoría. Por favor, intenta de nuevo.');
+    }
   };
 
-  // Eliminar una categoría
-  const handleDeleteCategory = (categoryId) => {
+  // Eliminar una categoría (eliminando todas sus etiquetas)
+  const handleDeleteCategory = async (categoryId) => {
     if (window.confirm('¿Estás seguro de que deseas eliminar esta categoría y todas sus etiquetas?')) {
-      const updatedCategories = categories.filter(cat => cat.id !== categoryId);
-      saveTagsAndCategories(updatedCategories);
-      
-      if (selectedCategory === categoryId) {
-        setSelectedCategory(null);
+      try {
+        setError('');
+        
+        // Encontrar la categoría
+        const category = categories.find(cat => cat.id === categoryId);
+        if (!category) {
+          setError('Categoría no encontrada');
+          return;
+        }
+        
+        // Obtener todos los datos de etiquetas para encontrar los IDs
+        const tagsResponse = await api.getTags();
+        if (!tagsResponse.success) {
+          setError('Error al obtener etiquetas');
+          return;
+        }
+        
+        // Filtrar las etiquetas que pertenecen a esta categoría
+        const tagsToDelete = tagsResponse.tags.filter(tag => 
+          tag.category === category.name
+        );
+        
+        // Eliminar cada etiqueta una por una
+        for (const tag of tagsToDelete) {
+          await api.deleteTag(tag.id);
+        }
+        
+        // Recargar todas las categorías y etiquetas
+        await loadTagsAndCategories();
+        
+        if (selectedCategory === categoryId) {
+          setSelectedCategory(null);
+        }
+        
+        setSuccess('Categoría eliminada correctamente');
+        setTimeout(() => setSuccess(''), 3000);
+      } catch (error) {
+        console.error('Error al eliminar categoría:', error);
+        setError('Error al eliminar categoría. Por favor, intenta de nuevo.');
       }
-      
-      setSuccess('Categoría eliminada correctamente');
-      setTimeout(() => setSuccess(''), 3000);
     }
   };
 
   // Añadir una nueva etiqueta a la categoría seleccionada
-  const handleAddTag = () => {
+  const handleAddTag = async () => {
     if (!selectedCategory) {
       setError('Por favor, selecciona una categoría primero');
       return;
@@ -150,45 +189,85 @@ const getTagsStorageKey = () => {
       setError('Por favor, ingresa un nombre para la etiqueta');
       return;
     }
+    
+    // Encontrar la categoría seleccionada
+    const selectedCat = categories.find(cat => cat.id === selectedCategory);
+    if (!selectedCat) {
+      setError('Categoría no encontrada');
+      return;
+    }
 
-    const updatedCategories = categories.map(cat => {
-      if (cat.id === selectedCategory) {
-        // Verificar si la etiqueta ya existe en esta categoría
-        if (cat.tags.includes(newTag.trim())) {
-          setError('Esta etiqueta ya existe en la categoría seleccionada');
-          return cat;
-        }
-        
-        return {
-          ...cat,
-          tags: [...cat.tags, newTag.trim()]
-        };
+    // Verificar si la etiqueta ya existe en esta categoría
+    if (selectedCat.tags.includes(newTag.trim())) {
+      setError('Esta etiqueta ya existe en la categoría seleccionada');
+      return;
+    }
+
+    try {
+      setError('');
+      const response = await api.createTag(newTag.trim(), selectedCat.name);
+      
+      if (response && response.success) {
+        // Recargar todas las categorías y etiquetas
+        await loadTagsAndCategories();
+        setNewTag('');
+        setSuccess('Etiqueta añadida correctamente');
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        console.error('Error al crear etiqueta:', response);
+        setError('Error al crear etiqueta. Por favor, intenta de nuevo.');
       }
-      return cat;
-    });
-
-    saveTagsAndCategories(updatedCategories);
-    setNewTag('');
-    setError('');
-    setSuccess('Etiqueta añadida correctamente');
-    setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error al crear etiqueta:', error);
+      setError('Error al crear etiqueta. Por favor, intenta de nuevo.');
+    }
   };
 
   // Eliminar una etiqueta de una categoría
-  const handleDeleteTag = (categoryId, tagToDelete) => {
-    const updatedCategories = categories.map(cat => {
-      if (cat.id === categoryId) {
-        return {
-          ...cat,
-          tags: cat.tags.filter(tag => tag !== tagToDelete)
-        };
+  const handleDeleteTag = async (categoryId, tagToDelete) => {
+    try {
+      setError('');
+      
+      // Encontrar la categoría
+      const category = categories.find(cat => cat.id === categoryId);
+      if (!category) {
+        setError('Categoría no encontrada');
+        return;
       }
-      return cat;
-    });
-
-    saveTagsAndCategories(updatedCategories);
-    setSuccess('Etiqueta eliminada correctamente');
-    setTimeout(() => setSuccess(''), 3000);
+      
+      // Obtener todos los datos de etiquetas para encontrar el ID
+      const tagsResponse = await api.getTags();
+      if (!tagsResponse.success) {
+        setError('Error al obtener etiquetas');
+        return;
+      }
+      
+      // Buscar la etiqueta específica que queremos eliminar
+      const tagToDeleteData = tagsResponse.tags.find(tag => 
+        tag.category === category.name && tag.tag_name === tagToDelete
+      );
+      
+      if (!tagToDeleteData) {
+        setError('Etiqueta no encontrada');
+        return;
+      }
+      
+      // Eliminar la etiqueta
+      const response = await api.deleteTag(tagToDeleteData.id);
+      
+      if (response && response.success) {
+        // Recargar todas las categorías y etiquetas
+        await loadTagsAndCategories();
+        setSuccess('Etiqueta eliminada correctamente');
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        console.error('Error al eliminar etiqueta:', response);
+        setError('Error al eliminar etiqueta. Por favor, intenta de nuevo.');
+      }
+    } catch (error) {
+      console.error('Error al eliminar etiqueta:', error);
+      setError('Error al eliminar etiqueta. Por favor, intenta de nuevo.');
+    }
   };
 
   return (

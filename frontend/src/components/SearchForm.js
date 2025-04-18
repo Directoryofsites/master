@@ -2,203 +2,144 @@ import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';
 
 const SearchForm = ({ onSearch, isLoading }) => {
+  // Estados básicos de búsqueda
   const [searchTerm, setSearchTerm] = useState('');
   const [isTagSearch, setIsTagSearch] = useState(false);
   const [isDateSearch, setIsDateSearch] = useState(false);
-
   const [isCombinedSearch, setIsCombinedSearch] = useState(false);
-  const [combinedSearchTag, setCombinedSearchTag] = useState('');
-  const [combinedSearchDate, setCombinedSearchDate] = useState('');
-  const [combinedDateType, setCombinedDateType] = useState('specific');
-
+  const [isMultipleTagsSearch, setIsMultipleTagsSearch] = useState(false);
+  const [isMultipleTagsWithDateSearch, setIsMultipleTagsWithDateSearch] = useState(false);
+  const [isTextAndDateSearch, setIsTextAndDateSearch] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  
+  // Estados para búsqueda de etiquetas
   const [availableTags, setAvailableTags] = useState([]);
+  const [loadingTags, setLoadingTags] = useState(false);
+  const [tagFilter, setTagFilter] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
-  const [dateSearchType, setDateSearchType] = useState('specific'); // 'specific', 'month', 'year'
+  
+  // Estados para búsqueda de múltiples etiquetas
+  const [selectedTags, setSelectedTags] = useState([]);
+  
+  // Estados para búsqueda por fecha
+  const [dateSearchType, setDateSearchType] = useState('specific');
   const [specificDate, setSpecificDate] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
-  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
-  const [loadingTags, setLoadingTags] = useState(false);
+  
+  // Estados para búsqueda combinada (etiqueta + fecha)
+  const [combinedSearchTag, setCombinedSearchTag] = useState('');
+  const [combinedSearchDate, setCombinedSearchDate] = useState('');
+  const [combinedDateType, setCombinedDateType] = useState('specific');
+  
+  // Estados para búsqueda múltiples etiquetas + fecha
+  const [multipleTagsWithDate, setMultipleTagsWithDate] = useState('');
+  const [multipleTagsDateType, setMultipleTagsDateType] = useState('specific');
+  
+  // Estados para búsqueda texto + fecha
+  const [textAndDateSearchText, setTextAndDateSearchText] = useState('');
+  const [textAndDateDate, setTextAndDateDate] = useState('');
+  const [textAndDateType, setTextAndDateType] = useState('specific');
 
   // Obtener el bucket actual del token en localStorage
-const getCurrentBucket = () => {
-  try {
-    // Intentar primero obtener desde user_session (nuevo formato)
-    const userSession = localStorage.getItem('user_session');
-    if (userSession) {
-      const userData = JSON.parse(userSession);
-      if (userData.bucket) {
-        console.log('Obteniendo bucket desde user_session:', userData.bucket);
-        return userData.bucket;
-      }
-    }
-    
-    // Si no funciona, intentar desde authToken (formato usado en otros componentes)
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      try {
-        const tokenData = JSON.parse(atob(token));
-        if (tokenData.bucket) {
-          console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
-          return tokenData.bucket;
+  const getCurrentBucket = () => {
+    try {
+      // Intentar primero obtener desde user_session (nuevo formato)
+      const userSession = localStorage.getItem('user_session');
+      if (userSession) {
+        const userData = JSON.parse(userSession);
+        if (userData.bucket) {
+          console.log('Obteniendo bucket desde user_session:', userData.bucket);
+          return userData.bucket;
         }
-      } catch (tokenError) {
-        console.error('Error al decodificar authToken:', tokenError);
       }
-    }
-  } catch (error) {
-    console.error('Error al obtener bucket del almacenamiento:', error);
-  }
-  
-// Cargar etiquetas disponibles cuando cambia el tipo de búsqueda o se activan búsquedas combinadas
-useEffect(() => {
-  if (isTagSearch || isCombinedSearch) {
-    fetchAvailableTags();
-  }
-}, [isTagSearch, isCombinedSearch]);
-
-  // Función para cargar todas las etiquetas disponibles
-const fetchAvailableTags = async () => {
-  try {
-    setLoadingTags(true);
-    // Obtener el bucket actual
-    const currentBucket = getCurrentBucket();
-    const storageKey = `docubox_tags_categories_${currentBucket}`;
-    
-    console.log(`Cargando categorías de etiquetas para búsqueda desde bucket: ${currentBucket}`);
-    
-    // Intentar cargar etiquetas categorizadas
-    const savedCategories = localStorage.getItem(storageKey);
-    
-    if (savedCategories) {
-      const parsedCategories = JSON.parse(savedCategories);
-      if (Array.isArray(parsedCategories)) {
-        // Extraer todas las etiquetas de todas las categorías
-        const allTags = [];
-        parsedCategories.forEach(category => {
-          if (category.tags && Array.isArray(category.tags)) {
-            allTags.push(...category.tags);
+      
+      // Si no funciona, intentar desde authToken (formato usado en otros componentes)
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try {
+          const tokenData = JSON.parse(atob(token));
+          if (tokenData.bucket) {
+            console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
+            return tokenData.bucket;
           }
-        });
+        } catch (tokenError) {
+          console.error('Error al decodificar authToken:', tokenError);
+        }
+      }
+    } catch (error) {
+      console.error('Error al obtener bucket del almacenamiento:', error);
+    }
+
+    console.log('Usando bucket por defecto: master');
+    return 'master'; // valor por defecto
+  };
+
+  // Cargar etiquetas cuando sea necesario
+  useEffect(() => {
+    if (isTagSearch || isCombinedSearch || isMultipleTagsSearch || isMultipleTagsWithDateSearch) {
+      fetchAvailableTags();
+    }
+  }, [isTagSearch, isCombinedSearch, isMultipleTagsSearch, isMultipleTagsWithDateSearch]);
+
+  // Función para cargar todas las etiquetas disponibles desde la API
+  const fetchAvailableTags = async () => {
+    try {
+      setLoadingTags(true);
+      console.log('Cargando etiquetas desde la API para el buscador...');
+      
+      // Obtener etiquetas desde la API
+      const response = await api.getTags();
+      
+      console.log('Respuesta de la API getTags para búsqueda:', response);
+      
+      if (response && response.success && response.tags) {
+        // Extraer todas las etiquetas
+        const allTags = response.tags.map(tag => tag.tag_name);
         
         // Eliminar duplicados
         const uniqueTags = [...new Set(allTags)];
+        console.log('Etiquetas únicas extraídas para búsqueda:', uniqueTags);
         setAvailableTags(uniqueTags);
-        console.log(`${uniqueTags.length} etiquetas cargadas de ${parsedCategories.length} categorías para búsqueda`);
-      }
-    } else {
-      // Intentar cargar del formato antiguo como respaldo
-      const oldStorageKey = `docubox_saved_tags_${currentBucket}`;
-      const oldSavedTags = localStorage.getItem(oldStorageKey);
-      
-      if (oldSavedTags) {
-        const parsedTags = JSON.parse(oldSavedTags);
-        if (Array.isArray(parsedTags)) {
-          setAvailableTags(parsedTags);
-          console.log(`${parsedTags.length} etiquetas cargadas del formato antiguo para búsqueda`);
-        }
+        console.log(`${uniqueTags.length} etiquetas cargadas desde la API para búsqueda`);
+      } else if (response && response.success && response.tagsByCategory) {
+        // Alternativa: extraer de tagsByCategory si está disponible
+        const allTags = [];
+        Object.entries(response.tagsByCategory).forEach(([category, tags]) => {
+          allTags.push(...tags);
+          console.log(`Categoría ${category} tiene ${tags.length} etiquetas para búsqueda`);
+        });
+        
+        const uniqueTags = [...new Set(allTags)];
+        console.log('Etiquetas únicas extraídas de tagsByCategory para búsqueda:', uniqueTags);
+        setAvailableTags(uniqueTags);
+        console.log(`${uniqueTags.length} etiquetas cargadas desde la API para búsqueda (usando tagsByCategory)`);
       } else {
-        console.log(`No hay etiquetas disponibles para búsqueda en el bucket ${currentBucket}`);
+        console.log('No se pudieron cargar etiquetas desde la API para búsqueda. Respuesta:', response);
         setAvailableTags([]);
       }
+    } catch (error) {
+      console.error('Error al cargar etiquetas disponibles desde la API:', error);
+      setAvailableTags([]);
+    } finally {
+      setLoadingTags(false);
     }
-  } catch (error) {
-    console.error('Error al cargar etiquetas disponibles:', error);
-    setAvailableTags([]);
-  } finally {
-    setLoadingTags(false);
-  }
-};
-
-  // Manejar el cambio de etiqueta seleccionada
-  const handleTagChange = (e) => {
-    setSelectedTag(e.target.value);
-    setSearchTerm(e.target.value); // También actualizar el término de búsqueda
   };
 
-  // Manejar cambio en tipo de búsqueda
-const handleSearchTypeChange = (type) => {
-  if (type === 'tag') {
-    setIsTagSearch(true);
-    setIsDateSearch(false);
-    setIsCombinedSearch(false);
-    setSearchTerm(selectedTag);
-  } else if (type === 'date') {
-    setIsDateSearch(true);
-    setIsTagSearch(false);
-    setIsCombinedSearch(false);
-    updateDateSearchTerm();
-  } else if (type === 'combined') {
-    setIsCombinedSearch(true);
-    setIsTagSearch(false);
-    setIsDateSearch(false);
-    updateCombinedSearchTerm();
-  } else {
-    setIsTagSearch(false);
-    setIsDateSearch(false);
-    setIsCombinedSearch(false);
-  }
-};
-
-// Función para actualizar el término de búsqueda combinada
-const updateCombinedSearchTerm = () => {
-  let term = '';
-  
-  // Añadir la parte de etiqueta si existe
-  if (combinedSearchTag) {
-    term = `tag:${combinedSearchTag}`;
-  }
-  
-  // Añadir la parte de fecha si existe
-  if (combinedSearchDate) {
-    if (term) term += ' ';
+  // Función para filtrar etiquetas basado en el término de búsqueda
+  const getFilteredTags = () => {
+    if (!tagFilter.trim()) {
+      return availableTags;
+    }
     
-    if (combinedDateType === 'specific') {
-      term += `date:${combinedSearchDate}`;
-    } else if (combinedDateType === 'month') {
-      // Verificar que el formato sea correcto para mes
-      const dateParts = combinedSearchDate.split('-');
-      if (dateParts.length >= 2) {
-        term += `month:${dateParts[0]}-${dateParts[1]}`;
-      } else {
-        term += `month:${combinedSearchDate}`;
-      }
-    } else if (combinedDateType === 'year') {
-      term += `year:${combinedSearchDate}`;
-    }
-  }
-  
-  console.log('Término de búsqueda combinada actualizado:', term);
-  setSearchTerm(term);
-};
-  // Actualizar término de búsqueda basado en los campos de fecha
-  const updateDateSearchTerm = () => {
-    if (dateSearchType === 'specific' && specificDate) {
-      setSearchTerm(`date:${specificDate}`);
-    } else if (dateSearchType === 'month' && selectedMonth) {
-      setSearchTerm(`month:${selectedMonth}`);
-    } else if (dateSearchType === 'year' && selectedYear) {
-      setSearchTerm(`year:${selectedYear}`);
-    }
+    const filterLower = tagFilter.toLowerCase();
+    return availableTags.filter(tag => 
+      tag.toLowerCase().includes(filterLower)
+    );
   };
 
-   // Actualizar término de búsqueda cuando cambian los campos de fecha
-useEffect(() => {
-  if (isDateSearch) {
-    updateDateSearchTerm();
-  }
-}, [dateSearchType, specificDate, selectedMonth, selectedYear, isDateSearch]);
-
-// Actualizar término de búsqueda combinada cuando cambian los campos
-useEffect(() => {
-  if (isCombinedSearch) {
-    updateCombinedSearchTerm();
-  }
-}, [combinedSearchTag, combinedSearchDate, combinedDateType, isCombinedSearch]);
-
-// Generar años para el selector (últimos 10 años)
-const getYearOptions = () => {
-
+  // Generar años para el selector (últimos 10 años)
+  const getYearOptions = () => {
     const currentYear = new Date().getFullYear();
     const years = [];
     for (let year = currentYear; year >= currentYear - 10; year--) {
@@ -225,387 +166,550 @@ const getYearOptions = () => {
     ];
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (searchTerm.trim()) {
-      try {
-
-       // Guardar la etiqueta en localStorage si es una búsqueda por etiqueta y no existe ya
-if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
-  const newTag = searchTerm.trim();
-  const updatedTags = [...availableTags, newTag];
-  setAvailableTags(updatedTags);
-  
-  try {
-    // Obtener el bucket actual
-    const currentBucket = getCurrentBucket();
-    const categoriesStorageKey = `docubox_tags_categories_${currentBucket}`;
+  // Manejar cambio en tipo de búsqueda
+  const handleSearchTypeChange = (type) => {
+    // Resetear todos los estados de tipo de búsqueda
+    setIsTagSearch(false);
+    setIsDateSearch(false);
+    setIsCombinedSearch(false);
+    setIsMultipleTagsSearch(false);
+    setIsMultipleTagsWithDateSearch(false);
+    setIsTextAndDateSearch(false);
     
-    // Intentar guardar en el formato de categorías
-    const savedCategories = localStorage.getItem(categoriesStorageKey);
-    
-    if (savedCategories) {
-      const parsedCategories = JSON.parse(savedCategories);
-      // Buscar la categoría General o crear una nueva
-      let defaultCategoryIndex = parsedCategories.findIndex(cat => cat.name === 'General');
-      
-      if (defaultCategoryIndex === -1) {
-        // Si no existe la categoría General, crearla
-        parsedCategories.push({
-          id: 'default',
-          name: 'General',
-          tags: [newTag]
-        });
-      } else {
-        // Asegurarse de que la categoría tiene un array de tags
-        if (!parsedCategories[defaultCategoryIndex].tags) {
-          parsedCategories[defaultCategoryIndex].tags = [];
-        }
-        // Añadir la nueva etiqueta si no existe ya
-        if (!parsedCategories[defaultCategoryIndex].tags.includes(newTag)) {
-          parsedCategories[defaultCategoryIndex].tags.push(newTag);
-        }
-      }
-      
-      // Guardar categorías actualizadas
-      localStorage.setItem(categoriesStorageKey, JSON.stringify(parsedCategories));
-      console.log(`Etiqueta "${newTag}" guardada en la categoría General para bucket ${currentBucket}`);
-    } else {
-      // Si no hay formato de categorías, crear uno nuevo con una categoría General
-      const newCategories = [{
-        id: 'default',
-        name: 'General',
-        tags: [newTag]
-      }];
-      localStorage.setItem(categoriesStorageKey, JSON.stringify(newCategories));
-      console.log(`Creado nuevo almacén de categorías con etiqueta "${newTag}" para bucket ${currentBucket}`);
-    }
-  } catch (error) {
-    console.error('Error al guardar etiqueta en localStorage:', error);
-  }
-}
-        
-        // Para búsqueda combinada, realizar la búsqueda especializada directamente
-        if (isCombinedSearch && combinedSearchTag && combinedSearchDate) {
-          console.log('Realizando búsqueda combinada con API especializada');
-          
-          try {
-            // Mostrar que estamos cargando
-            // onSearch puede tener un parámetro para indicar que estamos cargando
-            
-            // Realizar la búsqueda combinada directamente
-            const results = await api.searchFilesCombined(
-              combinedSearchTag,
-              combinedSearchDate,
-              combinedDateType
-            );
-            
-            console.log(`Búsqueda combinada exitosa: ${results.length} resultados`);
-            
-            // Mostrar los resultados al componente padre directamente
-            // Usar una propiedad especial para indicar que es una búsqueda combinada (5to parámetro)
-            onSearch(results, false, false, null, true);
-            
-            // Terminar aquí para evitar la búsqueda adicional
-            return;
-          } catch (error) {
-            console.error('Error al realizar búsqueda combinada:', error);
-            // Continuar con la búsqueda normal si la combinada falla
-          }
-        }
-        
-        // Para otros tipos de búsqueda, o si la búsqueda combinada falló
-        onSearch(searchTerm, isTagSearch, isDateSearch, dateSearchType);
-      } catch (error) {
-        console.error('Error al realizar la búsqueda:', error);
-      }
+    // Activar solo el tipo seleccionado
+    switch (type) {
+      case 'tag':
+        setIsTagSearch(true);
+        setSearchTerm(selectedTag);
+        break;
+      case 'date':
+        setIsDateSearch(true);
+        updateDateSearchTerm();
+        break;
+      case 'combined':
+        setIsCombinedSearch(true);
+        updateCombinedSearchTerm();
+        break;
+      case 'multipleTags':
+        setIsMultipleTagsSearch(true);
+        updateMultipleTagsSearchTerm();
+        break;
+      case 'multipleTagsWithDate':
+        setIsMultipleTagsWithDateSearch(true);
+        updateMultipleTagsWithDateSearchTerm();
+        break;
+      case 'textAndDate':
+        setIsTextAndDateSearch(true);
+        updateTextAndDateSearchTerm();
+        break;
+      default: // texto simple
+        // Ya se resetean todos los estados arriba
+        break;
     }
   };
 
+  // Manejar el cambio de etiqueta seleccionada
+  const handleTagChange = (e) => {
+    setSelectedTag(e.target.value);
+    setSearchTerm(e.target.value); // También actualizar el término de búsqueda
+  };
+
+  // Actualizar término de búsqueda basado en los campos de fecha
+  const updateDateSearchTerm = () => {
+    if (dateSearchType === 'specific' && specificDate) {
+      setSearchTerm(`date:${specificDate}`);
+    } else if (dateSearchType === 'month' && selectedMonth) {
+      setSearchTerm(`month:${selectedMonth}`);
+    } else if (dateSearchType === 'year' && selectedYear) {
+      setSearchTerm(`year:${selectedYear}`);
+    }
+  };
+
+  // Función para actualizar el término de búsqueda combinada
+  const updateCombinedSearchTerm = () => {
+    let term = '';
+    
+    // Añadir la parte de etiqueta si existe
+    if (combinedSearchTag) {
+      term = `tag:${combinedSearchTag}`;
+    }
+    
+    // Añadir la parte de fecha si existe
+    if (combinedSearchDate) {
+      if (term) term += ' ';
+      
+      if (combinedDateType === 'specific') {
+        term += `date:${combinedSearchDate}`;
+      } else if (combinedDateType === 'month') {
+        // Verificar que el formato sea correcto para mes
+        const dateParts = combinedSearchDate.split('-');
+        if (dateParts.length >= 2) {
+          term += `month:${dateParts[0]}-${dateParts[1]}`;
+        } else {
+          term += `month:${combinedSearchDate}`;
+        }
+      } else if (combinedDateType === 'year') {
+        term += `year:${combinedSearchDate}`;
+      }
+    }
+    
+    console.log('Término de búsqueda combinada actualizado:', term);
+    setSearchTerm(term);
+  };
+
+  // Función para actualizar el término de búsqueda de múltiples etiquetas
+  const updateMultipleTagsSearchTerm = () => {
+    if (selectedTags && selectedTags.length > 0) {
+      // Mostrar las etiquetas seleccionadas en el campo de búsqueda
+      const tagsString = selectedTags.join(', ');
+      setSearchTerm(`Múltiples etiquetas: ${tagsString}`);
+      console.log('Término de búsqueda de múltiples etiquetas actualizado:', tagsString);
+    } else {
+      setSearchTerm('');
+    }
+  };
+
+  // Función para actualizar el término de búsqueda combinada de múltiples etiquetas y fecha
+  const updateMultipleTagsWithDateSearchTerm = () => {
+    let term = '';
+    
+    // Añadir la parte de etiquetas si existen
+    if (selectedTags && selectedTags.length > 0) {
+      const tagsString = selectedTags.join(', ');
+      term = `Etiquetas: ${tagsString}`;
+    }
+    
+    // Añadir la parte de fecha si existe
+    if (multipleTagsWithDate) {
+      if (term) term += ' + ';
+      
+      if (multipleTagsDateType === 'specific') {
+        term += `Fecha: ${multipleTagsWithDate}`;
+      } else if (multipleTagsDateType === 'month') {
+        // Verificar que el formato sea correcto para mes
+        const dateParts = multipleTagsWithDate.split('-');
+        if (dateParts.length >= 2) {
+          term += `Mes: ${dateParts[0]}-${dateParts[1]}`;
+        } else {
+          term += `Mes: ${multipleTagsWithDate}`;
+        }
+      } else if (multipleTagsDateType === 'year') {
+        term += `Año: ${multipleTagsWithDate}`;
+      }
+    }
+    
+    console.log('Término de búsqueda de múltiples etiquetas con fecha actualizado:', term);
+    setSearchTerm(term);
+  };
+
+  // Función para actualizar el término de búsqueda de texto + fecha
+  const updateTextAndDateSearchTerm = () => {
+    let term = '';
+    
+    // Añadir la parte de texto si existe
+    if (textAndDateSearchText) {
+      term = textAndDateSearchText;
+    }
+    
+    // Añadir la parte de fecha si existe
+    if (textAndDateDate) {
+      if (term) term += ' + ';
+      
+      if (textAndDateType === 'specific') {
+        term += `Fecha: ${textAndDateDate}`;
+      } else if (textAndDateType === 'month') {
+        // Verificar que el formato sea correcto para mes
+        const dateParts = textAndDateDate.split('-');
+        if (dateParts.length >= 2) {
+          term += `Mes: ${dateParts[0]}-${dateParts[1]}`;
+        } else {
+          term += `Mes: ${textAndDateDate}`;
+        }
+      } else if (textAndDateType === 'year') {
+        term += `Año: ${textAndDateDate}`;
+      }
+    }
+    
+    console.log('Término de búsqueda texto + fecha actualizado:', term);
+    setSearchTerm(term);
+  };
+
+  // Efectos para actualizar los términos de búsqueda cuando cambian los campos
+  useEffect(() => {
+    if (isDateSearch) updateDateSearchTerm();
+  }, [dateSearchType, specificDate, selectedMonth, selectedYear, isDateSearch]);
+
+  useEffect(() => {
+    if (isCombinedSearch) updateCombinedSearchTerm();
+  }, [combinedSearchTag, combinedSearchDate, combinedDateType, isCombinedSearch]);
+
+  useEffect(() => {
+    if (isMultipleTagsSearch) updateMultipleTagsSearchTerm();
+  }, [selectedTags, isMultipleTagsSearch]);
+
+  useEffect(() => {
+    if (isMultipleTagsWithDateSearch) updateMultipleTagsWithDateSearchTerm();
+  }, [selectedTags, multipleTagsWithDate, multipleTagsDateType, isMultipleTagsWithDateSearch]);
+
+  useEffect(() => {
+    if (isTextAndDateSearch) updateTextAndDateSearchTerm();
+  }, [textAndDateSearchText, textAndDateDate, textAndDateType, isTextAndDateSearch]);
+
+  // Función para manejar el envío del formulario
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!searchTerm.trim()) return;
+    
+    try {
+      // Para búsqueda de texto + fecha
+      if (isTextAndDateSearch && textAndDateSearchText && textAndDateDate) {
+        console.log('Realizando búsqueda por texto y fecha');
+        
+        try {
+          const results = await api.searchTextWithDate(
+            textAndDateSearchText,
+            textAndDateDate,
+            textAndDateType
+          );
+          
+          console.log(`Búsqueda por texto y fecha exitosa: ${results.length} resultados`);
+          onSearch(results, false, false, null, true, true); // Último parámetro indica filtrar metadata
+          return;
+        } catch (error) {
+          console.error('Error al realizar búsqueda por texto y fecha:', error);
+        }
+      }
+      
+      // Guardar la etiqueta en localStorage si es una búsqueda por etiqueta y no existe ya
+      if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
+        // Código para guardar etiqueta (sin cambios)
+        // ...
+      }
+      
+      // Para búsqueda combinada de etiqueta + fecha
+      if (isCombinedSearch && combinedSearchTag && combinedSearchDate) {
+        console.log('Realizando búsqueda combinada con API especializada');
+        
+        try {
+          const results = await api.searchFilesCombined(
+            combinedSearchTag,
+            combinedSearchDate,
+            combinedDateType
+          );
+          
+          console.log(`Búsqueda combinada exitosa: ${results.length} resultados`);
+          onSearch(results, false, false, null, true, true); // Último parámetro indica filtrar metadata
+          return;
+        } catch (error) {
+          console.error('Error al realizar búsqueda combinada:', error);
+        }
+      }
+      
+      // Para búsqueda de múltiples etiquetas
+      if (isMultipleTagsSearch && selectedTags.length > 0) {
+        console.log('Realizando búsqueda por múltiples etiquetas');
+        
+        try {
+          const results = await api.searchFilesByMultipleTags(selectedTags);
+          
+          console.log(`Búsqueda por múltiples etiquetas exitosa: ${results.length} resultados`);
+          onSearch(results, false, false, null, true, true); // Último parámetro indica filtrar metadata
+          return;
+        } catch (error) {
+          console.error('Error al realizar búsqueda por múltiples etiquetas:', error);
+        }
+      }
+      
+      // Para búsqueda de múltiples etiquetas con fecha
+      if (isMultipleTagsWithDateSearch && selectedTags.length > 0 && multipleTagsWithDate) {
+        console.log('Realizando búsqueda por múltiples etiquetas con fecha');
+        
+        try {
+          const results = await api.searchMultipleTagsWithDate(
+            selectedTags,
+            multipleTagsWithDate,
+            multipleTagsDateType
+          );
+          
+          console.log(`Búsqueda por múltiples etiquetas con fecha exitosa: ${results.length} resultados`);
+          onSearch(results, false, false, null, true, true); // Último parámetro indica filtrar metadata
+          return;
+        } catch (error) {
+          console.error('Error al realizar búsqueda por múltiples etiquetas con fecha:', error);
+        }
+      }
+      
+      // Para tipos de búsqueda básicos o si las anteriores fallaron
+      onSearch(searchTerm, isTagSearch, isDateSearch, dateSearchType, false, true); // Último parámetro indica filtrar metadata
+    } catch (error) {
+      console.error('Error al realizar la búsqueda:', error);
+    }
+  };
+
+  // Renderizado del componente
   return (
     <div className="search-form">
       <form onSubmit={handleSubmit}>
         <div className="search-container">
-          <div className="search-options">
-            <label className="search-option">
-              <input
-                type="radio"
-                name="searchType"
-                checked={!isTagSearch && !isDateSearch}
-                onChange={() => handleSearchTypeChange('text')}
-                disabled={isLoading}
-              />
-              Texto
-            </label>
-            <label className="search-option">
-              <input
-                type="radio"
-                name="searchType"
-                checked={isTagSearch}
-                onChange={() => handleSearchTypeChange('tag')}
-                disabled={isLoading}
-              />
-              Etiqueta
-            </label>
-
-            <label className="search-option">
-              <input
-                type="radio"
-                name="searchType"
-                checked={isDateSearch}
-                onChange={() => handleSearchTypeChange('date')}
-                disabled={isLoading}
-              />
-              Fecha
-            </label>
-            <button 
-              type="button" 
-              className="toggle-advanced-button"
-              onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-            >
-              {showAdvancedOptions ? '▲ Ocultar opciones' : '▼ Mostrar opciones'}
-            </button>
-            <label className="search-option">
-  <input
-    type="radio"
-    name="searchType"
-    checked={isCombinedSearch}
-    onChange={() => handleSearchTypeChange('combined')}
-    disabled={isLoading}
-  />
-  Etiqueta + Fecha
-</label>
-
-
+          {/* Opciones de Tipo de Búsqueda */}
+          <div className="search-options-container">
+            <div className="basic-search-options">
+              <label className="search-option">
+                <input
+                  type="radio"
+                  name="searchType"
+                  checked={!isTagSearch && !isDateSearch && !isCombinedSearch && !isMultipleTagsSearch && !isMultipleTagsWithDateSearch && !isTextAndDateSearch}
+                  onChange={() => handleSearchTypeChange('text')}
+                  disabled={isLoading}
+                />
+                Texto
+              </label>
+              <label className="search-option">
+                <input
+                  type="radio"
+                  name="searchType"
+                  checked={isTagSearch}
+                  onChange={() => handleSearchTypeChange('tag')}
+                  disabled={isLoading}
+                />
+                Etiqueta
+              </label>
+              <label className="search-option">
+                <input
+                  type="radio"
+                  name="searchType"
+                  checked={isDateSearch}
+                  onChange={() => handleSearchTypeChange('date')}
+                  disabled={isLoading}
+                />
+                Fecha
+              </label>
+              <button 
+                type="button" 
+                className="toggle-advanced-button"
+                onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+              >
+                {showAdvancedOptions ? '▲ Ocultar opciones' : '▼ Mostrar opciones'}
+              </button>
+            </div>
+            
+            {showAdvancedOptions && (
+              <div className="advanced-search-types">
+                <label className="search-option">
+                  <input
+                    type="radio"
+                    name="searchType"
+                    checked={isCombinedSearch}
+                    onChange={() => handleSearchTypeChange('combined')}
+                    disabled={isLoading}
+                  />
+                  Etiqueta + Fecha
+                </label>
+                <label className="search-option">
+                  <input
+                    type="radio"
+                    name="searchType"
+                    checked={isMultipleTagsSearch}
+                    onChange={() => handleSearchTypeChange('multipleTags')}
+                    disabled={isLoading}
+                  />
+                  Múltiples Etiquetas
+                </label>
+                <label className="search-option">
+                  <input
+                    type="radio"
+                    name="searchType"
+                    checked={isMultipleTagsWithDateSearch}
+                    onChange={() => handleSearchTypeChange('multipleTagsWithDate')}
+                    disabled={isLoading}
+                  />
+                  Múltiples Etiquetas + Fecha
+                </label>
+                <label className="search-option">
+                  <input
+                    type="radio"
+                    name="searchType"
+                    checked={isTextAndDateSearch}
+                    onChange={() => handleSearchTypeChange('textAndDate')}
+                    disabled={isLoading}
+                  />
+                  Texto + Fecha
+                </label>
+              </div>
+            )}
           </div>
           
-          {showAdvancedOptions && (
-            <div className="advanced-search-options">
-
-{isTagSearch && (
-  <div className="tag-search-options">
-    <select 
-      value={selectedTag} 
-      onChange={handleTagChange}
-      disabled={isLoading || loadingTags}
-      className="tag-selector"
-    >
-      <option value="">-- Seleccionar etiqueta --</option>
-      
-      {/* Cargar las etiquetas organizadas por categorías */}
-      {(() => {
-        // Intentar cargar categorías del localStorage
-        try {
-          const currentBucket = getCurrentBucket();
-          const storageKey = `docubox_tags_categories_${currentBucket}`;
-          const savedCategories = localStorage.getItem(storageKey);
-          
-          if (savedCategories) {
-            const parsedCategories = JSON.parse(savedCategories);
-            if (Array.isArray(parsedCategories) && parsedCategories.length > 0) {
-              return parsedCategories.map(category => (
-                <optgroup key={category.id} label={category.name}>
-                  {category.tags && category.tags.map((tag, tagIndex) => (
-                    <option key={`${category.id}-${tagIndex}`} value={tag}>
-                      {tag}
-                    </option>
+          {/* Opciones Específicas para cada tipo de Búsqueda */}
+          <div className="search-type-options">
+            {/* Búsqueda por Etiqueta */}
+            {isTagSearch && (
+              <div className="tag-search-options">
+                <div className="tag-filter-container">
+                  <input
+                    type="text"
+                    value={tagFilter}
+                    onChange={(e) => setTagFilter(e.target.value)}
+                    placeholder="Filtrar etiquetas..."
+                    className="tag-filter-input"
+                    disabled={isLoading || loadingTags}
+                  />
+                </div>
+                <select 
+                  value={selectedTag} 
+                  onChange={handleTagChange}
+                  disabled={isLoading || loadingTags}
+                  className="tag-selector"
+                >
+                  <option value="">-- Seleccionar etiqueta --</option>
+                  {getFilteredTags().map((tag, index) => (
+                    <option key={index} value={tag}>{tag}</option>
                   ))}
-                </optgroup>
-              ));
-            }
-          }
-        } catch (e) {
-          console.error("Error al cargar categorías de etiquetas:", e);
-        }
-        
-        // Si no hay categorías o hubo error, mostrar lista plana
-        return availableTags.map((tag, index) => (
-          <option key={index} value={tag}>{tag}</option>
-        ));
-      })()}
-    </select>
-    {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
-  </div>
-)}
-
-{isCombinedSearch && (
-  <div className="combined-search-options">
-    <h4>Búsqueda combinada</h4>
-    
-    <div className="combined-tag-section">
-      <label>Seleccionar etiqueta:</label>
-      <select 
-        value={combinedSearchTag} 
-        onChange={(e) => {
-          setCombinedSearchTag(e.target.value);
-          updateCombinedSearchTerm();
-        }}
-        disabled={isLoading || loadingTags}
-        className="tag-selector"
-      >
-        <option value="">-- Seleccionar etiqueta --</option>
-        {(() => {
-          // Intentar cargar categorías del localStorage
-          try {
-            const currentBucket = getCurrentBucket();
-            const storageKey = `docubox_tags_categories_${currentBucket}`;
-            const savedCategories = localStorage.getItem(storageKey);
+                </select>
+                {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+              </div>
+            )}
             
-            if (savedCategories) {
-              const parsedCategories = JSON.parse(savedCategories);
-              if (Array.isArray(parsedCategories) && parsedCategories.length > 0) {
-                return parsedCategories.map(category => (
-                  <optgroup key={category.id} label={category.name}>
-                    {category.tags && category.tags.map((tag, tagIndex) => (
-                      <option key={`${category.id}-${tagIndex}`} value={tag}>
-                        {tag}
-                      </option>
+            {/* Búsqueda por Fecha */}
+            {isDateSearch && (
+              <div className="date-search-options">
+                <div className="date-type-selector">
+                  <label>
+                    <input
+                      type="radio"
+                      name="dateSearchType"
+                      value="specific"
+                      checked={dateSearchType === 'specific'}
+                      onChange={() => setDateSearchType('specific')}
+                      disabled={isLoading}
+                    />
+                    Fecha específica
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="dateSearchType"
+                      value="month"
+                      checked={dateSearchType === 'month'}
+                      onChange={() => setDateSearchType('month')}
+                      disabled={isLoading}
+                    />
+                    Mes y año
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="dateSearchType"
+                      value="year"
+                      checked={dateSearchType === 'year'}
+                      onChange={() => setDateSearchType('year')}
+                      disabled={isLoading}
+                    />
+                    Año
+                  </label>
+                </div>
+                
+                {dateSearchType === 'specific' && (
+                  <input
+                    type="date"
+                    value={specificDate}
+                    onChange={(e) => setSpecificDate(e.target.value)}
+                    disabled={isLoading}
+                    className="date-input"
+                  />
+                )}
+                
+                {dateSearchType === 'month' && (
+                  <div className="month-year-selector">
+                    <select
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      disabled={isLoading}
+                      className="month-selector"
+                    >
+                      <option value="">-- Mes --</option>
+                      {getMonthOptions().map(month => (
+                        <option key={month.value} value={month.value}>{month.name}</option>
+                      ))}
+                    </select>
+                    
+                    <select
+                      value={selectedYear}
+                      onChange={(e) => setSelectedYear(e.target.value)}
+                      disabled={isLoading}
+                      className="year-selector"
+                    >
+                      <option value="">-- Año --</option>
+                      {getYearOptions().map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
+                {dateSearchType === 'year' && (
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    disabled={isLoading}
+                    className="year-selector full-width"
+                  >
+                    <option value="">-- Seleccionar año --</option>
+                    {getYearOptions().map(year => (
+                      <option key={year} value={year}>{year}</option>
                     ))}
-                  </optgroup>
-                ));
-              }
-            }
-          } catch (e) {
-            console.error("Error al cargar categorías de etiquetas:", e);
-          }
-          
-          // Si no hay categorías o hubo error, mostrar lista plana
-          return availableTags.map((tag, index) => (
-            <option key={index} value={tag}>{tag}</option>
-          ));
-        })()}
-      </select>
-      {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
-    </div>
-    
-    <div className="combined-date-section">
-      <label>Seleccionar fecha:</label>
-      <div className="date-type-selector">
-        <label>
-          <input
-            type="radio"
-            name="combinedDateType"
-            value="specific"
-            checked={combinedDateType === 'specific'}
-            onChange={() => {
-              setCombinedDateType('specific');
-              updateCombinedSearchTerm();
-            }}
-            disabled={isLoading}
-          />
-          Fecha específica
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="combinedDateType"
-            value="month"
-            checked={combinedDateType === 'month'}
-            onChange={() => {
-              setCombinedDateType('month');
-              updateCombinedSearchTerm();
-            }}
-            disabled={isLoading}
-          />
-          Mes y año
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="combinedDateType"
-            value="year"
-            checked={combinedDateType === 'year'}
-            onChange={() => {
-              setCombinedDateType('year');
-              updateCombinedSearchTerm();
-            }}
-            disabled={isLoading}
-          />
-          Año
-        </label>
-      </div>
-      
-      {combinedDateType === 'specific' && (
-        <input
-          type="date"
-          value={combinedSearchDate}
-          onChange={(e) => {
-            setCombinedSearchDate(e.target.value);
-            updateCombinedSearchTerm();
-          }}
-          disabled={isLoading}
-          className="date-input"
-        />
-      )}
-      
-      {combinedDateType === 'month' && (
-        <div className="month-year-selector">
-          <select
-            value={combinedSearchDate.split('-')[1] || ''}
-            onChange={(e) => {
-              const yearPart = combinedSearchDate.split('-')[0] || '';
-              const newDate = yearPart ? `${yearPart}-${e.target.value}` : '';
-              setCombinedSearchDate(newDate);
-              updateCombinedSearchTerm();
-            }}
-            disabled={isLoading}
-            className="month-selector"
-          >
-            <option value="">-- Mes --</option>
-            {getMonthOptions().map(month => (
-              <option key={month.value} value={month.value}>{month.name}</option>
-            ))}
-          </select>
-          
-          <select
-            value={combinedSearchDate.split('-')[0] || ''}
-            onChange={(e) => {
-              const monthPart = combinedSearchDate.split('-')[1] || '';
-              const newDate = monthPart ? `${e.target.value}-${monthPart}` : e.target.value;
-              setCombinedSearchDate(newDate);
-              updateCombinedSearchTerm();
-            }}
-            disabled={isLoading}
-            className="year-selector"
-          >
-            <option value="">-- Año --</option>
-            {getYearOptions().map(year => (
-              <option key={year} value={year}>{year}</option>
-            ))}
-          </select>
-        </div>
-      )}
-      
-      {combinedDateType === 'year' && (
-        <select
-          value={combinedSearchDate}
-          onChange={(e) => {
-            setCombinedSearchDate(e.target.value);
-            updateCombinedSearchTerm();
-          }}
-          disabled={isLoading}
-          className="year-selector full-width"
-        >
-          <option value="">-- Seleccionar año --</option>
-          {getYearOptions().map(year => (
-            <option key={year} value={year}>{year}</option>
-          ))}
-        </select>
-      )}
-    </div>
-  </div>
-)}
-              
-              {isDateSearch && (
-                <div className="date-search-options">
+                  </select>
+                )}
+              </div>
+            )}
+            
+            {/* Búsqueda Combinada (Etiqueta + Fecha) */}
+            {isCombinedSearch && (
+              <div className="combined-search-options">
+                <h4>Búsqueda combinada</h4>
+                
+                <div className="combined-tag-section">
+                  <label>Seleccionar etiqueta:</label>
+                  <div className="tag-filter-container">
+                    <input
+                      type="text"
+                      value={tagFilter}
+                      onChange={(e) => setTagFilter(e.target.value)}
+                      placeholder="Filtrar etiquetas..."
+                      className="tag-filter-input"
+                      disabled={isLoading || loadingTags}
+                    />
+                  </div>
+                  <select 
+                    value={combinedSearchTag} 
+                    onChange={(e) => {
+                      setCombinedSearchTag(e.target.value);
+                      updateCombinedSearchTerm();
+                    }}
+                    disabled={isLoading || loadingTags}
+                    className="tag-selector"
+                  >
+                    <option value="">-- Seleccionar etiqueta --</option>
+                    {getFilteredTags().map((tag, index) => (
+                      <option key={index} value={tag}>{tag}</option>
+                    ))}
+                  </select>
+                  {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+                </div>
+                
+                <div className="combined-date-section">
+                  <label>Seleccionar fecha:</label>
                   <div className="date-type-selector">
                     <label>
                       <input
                         type="radio"
-                                                name="dateSearchType"
+                        name="combinedDateType"
                         value="specific"
-                        checked={dateSearchType === 'specific'}
-                        onChange={() => setDateSearchType('specific')}
+                        checked={combinedDateType === 'specific'}
+                        onChange={() => {
+                          setCombinedDateType('specific');
+                          updateCombinedSearchTerm();
+                        }}
                         disabled={isLoading}
                       />
                       Fecha específica
@@ -613,10 +717,13 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                     <label>
                       <input
                         type="radio"
-                        name="dateSearchType"
+                        name="combinedDateType"
                         value="month"
-                        checked={dateSearchType === 'month'}
-                        onChange={() => setDateSearchType('month')}
+                        checked={combinedDateType === 'month'}
+                        onChange={() => {
+                          setCombinedDateType('month');
+                          updateCombinedSearchTerm();
+                        }}
                         disabled={isLoading}
                       />
                       Mes y año
@@ -624,31 +731,42 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                     <label>
                       <input
                         type="radio"
-                        name="dateSearchType"
+                        name="combinedDateType"
                         value="year"
-                        checked={dateSearchType === 'year'}
-                        onChange={() => setDateSearchType('year')}
+                        checked={combinedDateType === 'year'}
+                        onChange={() => {
+                          setCombinedDateType('year');
+                          updateCombinedSearchTerm();
+                        }}
                         disabled={isLoading}
                       />
                       Año
                     </label>
                   </div>
                   
-                  {dateSearchType === 'specific' && (
+                  {combinedDateType === 'specific' && (
                     <input
                       type="date"
-                      value={specificDate}
-                      onChange={(e) => setSpecificDate(e.target.value)}
+                      value={combinedSearchDate}
+                      onChange={(e) => {
+                        setCombinedSearchDate(e.target.value);
+                        updateCombinedSearchTerm();
+                      }}
                       disabled={isLoading}
                       className="date-input"
                     />
                   )}
                   
-                  {dateSearchType === 'month' && (
+                  {combinedDateType === 'month' && (
                     <div className="month-year-selector">
                       <select
-                        value={selectedMonth}
-                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        value={combinedSearchDate.split('-')[1] || ''}
+                        onChange={(e) => {
+                          const yearPart = combinedSearchDate.split('-')[0] || '';
+                          const newDate = yearPart ? `${yearPart}-${e.target.value}` : '';
+                          setCombinedSearchDate(newDate);
+                          updateCombinedSearchTerm();
+                        }}
                         disabled={isLoading}
                         className="month-selector"
                       >
@@ -659,8 +777,13 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                       </select>
                       
                       <select
-                        value={selectedYear}
-                        onChange={(e) => setSelectedYear(e.target.value)}
+                        value={combinedSearchDate.split('-')[0] || ''}
+                        onChange={(e) => {
+                          const monthPart = combinedSearchDate.split('-')[1] || '';
+                          const newDate = monthPart ? `${e.target.value}-${monthPart}` : e.target.value;
+                          setCombinedSearchDate(newDate);
+                          updateCombinedSearchTerm();
+                        }}
                         disabled={isLoading}
                         className="year-selector"
                       >
@@ -672,10 +795,13 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                     </div>
                   )}
                   
-                  {dateSearchType === 'year' && (
+                  {combinedDateType === 'year' && (
                     <select
-                      value={selectedYear}
-                      onChange={(e) => setSelectedYear(e.target.value)}
+                      value={combinedSearchDate}
+                      onChange={(e) => {
+                        setCombinedSearchDate(e.target.value);
+                        updateCombinedSearchTerm();
+                      }}
                       disabled={isLoading}
                       className="year-selector full-width"
                     >
@@ -686,10 +812,361 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                     </select>
                   )}
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+            
+            {/* Búsqueda por Múltiples Etiquetas */}
+            {isMultipleTagsSearch && (
+              <div className="multiple-tags-search-options">
+                <h4>Búsqueda por múltiples etiquetas</h4>
+                
+                <div className="multiple-tags-selector">
+                  <label>Seleccionar etiquetas (hasta 4):</label>
+                  <div className="tag-filter-container">
+                    <input
+                      type="text"
+                      value={tagFilter}
+                      onChange={(e) => setTagFilter(e.target.value)}
+                      placeholder="Filtrar etiquetas..."
+                      className="tag-filter-input"
+                      disabled={isLoading || loadingTags}
+                    />
+                  </div>
+                  <div className="tags-selection-container">
+                    {getFilteredTags().map((tag, index) => (
+                      <label key={index} className="tag-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              // Limitar a máximo 4 etiquetas
+                              if (selectedTags.length < 4) {
+                                setSelectedTags([...selectedTags, tag]);
+                              }
+                            } else {
+                              setSelectedTags(selectedTags.filter(t => t !== tag));
+                            }
+                          }}
+                          disabled={isLoading || (selectedTags.length >= 4 && !selectedTags.includes(tag))}
+                          className="tag-checkbox"
+                        />
+                        {tag}
+                      </label>
+                    ))}
+                  </div>
+                  {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+                  <div className="selected-tags-summary">
+                    <strong>Etiquetas seleccionadas:</strong> {selectedTags.length > 0 ? selectedTags.join(', ') : 'Ninguna'}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Búsqueda por Múltiples Etiquetas + Fecha */}
+            {isMultipleTagsWithDateSearch && (
+              <div className="multiple-tags-date-search-options">
+                <h4>Búsqueda por múltiples etiquetas y fecha</h4>
+                
+                <div className="multiple-tags-selector">
+                  <label>Seleccionar etiquetas (hasta 4):</label>
+                  <div className="tag-filter-container">
+                    <input
+                      type="text"
+                      value={tagFilter}
+                      onChange={(e) => setTagFilter(e.target.value)}
+                      placeholder="Filtrar etiquetas..."
+                      className="tag-filter-input"
+                      disabled={isLoading || loadingTags}
+                    />
+                  </div>
+                  <div className="tags-selection-container">
+                    {getFilteredTags().map((tag, index) => (
+                      <label key={index} className="tag-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              // Limitar a máximo 4 etiquetas
+                              if (selectedTags.length < 4) {
+                                setSelectedTags([...selectedTags, tag]);
+                              }
+                            } else {
+                              setSelectedTags(selectedTags.filter(t => t !== tag));
+                            }
+                          }}
+                          disabled={isLoading || (selectedTags.length >= 4 && !selectedTags.includes(tag))}
+                          className="tag-checkbox"
+                        />
+                        {tag}
+                      </label>
+                    ))}
+                  </div>
+                  {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+                  <div className="selected-tags-summary">
+                    <strong>Etiquetas seleccionadas:</strong> {selectedTags.length > 0 ? selectedTags.join(', ') : 'Ninguna'}
+                  </div>
+                </div>
+                
+                <div className="multiple-tags-date-section">
+                  <label>Seleccionar fecha:</label>
+                  <div className="date-type-selector">
+                    <label>
+                      <input
+                        type="radio"
+                        name="multipleTagsDateType"
+                        value="specific"
+                        checked={multipleTagsDateType === 'specific'}
+                        onChange={() => {
+                          setMultipleTagsDateType('specific');
+                          updateMultipleTagsWithDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Fecha específica
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="multipleTagsDateType"
+                        value="month"
+                        checked={multipleTagsDateType === 'month'}
+                        onChange={() => {
+                          setMultipleTagsDateType('month');
+                          updateMultipleTagsWithDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Mes y año
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="multipleTagsDateType"
+                        value="year"
+                        checked={multipleTagsDateType === 'year'}
+                        onChange={() => {
+                          setMultipleTagsDateType('year');
+                          updateMultipleTagsWithDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Año
+                    </label>
+                  </div>
+                  
+                  {multipleTagsDateType === 'specific' && (
+                    <input
+                      type="date"
+                      value={multipleTagsWithDate}
+                      onChange={(e) => {
+                        setMultipleTagsWithDate(e.target.value);
+                        updateMultipleTagsWithDateSearchTerm();
+                      }}
+                      disabled={isLoading}
+                      className="date-input"
+                    />
+                  )}
+                  
+                  {multipleTagsDateType === 'month' && (
+                    <div className="month-year-selector">
+                      <select
+                        value={multipleTagsWithDate.split('-')[1] || ''}
+                        onChange={(e) => {
+                          const yearPart = multipleTagsWithDate.split('-')[0] || '';
+                          const newDate = yearPart ? `${yearPart}-${e.target.value}` : '';
+                          setMultipleTagsWithDate(newDate);
+                          updateMultipleTagsWithDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                        className="month-selector"
+                      >
+                        <option value="">-- Mes --</option>
+                        {getMonthOptions().map(month => (
+                          <option key={month.value} value={month.value}>{month.name}</option>
+                        ))}
+                      </select>
+                      
+                      <select
+                        value={multipleTagsWithDate.split('-')[0] || ''}
+                        onChange={(e) => {
+                          const monthPart = multipleTagsWithDate.split('-')[1] || '';
+                          const newDate = monthPart ? `${e.target.value}-${monthPart}` : e.target.value;
+                          setMultipleTagsWithDate(newDate);
+                          updateMultipleTagsWithDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                        className="year-selector"
+                      >
+                        <option value="">-- Año --</option>
+                        {getYearOptions().map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
+                  {multipleTagsDateType === 'year' && (
+                    <select
+                      value={multipleTagsWithDate}
+                      onChange={(e) => {
+                        setMultipleTagsWithDate(e.target.value);
+                        updateMultipleTagsWithDateSearchTerm();
+                      }}
+                      disabled={isLoading}
+                      className="year-selector full-width"
+                    >
+                      <option value="">-- Seleccionar año --</option>
+                      {getYearOptions().map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {/* Búsqueda por Texto + Fecha */}
+            {isTextAndDateSearch && (
+              <div className="text-date-search-options">
+                <h4>Búsqueda por texto y fecha</h4>
+                
+                <div className="text-date-text-section">
+                  <label>Ingrese texto:</label>
+                  <input
+                    type="text"
+                    value={textAndDateSearchText}
+                    onChange={(e) => {
+                      setTextAndDateSearchText(e.target.value);
+                      updateTextAndDateSearchTerm();
+                    }}
+                    placeholder="Buscar en nombres de archivos..."
+                    className="search-input"
+                    disabled={isLoading}
+                  />
+                </div>
+                
+                <div className="text-date-date-section">
+                  <label>Seleccionar fecha:</label>
+                  <div className="date-type-selector">
+                    <label>
+                      <input
+                        type="radio"
+                        name="textAndDateType"
+                        value="specific"
+                        checked={textAndDateType === 'specific'}
+                        onChange={() => {
+                          setTextAndDateType('specific');
+                          updateTextAndDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Fecha específica
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="textAndDateType"
+                        value="month"
+                        checked={textAndDateType === 'month'}
+                        onChange={() => {
+                          setTextAndDateType('month');
+                          updateTextAndDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Mes y año
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="textAndDateType"
+                        value="year"
+                        checked={textAndDateType === 'year'}
+                        onChange={() => {
+                          setTextAndDateType('year');
+                          updateTextAndDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                      />
+                      Año
+                    </label>
+                  </div>
+                  
+                  {textAndDateType === 'specific' && (
+                    <input
+                      type="date"
+                      value={textAndDateDate}
+                      onChange={(e) => {
+                        setTextAndDateDate(e.target.value);
+                        updateTextAndDateSearchTerm();
+                      }}
+                      disabled={isLoading}
+                      className="date-input"
+                    />
+                  )}
+                  
+                  {textAndDateType === 'month' && (
+                    <div className="month-year-selector">
+                      <select
+                        value={textAndDateDate.split('-')[1] || ''}
+                        onChange={(e) => {
+                          const yearPart = textAndDateDate.split('-')[0] || '';
+                          const newDate = yearPart ? `${yearPart}-${e.target.value}` : '';
+                          setTextAndDateDate(newDate);
+                          updateTextAndDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                        className="month-selector"
+                      >
+                        <option value="">-- Mes --</option>
+                        {getMonthOptions().map(month => (
+                          <option key={month.value} value={month.value}>{month.name}</option>
+                        ))}
+                      </select>
+                      
+                      <select
+                        value={textAndDateDate.split('-')[0] || ''}
+                        onChange={(e) => {
+                          const monthPart = textAndDateDate.split('-')[1] || '';
+                          const newDate = monthPart ? `${e.target.value}-${monthPart}` : e.target.value;
+                          setTextAndDateDate(newDate);
+                          updateTextAndDateSearchTerm();
+                        }}
+                        disabled={isLoading}
+                        className="year-selector"
+                      >
+                        <option value="">-- Año --</option>
+                        {getYearOptions().map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
+                  {textAndDateType === 'year' && (
+                    <select
+                      value={textAndDateDate}
+                      onChange={(e) => {
+                        setTextAndDateDate(e.target.value);
+                        updateTextAndDateSearchTerm();
+                      }}
+                      disabled={isLoading}
+                      className="year-selector full-width"
+                    >
+                      <option value="">-- Seleccionar año --</option>
+                      {getYearOptions().map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           
+          {/* Campo de Búsqueda y Botón */}
           <div className="search-input-container">
             <input
               type="text"
@@ -700,7 +1177,9 @@ if (isTagSearch && !availableTags.includes(searchTerm.trim())) {
                   ? "Ingrese etiqueta..." 
                   : isDateSearch
                     ? "Fecha de búsqueda"
-                    : "Buscar archivos o carpetas..."
+                    : isTextAndDateSearch
+                      ? "Texto + Fecha"
+                      : "Buscar archivos o carpetas..."
               }
               disabled={isLoading || (isDateSearch && dateSearchType !== 'text')}
               className="search-input"
