@@ -4,6 +4,8 @@ import Login from './components/Login';
 import SiteSettings from './components/SiteSettings';
 import UserManagement from './components/UserManagement';
 import TagManager from './components/TagManager';
+import BackupManager from './components/BackupManager';
+import { hasAdminPermission } from './services/auth';
 import './App.css';
 
 function App() {
@@ -14,6 +16,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
   const [showTagManager, setShowTagManager] = useState(false);
+  const [showBackupManager, setShowBackupManager] = useState(false);
   const [siteSettings, setSiteSettings] = useState({
     title: 'Contenedor de Documentos',
     subtitle: 'Sistema Integral de Gestion',
@@ -88,6 +91,7 @@ function App() {
     if (!showSettings) {
       setShowUserManagement(false);
       setShowTagManager(false);
+      setShowBackupManager(false);
     }
   };
 
@@ -97,6 +101,7 @@ function App() {
     if (!showUserManagement) {
       setShowSettings(false);
       setShowTagManager(false);
+      setShowBackupManager(false);
     }
   };
 
@@ -106,6 +111,17 @@ function App() {
     if (!showTagManager) {
       setShowSettings(false);
       setShowUserManagement(false);
+      setShowBackupManager(false);
+    }
+  };
+
+  const toggleBackupManager = () => {
+    setShowBackupManager(!showBackupManager);
+    // Cerrar otros paneles si están abiertos
+    if (!showBackupManager) {
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowTagManager(false);
     }
   };
 
@@ -148,11 +164,17 @@ function App() {
                 <button onClick={toggleUserManagement} className="users-btn">
                   👥 Gestión Usuarios
                 </button>
+                <button onClick={toggleBackupManager} className="backup-btn">
+                  💾 Copia Seguridad
+                </button>
               </>
             )}
-            <button onClick={toggleTagManager} className="tags-btn">
-              🏷️ Gestión Etiquetas
-            </button>
+
+{(userRole === 'admin' || hasAdminPermission('manage_tags')) && (
+  <button onClick={toggleTagManager} className="tags-btn">
+    🏷️ Gestión Etiquetas
+  </button>
+)}
             <button onClick={handleLogout} className="logout-btn">Cerrar Sesión</button>
           </div>
         )}
@@ -186,7 +208,7 @@ function App() {
         </div>
       )}
 
-{showTagManager && (
+{showTagManager && (userRole === 'admin' || hasAdminPermission('manage_tags')) && (
   <div className="modal-overlay tag-manager-modal">
     <div className="modal-content tag-manager-modal-content">
       <button onClick={toggleTagManager} className="close-modal">×</button>
@@ -194,6 +216,15 @@ function App() {
     </div>
   </div>
 )}
+
+      {showBackupManager && userRole === 'admin' && (
+        <div className="modal-overlay backup-manager-modal">
+          <div className="modal-content backup-manager-modal-content">
+            <button onClick={toggleBackupManager} className="close-modal">×</button>
+            <BackupManager />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

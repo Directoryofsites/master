@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
+import { hasAdminPermission } from '../services/auth';  // Importar función de verificación de permisos
 
 const FileActions = ({ currentPath, onActionComplete }) => {
   const [folderName, setFolderName] = useState('');
@@ -12,10 +13,16 @@ const FileActions = ({ currentPath, onActionComplete }) => {
       setError('Por favor ingrese un nombre de carpeta válido');
       return;
     }
-
+  
+    // Verificar si el usuario tiene permiso para crear carpetas
+if (!hasAdminPermission('create_folders')) {
+  setError('No tienes permiso para crear carpetas');
+  return;
+}
+  
     setIsLoading(true);
     setError(null);
-
+  
     try {
       // Crear la ruta completa combinando la ruta actual con el nombre de la carpeta
       const fullFolderName = currentPath ? `${currentPath}/${folderName}` : folderName;
@@ -23,7 +30,7 @@ const FileActions = ({ currentPath, onActionComplete }) => {
       console.log('Creando carpeta:', fullFolderName);
       
       const result = await api.createFolder(fullFolderName);
-
+  
       if (result && result.success) {
         setFolderName('');
         setShowFolderInput(false);
@@ -77,12 +84,14 @@ const FileActions = ({ currentPath, onActionComplete }) => {
           {error && <div className="error-message">{error}</div>}
         </div>
       ) : (
-        <button
-          onClick={() => setShowFolderInput(true)}
-          className="btn btn-primary"
-        >
-          Nueva Carpeta
-        </button>
+        hasAdminPermission('create_folders') && (
+          <button
+            onClick={() => setShowFolderInput(true)}
+            className="btn btn-primary"
+          >
+            Nueva Carpeta
+          </button>
+        )
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import FileActions from './FileActions';
 import UploadForm from './UploadForm';
 import SearchForm from './SearchForm';  // Importar el nuevo componente
 import * as api from '../services/api';  // Importar todo el módulo api
+import { hasAdminPermission } from '../services/auth';  // Importar función de verificación de permisos
 
 const FileExplorer = ({ userRole, username }) => {
   const [currentPath, setCurrentPath] = useState('');
@@ -321,19 +322,31 @@ const findFilesByDate = async (files, dateSearch, searchType) => {
             isSearchResults={isSearchMode}
           />
           
-          {!isSearchMode && userRole === 'admin' && (
-            <div className="admin-actions">
-              <FileActions 
-                currentPath={currentPath} 
-                onActionComplete={handleActionComplete} 
-              />
-              
-              <UploadForm 
-                currentPath={currentPath} 
-                onUploadComplete={handleActionComplete} 
-              />
-            </div>
-          )}
+          {!isSearchMode && (
+  userRole === 'admin' || 
+  hasAdminPermission('create_folders') || 
+  hasAdminPermission('delete_folders') || 
+  hasAdminPermission('upload_files')
+) && (
+  <div className="admin-actions">
+    {(userRole === 'admin' || 
+     hasAdminPermission('create_folders') || 
+     hasAdminPermission('delete_folders')) && (
+      <FileActions 
+        currentPath={currentPath} 
+        onActionComplete={handleActionComplete} 
+      />
+    )}
+    
+    {(userRole === 'admin' || 
+     hasAdminPermission('upload_files')) && (
+      <UploadForm 
+        currentPath={currentPath} 
+        onUploadComplete={handleActionComplete} 
+      />
+    )}
+  </div>
+)}
         </>
       )}
     </div>

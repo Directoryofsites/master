@@ -1065,6 +1065,7 @@ export const createUser = async (userData) => {
  * @param {Object} userData - Nuevos datos del usuario
  * @returns {Promise<Object>} - Respuesta del servidor
  */
+
 export const updateUser = async (userId, userData) => {
   try {
     const token = getAuthToken();
@@ -1076,6 +1077,17 @@ export const updateUser = async (userId, userData) => {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    // Añadir log para depurar los datos que se están enviando
+    console.log('[API] updateUser - Datos enviados al servidor:', JSON.stringify(userData, null, 2));
+    
+    // Verificar si hay permisos administrativos en el objeto
+    if (userData.assigned_folders) {
+      const hasPermissionsObj = userData.assigned_folders.some(
+        folder => typeof folder === 'object' && folder.type === 'admin_permissions'
+      );
+      console.log('[API] updateUser - Objeto de permisos detectado:', hasPermissionsObj);
+    }
+
     const response = await fetch(`${BASE_URL}/admin/update-user/${userId}`, {
       method: 'PATCH',
       headers: headers,
@@ -1083,10 +1095,15 @@ export const updateUser = async (userId, userData) => {
     });
     
     if (!response.ok) {
-      throw new Error('Error al actualizar usuario');
+      const errorText = await response.text();
+      console.error('[API] Error al actualizar usuario:', errorText);
+      throw new Error(`Error al actualizar usuario: ${errorText}`);
     }
 
-    return await response.json();
+    const responseData = await response.json();
+    console.log('[API] updateUser - Respuesta del servidor:', JSON.stringify(responseData, null, 2));
+    return responseData;
+
   } catch (error) {
     console.error('Error en updateUser:', error);
     throw error;
@@ -1096,9 +1113,10 @@ export const updateUser = async (userId, userData) => {
 /**
  * Elimina o desactiva un usuario
  * @param {string|number} userId - ID del usuario a eliminar/desactivar
+ * @param {boolean} permanent - Si es true, elimina permanentemente el usuario, si es false, solo lo desactiva
  * @returns {Promise<Object>} - Respuesta del servidor
  */
-export const deleteUser = async (userId) => {
+export const deleteUser = async (userId, permanent = false) => {
   try {
     const token = getAuthToken();
     const headers = {};
@@ -1107,7 +1125,10 @@ export const deleteUser = async (userId) => {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${BASE_URL}/admin/delete-user/${userId}`, {
+    // Añadir parámetro para indicar eliminación permanente
+    const url = `${BASE_URL}/admin/delete-user/${userId}${permanent ? '?permanent=true' : ''}`;
+    
+    const response = await fetch(url, {
       method: 'DELETE',
       headers: headers
     });
@@ -1122,7 +1143,6 @@ export const deleteUser = async (userId) => {
     throw error;
   }
 };
-
 /**
  * Obtiene los permisos de carpeta para una ruta específica
  * @param {string} folderPath - Ruta de la carpeta
@@ -1464,8 +1484,195 @@ export const createTagCategory = async (categoryName, initialTags = []) => {
     }
     
     return await response.json();
+
   } catch (error) {
     console.error('Error en createTagCategory:', error);
     throw error;
   }
 };
+
+/**
+ * Genera una copia de seguridad de todos los archivos en el bucket del usuario
+ * @param {string} bucketName - Nombre del bucket a respaldar
+ * @returns {Promise<Object>} - Respuesta con la URL de descarga del archivo comprimido
+ */
+export const generateBackup = async (bucketName) => {
+  try {
+    if (!bucketName) {
+      throw new Error('Se requiere el nombre del bucket para generar la copia de seguridad');
+    }
+    
+    console.log(`Iniciando copia de seguridad para el bucket: ${bucketName}`);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    // Llamar al endpoint de backup
+    const response = await fetch(`${BASE_URL}/admin/generate-backup`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        bucket: bucketName
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status} al generar la copia de seguridad`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en generateBackup:', error);
+    throw error;
+  }
+};
+
+/**
+ * Genera y descarga directamente una copia de seguridad usando el diálogo nativo del navegador
+ * @param {string} bucketName - Nombre del bucket a respaldar
+ * @returns {Promise<void>} - No retorna datos, inicia la descarga directamente
+ */
+export const generateBackupDirect = async (bucketName) => {
+  try {
+    if (!bucketName) {
+      throw new Error('Se requiere el nombre del bucket para generar la copia de seguridad');
+    }
+    
+    console.log(`Iniciando copia de seguridad directa para el bucket: ${bucketName}`);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    
+    // Construir la URL con el parámetro del bucket
+    let url = `${BASE_URL}/admin/backup-direct?bucket=${encodeURIComponent(bucketName)}`;
+    
+    // Añadir el token como parámetro de URL para autenticación
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    // Crear un elemento <a> temporal para iniciar la descarga
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = `backup-${bucketName}-${new Date().toISOString().slice(0, 10)}.zip`;
+    
+    // Añadir el enlace al DOM, hacer clic y eliminarlo
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error en generateBackupDirect:', error);
+    throw error;
+  }
+};
+
+/**
+ * Copia un archivo para crear un duplicado
+ * @param {string} sourcePath - Ruta del archivo original
+ * @param {string} targetPath - Ruta de destino para la copia (solo se usa para extraer el nombre)
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const copyFile = async (sourcePath, targetPath) => {
+  try {
+    // Verificar que las rutas no estén vacías
+    if (!sourcePath) {
+      throw new Error('Se requiere la ruta del archivo a duplicar');
+    }
+    
+    console.log(`Duplicando archivo: ${sourcePath}`);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    // Llamar al endpoint de duplicación de archivos
+    const response = await fetch(`${BASE_URL}/duplicate-file`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        filePath: sourcePath  // El backend espera exactamente este nombre
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status} al duplicar el archivo`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en copyFile:', error);
+    throw error;
+  }
+};
+
+/**
+ * Renombra un archivo o carpeta
+ * @param {string} sourcePath - Ruta actual del elemento
+ * @param {string} targetPath - Nueva ruta con el nuevo nombre
+ * @param {boolean} isFolder - Indica si es una carpeta
+ * @returns {Promise<Object>} - Respuesta del servidor
+ */
+export const renameItem = async (sourcePath, targetPath, isFolder = false) => {
+  try {
+    // Verificar que las rutas no estén vacías
+    if (!sourcePath || !targetPath) {
+      throw new Error('Se requieren las rutas de origen y destino para renombrar el elemento');
+    }
+    
+    console.log(`Renombrando ${isFolder ? 'carpeta' : 'archivo'} de ${sourcePath} a ${targetPath}`);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    // Extraer el nuevo nombre del archivo o carpeta (última parte de la ruta de destino)
+    const newName = targetPath.split('/').pop();
+    
+    // Determinar el endpoint correcto según si es carpeta o archivo
+    const endpoint = isFolder ? 'rename-folder' : 'rename-file';
+    
+    // Llamar al endpoint con los parámetros correctos según el backend
+    const response = await fetch(`${BASE_URL}/${endpoint}`, {
+      method: 'PATCH',
+      headers: headers,
+      body: JSON.stringify({
+        oldPath: sourcePath,  // El backend espera exactamente este nombre
+        newName: newName      // El backend espera exactamente este nombre
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status} al renombrar el elemento`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en renameItem:', error);
+    throw error;
+  }
+};
+

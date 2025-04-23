@@ -149,3 +149,43 @@ export const getCurrentBucket = () => {
   console.log('[AUTH-DEBUG] Usando bucket por defecto: master');
   return 'master'; // valor por defecto
 }
+
+export const hasAdminPermission = (permissionName) => {
+  try {
+    const user = getCurrentUser();
+    if (!user) return false;
+    
+    // Si es admin estático (role === 'admin'), siempre tiene todos los permisos
+    if (user.role === 'admin' && (!user.type || user.type === 'static')) {
+      return true;
+    }
+    
+    // Verificar en assigned_folders (formato del backend)
+    if (user.assigned_folders && Array.isArray(user.assigned_folders)) {
+      const permissionObj = user.assigned_folders.find(
+        folder => typeof folder === 'object' && folder.type === 'admin_permissions'
+      );
+      
+      if (permissionObj && permissionObj.permissions && permissionObj.permissions[permissionName]) {
+        return true;
+      }
+    }
+    
+    // También verificar en folders (formato del token de sesión)
+    if (user.folders && Array.isArray(user.folders)) {
+      const permissionObj = user.folders.find(
+        folder => typeof folder === 'object' && folder.type === 'admin_permissions'
+      );
+      
+      if (permissionObj && permissionObj.permissions && permissionObj.permissions[permissionName]) {
+        return true;
+      }
+    }
+    
+    // Si llegamos hasta aquí, el usuario no tiene el permiso
+    return false;
+  } catch (error) {
+    console.error('[AUTH-DEBUG] Error al verificar permiso:', error);
+    return false;
+  }
+};

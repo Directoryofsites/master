@@ -305,26 +305,88 @@ async function getUsersByAdmin(adminUsername) {
   }
 }
 
-async function deleteUser(userId) {
+async function deleteUser(userId, permanent = false) {
   try {
-    // En lugar de eliminar, marcamos como inactivo
-    const { data, error } = await supabase
-      .from('user_accounts')
-      .update({ active: false })
-      .eq('id', userId)
-      .select();
+    let result;
     
-    if (error) {
-      console.error('Error al desactivar usuario:', error);
-      return { success: false, error };
+    if (permanent) {
+      // Eliminación permanente
+      console.log(`[DELETE_USER] Eliminando permanentemente el usuario ${userId}`);
+      const { data, error } = await supabase
+        .from('user_accounts')
+        .delete()
+        .eq('id', userId)
+        .select();
+      
+      result = { data, error };
+    } else {
+      // Desactivación (comportamiento actual)
+      console.log(`[DELETE_USER] Desactivando el usuario ${userId}`);
+      const { data, error } = await supabase
+        .from('user_accounts')
+        .update({ active: false })
+        .eq('id', userId)
+        .select();
+      
+      result = { data, error };
     }
     
-    return { success: true, data };
+    if (result.error) {
+      console.error(`Error al ${permanent ? 'eliminar' : 'desactivar'} usuario:`, result.error);
+      return { success: false, error: result.error };
+    }
+    
+    return { success: true, data: result.data };
   } catch (error) {
     console.error('Error en deleteUser:', error);
     return { success: false, error };
   }
 }
+// ========================================================
+// ENDPOINTS PARA GESTIÓN DE USUARIOS DINÁMICOS
+// ========================================================
+
+// Middleware para verificar si el usuario es administrador
+const isAdmin = (req, res, next) => {
+  if (req.userRole === 'admin') {
+    return next();
+  }
+  
+  return res.status(403).json({
+    success: false,
+    message: 'No tienes permisos para realizar esta acción. Se requiere rol de administrador.'
+  });
+};
+
+// Middleware para verificar permisos administrativos específicos
+const hasAdminPermission = (permission) => {
+  return (req, res, next) => {
+    // Si es admin estático, tiene todos los permisos
+    if (req.userRole === 'admin' && req.userType !== 'dynamic') {
+      return next();
+    }
+    
+    // Si es usuario dinámico, verificar permisos específicos
+    if (req.userType === 'dynamic' && req.userFolders && req.userFolders.length > 0) {
+      // Buscar el objeto de permisos en las carpetas asignadas
+      const permissionsObj = req.userFolders.find(folder => 
+        typeof folder === 'object' && folder.type === 'admin_permissions'
+      );
+      
+      if (permissionsObj && 
+          permissionsObj.permissions && 
+          permissionsObj.permissions[permission]) {
+        return next();
+      }
+    }
+    
+    // Si no tiene el permiso, denegar acceso
+    return res.status(403).json({
+      success: false,
+      message: `No tienes permisos para realizar esta acción (${permission}). Se requiere permiso específico.`
+    });
+  };
+};
 
 // Verificar que las variables de entorno estén configuradas
 if (!supabaseUrl || !supabaseKey) {
@@ -429,24 +491,32 @@ app.use((req, res, next) => {
           
           // Asignar información del usuario dinámico
           req.bucketName = bucketToUse;
-          req.userRole = 'user'; // Los usuarios dinámicos siempre tienen rol 'user'
+          req.userRole = 'user'; // Los usuarios dinámicos siempre tienen rol 'user' base
           req.username = tokenData.username;
           req.userFolders = tokenData.folders || [];
           req.userType = 'dynamic';
           req.userId = tokenData.userId;
           
+          // Extraer permisos administrativos de las carpetas asignadas
+          const permissionsObj = req.userFolders.find(folder => 
+            typeof folder === 'object' && folder.type === 'admin_permissions'
+          );
+          
+          if (permissionsObj && permissionsObj.permissions) {
+            req.adminPermissions = permissionsObj.permissions;
+            console.log(`[Auth] Usuario dinámico ${tokenData.username} tiene permisos administrativos:`, permissionsObj.permissions);
+          }
+          
           // Verificación adicional de las carpetas asignadas
           if (!req.userFolders || req.userFolders.length === 0) {
             console.log(`[Auth] ADVERTENCIA: Usuario dinámico ${tokenData.username} no tiene carpetas asignadas`);
           } else {
-            console.log(`[Auth] Usuario dinámico ${tokenData.username} tiene ${req.userFolders.length} carpetas asignadas en bucket ${req.bucketName}`);
+            const actualFolders = req.userFolders.filter(folder => typeof folder === 'string');
+            console.log(`[Auth] Usuario dinámico ${tokenData.username} tiene ${actualFolders.length} carpetas asignadas en bucket ${req.bucketName}`);
           }
-        } else {
-          req.bucketName = defaultBucketName;
-          req.userRole = 'guest';
-          console.log(`[Auth] Usuario dinámico inválido ${tokenData.username || 'desconocido'}, usando bucket predeterminado ${defaultBucketName}`);
         }
       }
+
     } catch (error) {
       console.error('Error al decodificar token:', error);
       console.error('Token problemático:', authHeader.substring(7));
@@ -511,7 +581,6 @@ app.get('/api/auth-test', async (req, res) => {
 
 // Ruta para buscar archivos y carpetas
 
-
 app.get('/api/search', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -531,16 +600,30 @@ app.get('/api/search', async (req, res) => {
         const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
         console.log(`[SEARCH] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
         
-        if (tokenData.username && userBucketMap[tokenData.username]) {
+        if (tokenData.type === 'dynamic' && tokenData.bucket) {
+          // Para usuarios dinámicos, usar el bucket especificado en el token
+          tokenUsername = tokenData.username;
+          console.log(`[SEARCH] Usuario dinámico ${tokenUsername} usando bucket ${tokenData.bucket} desde token en parámetros`);
+          bucketToUse = tokenData.bucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = 'user';
+          req.userType = 'dynamic';
+          req.userFolders = tokenData.folders || [];
+        } 
+        else if (tokenData.username && userBucketMap[tokenData.username]) {
+          // Para usuarios estáticos
           tokenUsername = tokenData.username;
           const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH] Usando bucket ${tokenBucket} desde token en parámetros`);
+          console.log(`[SEARCH] Usuario estático ${tokenUsername} usando bucket ${tokenBucket} desde token en parámetros`);
           bucketToUse = tokenBucket;
           
           // Actualizar también req.username y req.userRole para las validaciones posteriores
           req.username = tokenData.username;
           req.userRole = userRoleMap[tokenData.username] || 'user';
         }
+
       } catch (tokenError) {
         console.error('[SEARCH] Error al decodificar token de parámetros:', tokenError);
       }
@@ -671,20 +754,33 @@ app.get('/api/search-by-tags', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_TAGS] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Para usuarios dinámicos, usar el bucket especificado en el token
+      console.log(`[SEARCH_TAGS] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token en parámetros`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_TAGS] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
+
       } catch (tokenError) {
         console.error('[SEARCH_TAGS] Error al decodificar token de parámetros:', tokenError);
       }
@@ -872,20 +968,32 @@ app.get('/api/search-by-date', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_DATE] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Para usuarios dinámicos, usar el bucket especificado en el token
+      console.log(`[SEARCH_DATE] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token en parámetros`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_DATE] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
       } catch (tokenError) {
         console.error('[SEARCH_DATE] Error al decodificar token de parámetros:', tokenError);
       }
@@ -1122,20 +1230,32 @@ app.get('/api/search-combined', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_COMBINED] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_COMBINED] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_COMBINED] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Para usuarios dinámicos, usar el bucket especificado en el token
+      console.log(`[SEARCH_COMBINED] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token en parámetros`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_COMBINED] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
       } catch (tokenError) {
         console.error('[SEARCH_COMBINED] Error al decodificar token de parámetros:', tokenError);
       }
@@ -1377,24 +1497,32 @@ app.get('/api/search-by-multiple-tags', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_MULTIPLE_TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_MULTIPLE_TAGS] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        } else if (tokenData.type === 'dynamic' && tokenData.bucket) {
-          // Usuario dinámico
-          bucketToUse = tokenData.bucket;
-          console.log(`[SEARCH_MULTIPLE_TAGS] Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_MULTIPLE_TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Usuario dinámico
+      console.log(`[SEARCH_MULTIPLE_TAGS] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_MULTIPLE_TAGS] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
       } catch (tokenError) {
         console.error('[SEARCH_MULTIPLE_TAGS] Error al decodificar token de parámetros:', tokenError);
       }
@@ -1604,24 +1732,32 @@ app.get('/api/search-multiple-tags-with-date', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        } else if (tokenData.type === 'dynamic' && tokenData.bucket) {
-          // Usuario dinámico
-          bucketToUse = tokenData.bucket;
-          console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Usuario dinámico
+      console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_MULTIPLE_TAGS_DATE] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
       } catch (tokenError) {
         console.error('[SEARCH_MULTIPLE_TAGS_DATE] Error al decodificar token de parámetros:', tokenError);
       }
@@ -1889,24 +2025,32 @@ app.get('/api/search-text-with-date', async (req, res) => {
     let bucketToUse = req.bucketName || defaultBucketName;
     
     // Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[SEARCH_TEXT_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[SEARCH_TEXT_DATE] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        } else if (tokenData.type === 'dynamic' && tokenData.bucket) {
-          // Usuario dinámico
-          bucketToUse = tokenData.bucket;
-          console.log(`[SEARCH_TEXT_DATE] Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
-        }
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[SEARCH_TEXT_DATE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Usuario dinámico
+      console.log(`[SEARCH_TEXT_DATE] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[SEARCH_TEXT_DATE] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
       } catch (tokenError) {
         console.error('[SEARCH_TEXT_DATE] Error al decodificar token de parámetros:', tokenError);
       }
@@ -2216,13 +2360,15 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         message: 'Acceso denegado: Bucket no válido para este usuario'
       });
     }    
-    // Verificar permisos - solo admin puede subir archivos
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para subir archivos. Se requiere rol de administrador.'
-      });
-    }
+   
+    // Verificamos si el usuario puede subir archivos (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.upload_files)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para subir archivos.'
+ });
+}
    
     // Calcular tamaño actual del bucket y verificar límite para este bucket específico
 console.log(`Calculando tamaño actual del bucket ${bucketToUse}...`);
@@ -2481,13 +2627,15 @@ app.post('/api/createFolder', async (req, res) => {
         message: 'Acceso denegado: Bucket no válido para este usuario'
       });
     }    
-    // Verificar permisos - solo admin puede crear carpetas
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para crear carpetas. Se requiere rol de administrador.'
-      });
-    }
+    
+    // Verificamos si el usuario puede crear carpetas (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.create_folders)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para crear carpetas.'
+ });
+}
    
     const { parentPath, folderName } = req.body;
     
@@ -2569,14 +2717,16 @@ app.delete('/api/deleteFolder', async (req, res) => {
         success: false,
         message: 'Acceso denegado: Bucket no válido para este usuario'
       });
-    }    
-    // Verificar permisos - solo admin puede eliminar carpetas
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para eliminar carpetas. Se requiere rol de administrador.'
-      });
-    }
+    }   
+
+    // Verificamos si el usuario puede eliminar carpetas (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.delete_folders)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para eliminar carpetas.'
+ });
+}
     
     const folderPath = req.query.path;
     
@@ -2725,14 +2875,16 @@ app.delete('/api/delete', async (req, res) => {
         success: false,
         message: 'Acceso denegado: Bucket no válido para este usuario'
       });
-    }    
-    // Verificar permisos - solo admin puede eliminar archivos
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para eliminar archivos. Se requiere rol de administrador.'
-      });
-    }
+    }  
+
+  // Verificamos si el usuario puede eliminar archivos (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.delete_files)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para eliminar archivos.'
+ });
+}
     
     const path = req.query.path;
     const isFolder = req.query.isFolder === 'true';
@@ -2840,6 +2992,755 @@ const deleteResult = await supabase.storage
   }
 });
 
+// Endpoint para renombrar archivos
+app.patch('/api/rename-file', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const { oldPath, newName } = req.body;
+    
+    if (!oldPath || !newName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta original del archivo y el nuevo nombre'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = oldPath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Obtener el directorio y el nombre del archivo actual
+    const lastSlashIndex = normalizedPath.lastIndexOf('/');
+    const directory = lastSlashIndex !== -1 ? normalizedPath.substring(0, lastSlashIndex) : '';
+    const oldName = lastSlashIndex !== -1 ? normalizedPath.substring(lastSlashIndex + 1) : normalizedPath;
+    
+    // Construir la nueva ruta
+    const newPath = directory ? `${directory}/${newName}` : newName;
+    
+    console.log(`[RENAME] Renombrando archivo de ${normalizedPath} a ${newPath}`);
+    
+    // En Supabase Storage, no hay una operación directa de renombrado,
+    // por lo que debemos copiar el archivo y luego eliminar el original
+    
+    // 1. Descargar el archivo original
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from(bucketToUse)
+      .download(normalizedPath);
+    
+    if (downloadError) {
+      console.error('Error al descargar archivo para renombrar:', downloadError);
+      throw downloadError;
+    }
+    
+    // 2. Subir el archivo con el nuevo nombre
+    const { error: uploadError } = await supabase.storage
+      .from(bucketToUse)
+      .upload(newPath, fileData, {
+        contentType: fileData.type,
+        upsert: true
+      });
+    
+    if (uploadError) {
+      console.error('Error al subir archivo con nuevo nombre:', uploadError);
+      throw uploadError;
+    }
+    
+    // 3. Eliminar el archivo original
+    const { error: deleteError } = await supabase.storage
+      .from(bucketToUse)
+      .remove([normalizedPath]);
+    
+    if (deleteError) {
+      console.error('Error al eliminar archivo original:', deleteError);
+      throw deleteError;
+    }
+    
+    // 4. Manejar los metadatos si existen
+    const metadataPath = `${normalizedPath}.metadata`;
+    const newMetadataPath = `${newPath}.metadata`;
+    
+    try {
+      // Verificar si existen metadatos
+      const { data: metadataData, error: metadataError } = await supabase.storage
+        .from(bucketToUse)
+        .download(metadataPath);
+      
+      if (!metadataError && metadataData) {
+        // Subir los metadatos con la nueva ruta
+        await supabase.storage
+          .from(bucketToUse)
+          .upload(newMetadataPath, metadataData, {
+            contentType: 'application/json',
+            upsert: true
+          });
+        
+        // Eliminar los metadatos originales
+        await supabase.storage
+          .from(bucketToUse)
+          .remove([metadataPath]);
+      }
+    } catch (metadataError) {
+      console.error('Error al manejar metadatos durante renombrado:', metadataError);
+      // No bloquear la operación si hay error con los metadatos
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Archivo renombrado correctamente a ${newName}`,
+      newPath: `/${newPath}`
+    });
+  } catch (error) {
+    console.error('Error al renombrar archivo:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al renombrar el archivo: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para renombrar carpetas
+app.patch('/api/rename-folder', express.json(), hasAdminPermission('rename_folders'), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const { oldPath, newName } = req.body;
+    
+    if (!oldPath || !newName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta original de la carpeta y el nuevo nombre'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = oldPath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Eliminar cualquier barra final
+    if (normalizedPath.endsWith('/')) {
+      normalizedPath = normalizedPath.slice(0, -1);
+    }
+    
+    // Obtener el directorio padre y el nombre de la carpeta actual
+    const lastSlashIndex = normalizedPath.lastIndexOf('/');
+    const parentDir = lastSlashIndex !== -1 ? normalizedPath.substring(0, lastSlashIndex) : '';
+    const oldName = lastSlashIndex !== -1 ? normalizedPath.substring(lastSlashIndex + 1) : normalizedPath;
+    
+    // Construir la nueva ruta
+    const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+    
+    console.log(`[RENAME] Renombrando carpeta de ${normalizedPath} a ${newPath}`);
+    
+    // En Supabase, necesitamos listar todos los archivos en la carpeta,
+    // copiarlos a la nueva ubicación y luego eliminar los originales
+    
+    // Primero, obtenemos la lista de todos los archivos en la carpeta
+    const processedFiles = new Set();
+    const filesToCopy = [];
+    
+    // Función recursiva para recopilar todos los archivos en la carpeta y subcarpetas
+    async function collectFilesInFolder(prefix) {
+      const { data, error } = await supabase.storage
+        .from(bucketToUse)
+        .list(prefix, {
+          sortBy: { column: 'name', order: 'asc' }
+        });
+      
+      if (error) {
+        console.error(`Error al listar contenido de ${prefix}:`, error);
+        throw error;
+      }
+      
+      for (const item of data) {
+        const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+        
+        // Para carpetas, buscar recursivamente
+        if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+          await collectFilesInFolder(itemPath);
+        } else {
+          filesToCopy.push(itemPath);
+        }
+      }
+    }
+    
+    await collectFilesInFolder(normalizedPath);
+    console.log(`[RENAME] Encontrados ${filesToCopy.length} archivos para copiar`);
+    
+    // Ahora copiamos todos los archivos a la nueva ubicación
+    for (const filePath of filesToCopy) {
+      // Construir la nueva ruta para este archivo
+      const relativeFilePath = filePath.substring(normalizedPath.length);
+      const newFilePath = `${newPath}${relativeFilePath}`;
+      
+      // Descargar el archivo original
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from(bucketToUse)
+        .download(filePath);
+      
+      if (downloadError) {
+        console.error(`Error al descargar archivo ${filePath}:`, downloadError);
+        continue; // Continuar con el siguiente archivo
+      }
+      
+      // Subir el archivo a la nueva ubicación
+      const { error: uploadError } = await supabase.storage
+        .from(bucketToUse)
+        .upload(newFilePath, fileData, {
+          contentType: fileData.type,
+          upsert: true
+        });
+      
+      if (uploadError) {
+        console.error(`Error al subir archivo a ${newFilePath}:`, uploadError);
+        continue;
+      }
+      
+      console.log(`[RENAME] Copiado archivo ${filePath} a ${newFilePath}`);
+    }
+    
+    // Finalmente, eliminar la carpeta original y su contenido
+    for (const filePath of filesToCopy) {
+      const { error: deleteError } = await supabase.storage
+        .from(bucketToUse)
+        .remove([filePath]);
+      
+      if (deleteError && deleteError.message !== 'Object not found') {
+        console.error(`Error al eliminar archivo ${filePath}:`, deleteError);
+      }
+    }
+    
+    // Eliminar el marcador de carpeta original si existe
+    const folderMarkerPath = `${normalizedPath}/.folder`;
+    try {
+      await supabase.storage
+        .from(bucketToUse)
+        .remove([folderMarkerPath]);
+    } catch (error) {
+      console.error('Error al eliminar marcador de carpeta:', error);
+    }
+    
+    // Crear marcador de carpeta en la nueva ubicación
+    try {
+      await supabase.storage
+        .from(bucketToUse)
+        .upload(`${newPath}/.folder`, new Uint8Array(0), {
+          contentType: 'application/x-directory',
+          upsert: true
+        });
+    } catch (error) {
+      console.error('Error al crear marcador de carpeta nueva:', error);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Carpeta renombrada correctamente a ${newName}`,
+      newPath: `/${newPath}`
+    });
+  } catch (error) {
+    console.error('Error al renombrar carpeta:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al renombrar la carpeta: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para duplicar archivos
+app.post('/api/duplicate-file', express.json(), hasAdminPermission('duplicate_files'), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const { filePath } = req.body;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta del archivo a duplicar'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Obtener el directorio y el nombre del archivo actual
+    const lastSlashIndex = normalizedPath.lastIndexOf('/');
+    const directory = lastSlashIndex !== -1 ? normalizedPath.substring(0, lastSlashIndex) : '';
+    const fileName = lastSlashIndex !== -1 ? normalizedPath.substring(lastSlashIndex + 1) : normalizedPath;
+    
+    // Generar nombre para la copia
+    // Primero, separar el nombre del archivo y su extensión
+    const lastDotIndex = fileName.lastIndexOf('.');
+    const nameWithoutExt = lastDotIndex !== -1 ? fileName.substring(0, lastDotIndex) : fileName;
+    const extension = lastDotIndex !== -1 ? fileName.substring(lastDotIndex) : '';
+    
+    // Crear nuevo nombre con sufijo " - copia"
+    const newFileName = `${nameWithoutExt} - copia${extension}`;
+    const newPath = directory ? `${directory}/${newFileName}` : newFileName;
+    
+    console.log(`[DUPLICATE] Duplicando archivo de ${normalizedPath} a ${newPath}`);
+    
+    // 1. Descargar el archivo original
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from(bucketToUse)
+      .download(normalizedPath);
+    
+    if (downloadError) {
+      console.error('Error al descargar archivo para duplicar:', downloadError);
+      throw downloadError;
+    }
+    
+    // 2. Subir la copia del archivo
+    const { error: uploadError } = await supabase.storage
+      .from(bucketToUse)
+      .upload(newPath, fileData, {
+        contentType: fileData.type,
+        upsert: true
+      });
+    
+    if (uploadError) {
+      console.error('Error al subir copia del archivo:', uploadError);
+      throw uploadError;
+    }
+    
+    // 3. Duplicar los metadatos si existen
+    const metadataPath = `${normalizedPath}.metadata`;
+    const newMetadataPath = `${newPath}.metadata`;
+    
+    try {
+      // Verificar si existen metadatos
+      const { data: metadataData, error: metadataError } = await supabase.storage
+        .from(bucketToUse)
+        .download(metadataPath);
+      
+      if (!metadataError && metadataData) {
+        // Leer los metadatos
+        const text = await metadataData.text();
+        const metadata = JSON.parse(text);
+        
+        // Actualizar campos relevantes
+        metadata.lastModified = new Date().toISOString().split('T')[0];
+        if (metadata.uploadDate) {
+          metadata.uploadDate = new Date().toISOString().split('T')[0];
+        }
+        
+        // Subir los metadatos actualizados
+        await supabase.storage
+          .from(bucketToUse)
+          .upload(newMetadataPath, JSON.stringify(metadata), {
+            contentType: 'application/json',
+            upsert: true
+          });
+      }
+    } catch (metadataError) {
+      console.error('Error al duplicar metadatos:', metadataError);
+      // No bloquear la operación si hay error con los metadatos
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Archivo duplicado correctamente como ${newFileName}`,
+      newPath: `/${newPath}`
+    });
+  } catch (error) {
+    console.error('Error al duplicar archivo:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al duplicar el archivo: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para duplicar carpetas
+app.post('/api/duplicate-folder', express.json(), hasAdminPermission('duplicate_folders'), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const { folderPath } = req.body;
+    
+    if (!folderPath) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta de la carpeta a duplicar'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = folderPath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    // Eliminar cualquier barra final
+    if (normalizedPath.endsWith('/')) {
+      normalizedPath = normalizedPath.slice(0, -1);
+    }
+    
+    // Obtener el directorio padre y el nombre de la carpeta actual
+    const lastSlashIndex = normalizedPath.lastIndexOf('/');
+    const parentDir = lastSlashIndex !== -1 ? normalizedPath.substring(0, lastSlashIndex) : '';
+    const folderName = lastSlashIndex !== -1 ? normalizedPath.substring(lastSlashIndex + 1) : normalizedPath;
+    
+    // Generar nombre para la copia
+    const newFolderName = `${folderName} - copia`;
+    const newPath = parentDir ? `${parentDir}/${newFolderName}` : newFolderName;
+    
+    console.log(`[DUPLICATE] Duplicando carpeta de ${normalizedPath} a ${newPath}`);
+    
+    // En Supabase, necesitamos listar todos los archivos en la carpeta,
+    // y copiarlos a la nueva ubicación
+    
+    // Primero, obtenemos la lista de todos los archivos en la carpeta
+    const filesToCopy = [];
+    
+    // Función recursiva para recopilar todos los archivos en la carpeta y subcarpetas
+    async function collectFilesInFolder(prefix) {
+      const { data, error } = await supabase.storage
+        .from(bucketToUse)
+        .list(prefix, {
+          sortBy: { column: 'name', order: 'asc' }
+        });
+      
+      if (error) {
+        console.error(`Error al listar contenido de ${prefix}:`, error);
+        throw error;
+      }
+      
+      for (const item of data) {
+        const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+        
+        // Para carpetas, buscar recursivamente
+        if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+          await collectFilesInFolder(itemPath);
+        } else {
+          filesToCopy.push(itemPath);
+        }
+      }
+    }
+    
+    await collectFilesInFolder(normalizedPath);
+    console.log(`[DUPLICATE] Encontrados ${filesToCopy.length} archivos para copiar`);
+    
+    // Ahora copiamos todos los archivos a la nueva ubicación
+    for (const filePath of filesToCopy) {
+      // Construir la nueva ruta para este archivo
+      const relativeFilePath = filePath.substring(normalizedPath.length);
+      const newFilePath = `${newPath}${relativeFilePath}`;
+      
+      // Descargar el archivo original
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from(bucketToUse)
+        .download(filePath);
+      
+      if (downloadError) {
+        console.error(`Error al descargar archivo ${filePath}:`, downloadError);
+        continue; // Continuar con el siguiente archivo
+      }
+      
+      // Subir el archivo a la nueva ubicación
+      const { error: uploadError } = await supabase.storage
+        .from(bucketToUse)
+        .upload(newFilePath, fileData, {
+          contentType: fileData.type,
+          upsert: true
+        });
+      
+      if (uploadError) {
+        console.error(`Error al subir archivo a ${newFilePath}:`, uploadError);
+        continue;
+      }
+      
+      console.log(`[DUPLICATE] Copiado archivo ${filePath} a ${newFilePath}`);
+      
+      // Duplicar metadatos si existen
+      try {
+        const metadataPath = `${filePath}.metadata`;
+        const newMetadataPath = `${newFilePath}.metadata`;
+        
+        const { data: metadataData, error: metadataError } = await supabase.storage
+          .from(bucketToUse)
+          .download(metadataPath);
+        
+        if (!metadataError && metadataData) {
+          await supabase.storage
+            .from(bucketToUse)
+            .upload(newMetadataPath, metadataData, {
+              contentType: 'application/json',
+              upsert: true
+            });
+        }
+      } catch (metadataError) {
+        console.error(`Error al duplicar metadatos para ${filePath}:`, metadataError);
+      }
+    }
+    
+    // Crear marcador de carpeta en la nueva ubicación
+    try {
+      await supabase.storage
+        .from(bucketToUse)
+        .upload(`${newPath}/.folder`, new Uint8Array(0), {
+          contentType: 'application/x-directory',
+          upsert: true
+        });
+    } catch (error) {
+      console.error('Error al crear marcador de carpeta duplicada:', error);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Carpeta duplicada correctamente como ${newFolderName}`,
+      newPath: `/${newPath}`
+    });
+  } catch (error) {
+    console.error('Error al duplicar carpeta:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al duplicar la carpeta: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para copiar archivos (funcionalidad arrastrar y soltar)
+app.post('/api/copy-files', express.json(), hasAdminPermission('copy_files'), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    const { sourceFiles, targetFolder } = req.body;
+    
+    if (!sourceFiles || !Array.isArray(sourceFiles) || sourceFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere al menos un archivo de origen'
+      });
+    }
+    
+    if (!targetFolder) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere una carpeta de destino'
+      });
+    }
+    
+    // Normalizar la ruta de la carpeta de destino
+    let normalizedTargetFolder = targetFolder;
+    if (normalizedTargetFolder.startsWith('/')) {
+      normalizedTargetFolder = normalizedTargetFolder.substring(1);
+    }
+    // Asegurar que termina con una barra
+    if (normalizedTargetFolder && !normalizedTargetFolder.endsWith('/')) {
+      normalizedTargetFolder += '/';
+    }
+    
+    console.log(`[COPY] Copiando ${sourceFiles.length} archivos a ${normalizedTargetFolder}`);
+    
+    // Resultados de la operación
+    const results = {
+      success: [],
+      errors: []
+    };
+    
+    // Procesar cada archivo
+    for (const sourcePath of sourceFiles) {
+      try {
+        // Normalizar la ruta del archivo de origen
+        let normalizedSourcePath = sourcePath;
+        if (normalizedSourcePath.startsWith('/')) {
+          normalizedSourcePath = normalizedSourcePath.substring(1);
+        }
+        
+        // Obtener el nombre del archivo (última parte de la ruta)
+        const fileName = normalizedSourcePath.split('/').pop();
+        
+        // Construir la ruta del archivo de destino
+        const targetPath = normalizedTargetFolder + fileName;
+        
+        // Verificar que el origen y destino no sean iguales
+        if (normalizedSourcePath === targetPath) {
+          results.errors.push({
+            source: normalizedSourcePath,
+            error: 'El origen y destino son iguales'
+          });
+          continue;
+        }
+        
+        console.log(`[COPY] Copiando ${normalizedSourcePath} a ${targetPath}`);
+        
+        // 1. Descargar el archivo de origen
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from(bucketToUse)
+          .download(normalizedSourcePath);
+        
+        if (downloadError) {
+          console.error(`Error al descargar archivo ${normalizedSourcePath}:`, downloadError);
+          results.errors.push({
+            source: normalizedSourcePath,
+            error: downloadError.message
+          });
+          continue;
+        }
+        
+        // 2. Subir el archivo a la ubicación de destino
+        const { error: uploadError } = await supabase.storage
+          .from(bucketToUse)
+          .upload(targetPath, fileData, {
+            contentType: fileData.type,
+            upsert: true
+          });
+        
+        if (uploadError) {
+          console.error(`Error al subir archivo a ${targetPath}:`, uploadError);
+          results.errors.push({
+            source: normalizedSourcePath,
+            target: targetPath,
+            error: uploadError.message
+          });
+          continue;
+        }
+        
+        console.log(`[COPY] Archivo copiado: ${normalizedSourcePath} -> ${targetPath}`);
+        
+        // 3. Copiar también los metadatos si existen
+        try {
+          const metadataPath = `${normalizedSourcePath}.metadata`;
+          const targetMetadataPath = `${targetPath}.metadata`;
+          
+          // Verificar si existen metadatos para este archivo
+          const { data: metadataData, error: metadataError } = await supabase.storage
+            .from(bucketToUse)
+            .download(metadataPath);
+          
+          if (!metadataError && metadataData) {
+            // Actualizar fecha de copia en los metadatos
+            const text = await metadataData.text();
+            const metadata = JSON.parse(text);
+            
+            metadata.lastModified = new Date().toISOString().split('T')[0];
+            metadata.copyDate = new Date().toISOString().split('T')[0];
+            
+            // Subir los metadatos actualizados
+            await supabase.storage
+              .from(bucketToUse)
+              .upload(targetMetadataPath, JSON.stringify(metadata), {
+                contentType: 'application/json',
+                upsert: true
+              });
+            
+            console.log(`[COPY] Metadatos copiados para: ${normalizedSourcePath}`);
+          }
+        } catch (metadataError) {
+          console.error(`Error al copiar metadatos para ${normalizedSourcePath}:`, metadataError);
+          // No bloqueamos la operación principal por errores en los metadatos
+        }
+        
+        // Registrar éxito
+        results.success.push({
+          source: normalizedSourcePath,
+          target: targetPath
+        });
+        
+      } catch (fileError) {
+        console.error(`Error general al copiar ${sourcePath}:`, fileError);
+        results.errors.push({
+          source: sourcePath,
+          error: fileError.message
+        });
+      }
+    }
+    
+    // Determinar el estado de la respuesta según los resultados
+    if (results.success.length > 0 && results.errors.length === 0) {
+      // Todo fue exitoso
+      return res.status(200).json({
+        success: true,
+        message: `${results.success.length} archivos copiados correctamente`,
+        results: results
+      });
+    } else if (results.success.length > 0 && results.errors.length > 0) {
+      // Algunos archivos se copiaron, otros no
+      return res.status(207).json({
+        success: true,
+        message: `${results.success.length} archivos copiados. ${results.errors.length} errores.`,
+        results: results
+      });
+    } else {
+      // Ningún archivo se copió correctamente
+      return res.status(500).json({
+        success: false,
+        message: 'No se pudo copiar ningún archivo',
+        results: results
+      });
+    }
+  } catch (error) {
+    console.error('Error general en copia de archivos:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al copiar archivos: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
 // Copia de seguridad de todos los archivos del bucket del admin
 const archiver = require('archiver');
 const { tmpdir } = require('os');
@@ -2914,6 +3815,332 @@ app.get('/api/admin/backup', async (req, res) => {
   }
 });
 
+// Endpoint para generar una copia de seguridad como archivo ZIP descargable
+app.post('/api/admin/generate-backup', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Cliente de Supabase no configurado correctamente.' 
+      });
+    }
+    
+    // Verificamos si el usuario puede generar copias de seguridad (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.generate_backup)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para generar copias de seguridad.'
+ });
+}
+    
+    // Obtener el bucket a respaldar (del cuerpo de la solicitud o del usuario actual)
+    const bucketToBackup = req.body.bucket || req.bucketName || defaultBucketName;
+    
+    console.log(`[BACKUP] Generando copia de seguridad para bucket: ${bucketToBackup}`);
+    
+    // Crear un directorio temporal para almacenar el archivo ZIP
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    const { v4: uuidv4 } = require('uuid');
+    
+    const tempDir = path.join(os.tmpdir(), 'docubox-backups');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    // Generar nombre de archivo único para el backup
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const zipFilename = `backup_${bucketToBackup}_${timestamp}_${uuidv4().substring(0, 8)}.zip`;
+    const zipPath = path.join(tempDir, zipFilename);
+    
+    // Generar URL única para la descarga directa
+    const downloadUrl = `/api/admin/download-backup/${zipFilename}`;
+    
+    // Responder con la URL de descarga antes de comenzar a crear el ZIP
+    res.status(200).json({
+      success: true,
+      message: 'Copia de seguridad iniciada. Haga clic en el enlace para descargar cuando esté lista (puede tardar unos minutos).',
+      downloadUrl: downloadUrl,
+      filename: zipFilename
+    });
+    
+    // Crear archivo ZIP en segundo plano
+    const archiver = require('archiver');
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    
+    // Configurar eventos del proceso de archivado
+    output.on('close', async () => {
+      console.log(`[BACKUP] Archivo ZIP creado en: ${zipPath} (${archive.pointer()} bytes)`);
+      
+      // Programar eliminación del archivo temporal después de una hora
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(zipPath)) {
+            fs.unlinkSync(zipPath);
+            console.log(`[BACKUP] Archivo temporal eliminado: ${zipPath}`);
+          }
+        } catch (e) {
+          console.error('[BACKUP] Error al eliminar archivo temporal:', e);
+        }
+      }, 60 * 60 * 1000); // 1 hora
+    });
+    
+    output.on('error', (err) => {
+      console.error('[BACKUP] Error en la transmisión de salida:', err);
+    });
+    
+    archive.on('error', (err) => {
+      console.error('[BACKUP] Error en el proceso de archivado:', err);
+    });
+    
+    // Conectar archive con output
+    archive.pipe(output);
+    
+    // Función recursiva para agregar archivos al ZIP
+    async function addFilesToArchive(prefix = '') {
+      try {
+        const { data, error } = await supabase.storage
+          .from(bucketToBackup)
+          .list(prefix);
+        
+        if (error) {
+          console.error(`[BACKUP] Error al listar ${prefix}:`, error);
+          return;
+        }
+        
+        // Si no hay archivos, retornar
+        if (!data || data.length === 0) {
+          return;
+        }
+        
+        for (const item of data) {
+          const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+          
+          // Omitir carpeta de backups y archivos de sistema
+          if (itemPath.startsWith('_backups/') || 
+              item.name === '.folder' || 
+              item.name.endsWith('.youtube.metadata') || 
+              item.name.endsWith('.audio.metadata') || 
+              item.name.endsWith('.image.metadata') || 
+              item.name.endsWith('.access.metadata')) {
+            continue;
+          }
+          
+          // Si es carpeta, llamada recursiva
+          if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+            await addFilesToArchive(itemPath);
+          } else {
+            try {
+              // Descargar el archivo
+              const { data: fileData, error: downloadError } = await supabase.storage
+                .from(bucketToBackup)
+                .download(itemPath);
+              
+              if (downloadError) {
+                console.error(`[BACKUP] Error al descargar ${itemPath}:`, downloadError);
+                continue;
+              }
+              
+              // Añadir archivo al ZIP
+              const buffer = await fileData.arrayBuffer();
+              archive.append(Buffer.from(buffer), { name: itemPath });
+              console.log(`[BACKUP] Archivo añadido al ZIP: ${itemPath}`);
+            } catch (fileError) {
+              console.error(`[BACKUP] Error al procesar archivo ${itemPath}:`, fileError);
+            }
+          }
+        }
+      } catch (listError) {
+        console.error(`[BACKUP] Error al listar elementos en ${prefix}:`, listError);
+      }
+    }
+    
+    // Iniciar el proceso de agregar archivos al ZIP desde la raíz
+    console.log(`[BACKUP] Iniciando archivado de archivos desde bucket ${bucketToBackup}`);
+    
+    addFilesToArchive('').then(() => {
+      // Finalizar el archivo ZIP después de agregar todos los archivos
+      archive.finalize();
+    });
+    
+  } catch (error) {
+    console.error('[BACKUP] Error general al generar copia de seguridad:', error);
+    
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error al generar copia de seguridad',
+        error: error.message
+      });
+    }
+  }
+});
+
+// Endpoint para descargar el archivo de backup generado
+app.get('/api/admin/download-backup/:filename', async (req, res) => {
+  try {
+    // Solo los administradores pueden descargar backups
+    if (req.userRole !== 'admin') {
+      return res.status(403).send('Acceso denegado: Se requiere rol de administrador');
+    }
+    
+    const filename = req.params.filename;
+    if (!filename) {
+      return res.status(400).send('Nombre de archivo no especificado');
+    }
+    
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    
+    const tempDir = path.join(os.tmpdir(), 'docubox-backups');
+    const zipPath = path.join(tempDir, filename);
+    
+    // Verificar si el archivo existe
+    if (!fs.existsSync(zipPath)) {
+      return res.status(404).send('Archivo no encontrado o todavía en proceso de generación. Por favor, intente más tarde.');
+    }
+    
+    // Establecer encabezados para la descarga
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    
+    // Enviar el archivo
+    const fileStream = fs.createReadStream(zipPath);
+    fileStream.pipe(res);
+    
+    // Manejar errores del stream
+    fileStream.on('error', (err) => {
+      console.error('[BACKUP-DOWNLOAD] Error al leer el archivo:', err);
+      if (!res.headersSent) {
+        res.status(500).send('Error al leer el archivo de backup');
+      }
+    });
+    
+  } catch (error) {
+    console.error('[BACKUP-DOWNLOAD] Error general:', error);
+    if (!res.headersSent) {
+      res.status(500).send('Error al descargar el archivo de backup');
+    }
+  }
+});
+
+// Endpoint para generar una copia de seguridad directa
+app.get('/api/admin/backup-direct', async (req, res) => {
+  console.log('[BACKUP_DIRECT] Endpoint llamado');
+  console.log('[BACKUP_DIRECT] Query params:', req.query);
+  console.log('[BACKUP_DIRECT] Usuario:', req.username);
+  console.log('[BACKUP_DIRECT] Bucket:', req.bucketName);
+  
+  try {
+    // Responder con un archivo simple para probar
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="test-backup.txt"');
+    res.send('Este es un archivo de prueba para verificar que la descarga funciona.');
+    console.log('[BACKUP_DIRECT] Se envió archivo de prueba');
+  } catch (error) {
+    console.error('[BACKUP_DIRECT] Error:', error);
+    res.status(500).send('Error al generar archivo de prueba');
+  }
+});
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere especificar un bucket para la copia de seguridad'
+      });
+    }
+    
+    console.log(`[BACKUP] Iniciando generación de copia de seguridad directa para bucket: ${bucketName}`);
+    
+    // Verificar que el bucket exista
+    const { data: bucketData, error: bucketError } = await supabase.storage
+      .getBucket(bucketName);
+      
+    if (bucketError || !bucketData) {
+      console.error(`[BACKUP] Error al verificar bucket ${bucketName}:`, bucketError);
+      return res.status(404).json({
+        success: false,
+        message: `El bucket ${bucketName} no existe o no es accesible`
+      });
+    }
+    
+    // Configurar encabezados para descarga
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const filename = `backup-${bucketName}-${timestamp}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    
+    // Crear un archivo ZIP en memoria y enviarlo directamente como respuesta
+    const archiver = require('archiver');
+    const archive = archiver('zip', {
+      zlib: { level: 5 } // Nivel de compresión (1-9)
+    });
+    
+    // Configurar el stream de salida directo a la respuesta HTTP
+    archive.pipe(res);
+    
+    // Manejar eventos del archivador
+    archive.on('error', (err) => {
+      console.error('[BACKUP] Error al crear archivo ZIP:', err);
+      // No podemos enviar error aquí porque ya enviamos cabeceras
+      archive.abort();
+    });
+    
+    // Listar todos los archivos en el bucket
+    const { data: fileList, error: listError } = await supabase.storage
+      .from(bucketName)
+      .list();
+      
+    if (listError) {
+      console.error(`[BACKUP] Error al listar archivos en bucket ${bucketName}:`, listError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error al listar archivos para la copia de seguridad'
+      });
+    }
+    
+    // Procesar archivos de forma secuencial para evitar problemas de memoria
+    for (const file of fileList) {
+      if (file.name === '.emptyFolderPlaceholder') continue;
+      
+      // Obtener el contenido del archivo
+      const { data: fileData, error: fileError } = await supabase.storage
+        .from(bucketName)
+        .download(file.name);
+        
+      if (fileError) {
+        console.warn(`[BACKUP] Error al descargar archivo ${file.name}:`, fileError);
+        continue; // Continuar con el siguiente archivo
+      }
+      
+      // Añadir archivo al ZIP
+      archive.append(fileData, { name: file.name });
+    }
+    
+    // Finalizar el archivo ZIP y enviarlo
+    archive.finalize();
+    
+    console.log(`[BACKUP] Copia de seguridad directa para bucket ${bucketName} completada`);
+    
+  } catch (error) {
+    console.error('[BACKUP] Error al generar copia de seguridad directa:', error);
+    
+    // Si aún no hemos enviado encabezados, enviar respuesta de error
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error al generar la copia de seguridad',
+        error: error.message
+      });
+    } else {
+      // Si ya enviamos encabezados, intentar finalizar la respuesta
+      res.end();
+    }
+  }
+});
 
 // Rutas para manejar URLs de YouTube
 
@@ -3020,13 +4247,14 @@ app.post('/api/youtube-url', express.json(), async (req, res) => {
     // Obtener el bucket específico del usuario desde el middleware
     const bucketToUse = req.bucketName || defaultBucketName;
     
-    // Verificar permisos - solo admin puede modificar URL de YouTube
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para modificar URL de YouTube. Se requiere rol de administrador.'
-      });
-    }
+   // Verificamos si el usuario puede modificar URL de YouTube (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.manage_media_links)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para modificar URL de YouTube.'
+ });
+}
     
     const { filePath, youtubeUrl } = req.body;
     
@@ -3194,13 +4422,14 @@ app.post('/api/audio-url', express.json(), async (req, res) => {
     // Obtener el bucket específico del usuario desde el middleware
     const bucketToUse = req.bucketName || defaultBucketName;
     
-    // Verificar permisos - solo admin puede modificar URL de audio
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para modificar URL de audio. Se requiere rol de administrador.'
-      });
-    }
+  // Verificamos si el usuario puede modificar URL de audio (admin o usuario con permiso específico)
+if (req.userRole !== 'admin' && 
+  !(req.userType === 'dynamic' && req.adminPermissions && req.adminPermissions.manage_media_links)) {
+ return res.status(403).json({
+   success: false,
+   message: 'No tienes permisos para modificar URL de audio.'
+ });
+}
     
     const { filePath, audioUrl } = req.body;
     
@@ -3703,19 +4932,23 @@ app.get('/api/files', async (req, res) => {
             if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
               const folderName = item.name;
               
-              // Verificar si esta carpeta está en la lista de carpetas permitidas
-              for (const allowedFolder of userFolders) {
-                // Eliminar / inicial si existe
-                const cleanAllowedFolder = allowedFolder.startsWith('/') 
-                  ? allowedFolder.substring(1) 
-                  : allowedFolder;
-                
-                // Si la carpeta actual es exactamente una permitida o es un padre de una permitida
-                if (cleanAllowedFolder === folderName || 
-                    cleanAllowedFolder.startsWith(folderName + '/')) {
-                  return true;
-                }
-              }
+           // Verificar si esta carpeta está en la lista de carpetas permitidas
+for (const allowedFolder of userFolders) {
+  // Ignorar elementos que no son cadenas (como el objeto de permisos)
+  if (typeof allowedFolder !== 'string') continue;
+  
+  // Eliminar / inicial si existe
+  const cleanAllowedFolder = allowedFolder.startsWith('/') 
+    ? allowedFolder.substring(1) 
+    : allowedFolder;
+  
+  // Si la carpeta actual es exactamente una permitida o es un padre de una permitida
+  if (cleanAllowedFolder === folderName || 
+      cleanAllowedFolder.startsWith(folderName + '/')) {
+    return true;
+  }
+}
+
               return false; // No mostrar carpetas a las que no tiene acceso
             }
             return false; // No mostrar archivos en la raíz para usuarios dinámicos
@@ -3738,17 +4971,20 @@ app.get('/api/files', async (req, res) => {
         let hasPermission = false;
         
         // Verificar si la carpeta actual está permitida
-        for (const folder of userFolders) {
-          // Normalizar carpeta permitida
-          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
-          
-          // La carpeta actual debe ser exactamente una permitida o una subcarpeta de una permitida
-          if (normalizedPrefix === normalizedFolder || 
-              normalizedPrefix.startsWith(normalizedFolder + '/')) {
-            hasPermission = true;
-            break;
-          }
-        }
+for (const folder of userFolders) {
+  // Ignorar elementos que no son cadenas (como el objeto de permisos)
+  if (typeof folder !== 'string') continue;
+  
+  // Normalizar carpeta permitida
+  const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+  
+  // La carpeta actual debe ser exactamente una permitida o una subcarpeta de una permitida
+  if (normalizedPrefix === normalizedFolder || 
+      normalizedPrefix.startsWith(normalizedFolder + '/')) {
+    hasPermission = true;
+    break;
+  }
+}
         
         // Si no tiene permiso, devolver error de acceso denegado
         if (!hasPermission) {
@@ -3801,12 +5037,16 @@ app.get('/api/files', async (req, res) => {
     // Para usuarios dinámicos en subcarpetas, verificar contenido adicional
     if (userType === 'dynamic' && normalizedPrefix) {
       // Filtrar adicionalmente si es una subcarpeta para asegurar que solo ve archivos en carpetas permitidas
+
       formattedFiles = formattedFiles.filter(item => {
         const itemFullPath = item.path.startsWith('/') ? item.path.substring(1) : item.path;
         
         // Si es una carpeta, verificar que al menos una carpeta permitida comience con esta ruta
         if (item.isFolder) {
           for (const folder of userFolders) {
+            // Ignorar elementos que no son cadenas (como el objeto de permisos)
+            if (typeof folder !== 'string') continue;
+            
             const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
             if (normalizedFolder === itemFullPath || normalizedFolder.startsWith(itemFullPath + '/')) {
               return true;
@@ -4643,20 +5883,6 @@ app.get('/api/docx-viewer', async (req, res) => {
   }
 });
 
-// ========================================================
-// ENDPOINTS PARA GESTIÓN DE USUARIOS DINÁMICOS
-// ========================================================
-
-// Middleware para verificar permisos de administrador
-const isAdmin = (req, res, next) => {
-  if (req.userRole !== 'admin') {
-    return res.status(403).json({
-      success: false,
-      message: 'Acceso denegado. Se requiere rol de administrador.'
-    });
-  }
-  next();
-};
 
 // Crear un nuevo usuario (solo administradores)
 app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => {
@@ -4671,7 +5897,7 @@ app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => 
       });
     }
     
-    const { username, password, assigned_folders, group_name } = req.body;
+    const { username, password, assigned_folders, group_name, admin_permissions } = req.body;
     
     // Validar datos requeridos
     if (!username || !password) {
@@ -4704,9 +5930,18 @@ app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => 
       active: true
     };
     
+    // Añadir los permisos administrativos a las carpetas asignadas
+    // Almacenaremos los permisos en la primera posición del array de carpetas asignadas
+    if (admin_permissions && Object.keys(admin_permissions).length > 0) {
+      userData.assigned_folders = [
+        { type: 'admin_permissions', permissions: admin_permissions },
+        ...(userData.assigned_folders || [])
+      ];
+    }
+    
     // Verificación adicional del bucket
     console.log(`[CREATE_USER] Creando usuario ${username} en bucket ${adminBucket}`);
-    console.log(`[CREATE_USER] Carpetas asignadas: ${JSON.stringify(assigned_folders || [])}`);
+    console.log(`[CREATE_USER] Carpetas asignadas: ${JSON.stringify(userData.assigned_folders || [])}`);
     
     if (!adminBucket) {
       return res.status(400).json({
@@ -4734,7 +5969,8 @@ app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => 
         bucket: result.data[0].bucket,
         assigned_folders: result.data[0].assigned_folders,
         group_name: result.data[0].group_name,
-        created_at: result.data[0].created_at
+        created_at: result.data[0].created_at,
+        admin_permissions: admin_permissions || {}
       }
     });
   } catch (error) {
@@ -4746,7 +5982,6 @@ app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => 
     });
   }
 });
-
 // Listar usuarios creados por el administrador actual
 app.get('/api/admin/users', isAdmin, async (req, res) => {
   try {
@@ -4839,9 +6074,64 @@ app.patch('/api/admin/update-user/:id', isAdmin, express.json(), async (req, res
       updateData.password_hash = await hashPassword(req.body.password);
     }
     
-    // Actualizar otros campos
-    if (req.body.assigned_folders !== undefined) {
-      updateData.assigned_folders = req.body.assigned_folders;
+  // Procesar permisos administrativos (que pueden venir de dos formas)
+console.log('[UPDATE_USER] Datos recibidos:', JSON.stringify(req.body, null, 2));
+
+// Preparar updateData.assigned_folders
+updateData.assigned_folders = undefined; // Se establecerá en una de las condiciones siguientes
+
+// Verificar si hay permisos en assigned_folders (nuevo formato)
+let hasPermissionsInFolders = false;
+if (req.body.assigned_folders && Array.isArray(req.body.assigned_folders)) {
+  const permObj = req.body.assigned_folders.find(folder => 
+    typeof folder === 'object' && folder.type === 'admin_permissions'
+  );
+  
+  console.log('[UPDATE_USER] Objeto de permisos en assigned_folders:', JSON.stringify(permObj, null, 2));
+  
+  if (permObj && permObj.permissions) {
+    hasPermissionsInFolders = true;
+    // Actualizar directamente con la estructura ya preparada
+    updateData.assigned_folders = req.body.assigned_folders;
+    console.log('[UPDATE_USER] Asignando carpetas con permisos incluidos');
+  }
+}
+
+// Si no hay permisos en assigned_folders pero sí en admin_permissions (formato antiguo)
+if (!hasPermissionsInFolders && req.body.admin_permissions) {
+  console.log('[UPDATE_USER] Procesando permisos del formato antiguo');
+  
+  // Obtener las carpetas asignadas actuales
+  let currentFolders = [...(existingUser.assigned_folders || [])];
+  
+  // Eliminar el objeto de permisos si existe
+  currentFolders = currentFolders.filter(folder => 
+    !(typeof folder === 'object' && folder.type === 'admin_permissions')
+  );
+  
+  // Añadir el nuevo objeto de permisos
+  updateData.assigned_folders = [
+    { type: 'admin_permissions', permissions: req.body.admin_permissions },
+    ...currentFolders
+  ];
+}
+// Si se proporcionan carpetas asignadas pero no permisos, conservar los permisos existentes
+else if (req.body.assigned_folders !== undefined && !hasPermissionsInFolders) {
+
+      // Obtener el objeto de permisos actual si existe
+      const permissionsObj = existingUser.assigned_folders.find(folder => 
+        typeof folder === 'object' && folder.type === 'admin_permissions'
+      );
+      
+      // Filtrar las carpetas asignadas para tener solo rutas de carpetas
+      const folderPaths = req.body.assigned_folders.filter(folder => 
+        typeof folder === 'string'
+      );
+      
+      // Combinar con el objeto de permisos si existe
+      updateData.assigned_folders = permissionsObj 
+        ? [permissionsObj, ...folderPaths] 
+        : folderPaths;
     }
     
     if (req.body.group_name !== undefined) {
@@ -4871,6 +6161,13 @@ app.patch('/api/admin/update-user/:id', isAdmin, express.json(), async (req, res
       });
     }
     
+    // Extraer permisos para la respuesta
+    const permissionsObj = result.data[0].assigned_folders.find(folder => 
+      typeof folder === 'object' && folder.type === 'admin_permissions'
+    );
+    
+    const admin_permissions = permissionsObj ? permissionsObj.permissions : {};
+    
     res.status(200).json({
       success: true,
       message: 'Usuario actualizado correctamente',
@@ -4881,6 +6178,7 @@ app.patch('/api/admin/update-user/:id', isAdmin, express.json(), async (req, res
         assigned_folders: result.data[0].assigned_folders,
         group_name: result.data[0].group_name,
         active: result.data[0].active,
+        admin_permissions: admin_permissions,
         updated_at: new Date().toISOString()
       }
     });
@@ -4894,11 +6192,14 @@ app.patch('/api/admin/update-user/:id', isAdmin, express.json(), async (req, res
   }
 });
 
+
 // Eliminar (desactivar) un usuario
 app.delete('/api/admin/delete-user/:id', isAdmin, async (req, res) => {
   try {
     const adminUsername = req.username;
     const userId = req.params.id;
+    // Verificar si es una eliminación permanente o solo desactivación
+    const permanent = req.query.permanent === 'true';
     
     if (!adminUsername) {
       return res.status(401).json({
@@ -4930,20 +6231,20 @@ app.delete('/api/admin/delete-user/:id', isAdmin, async (req, res) => {
       });
     }
     
-    // Desactivar usuario (no eliminar)
-    const result = await deleteUser(userId);
+    // Eliminar o desactivar usuario según el parámetro permanent
+    const result = await deleteUser(userId, permanent);
     
     if (!result.success) {
       return res.status(500).json({
         success: false,
-        message: 'Error al desactivar el usuario',
+        message: `Error al ${permanent ? 'eliminar' : 'desactivar'} el usuario`,
         error: result.error
       });
     }
     
     res.status(200).json({
       success: true,
-      message: 'Usuario desactivado correctamente'
+      message: permanent ? 'Usuario eliminado permanentemente' : 'Usuario desactivado correctamente'
     });
   } catch (error) {
     console.error('Error al eliminar usuario:', error);
@@ -4953,7 +6254,7 @@ app.delete('/api/admin/delete-user/:id', isAdmin, async (req, res) => {
       error: error.message
     });
   }
-});
+ });
 
 // Obtener permisos de carpeta
 app.get('/api/admin/folder-permissions', isAdmin, async (req, res) => {
@@ -5162,26 +6463,36 @@ app.get('/api/tags', async (req, res) => {
     // Obtener el bucket específico del usuario desde el middleware
     let bucketToUse = req.bucketName || defaultBucketName;
     
-    // SOLUCIÓN: Verificar si hay un token en los parámetros de consulta
-    if (req.query.token) {
-      try {
-        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
-        console.log(`[TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
-        
-        if (tokenData.username && userBucketMap[tokenData.username]) {
-          const tokenBucket = userBucketMap[tokenData.username];
-          console.log(`[TAGS] Usando bucket ${tokenBucket} desde token en parámetros`);
-          bucketToUse = tokenBucket;
-          
-          // Actualizar también req.username y req.userRole para las validaciones posteriores
-          req.username = tokenData.username;
-          req.userRole = userRoleMap[tokenData.username] || 'user';
-        } else if (tokenData.type === 'dynamic' && tokenData.bucket) {
-          // Usuario dinámico
-          bucketToUse = tokenData.bucket;
-          console.log(`[TAGS] Usuario dinámico ${tokenData.username} usando bucket ${bucketToUse} desde token`);
-        }
-      } catch (tokenError) {
+    
+// SOLUCIÓN: Verificar si hay un token en los parámetros de consulta
+if (req.query.token) {
+  try {
+    const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+    console.log(`[TAGS] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+    
+    if (tokenData.type === 'dynamic' && tokenData.bucket) {
+      // Usuario dinámico
+      console.log(`[TAGS] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token`);
+      bucketToUse = tokenData.bucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = 'user';
+      req.userType = 'dynamic';
+      req.userFolders = tokenData.folders || [];
+    }
+    else if (tokenData.username && userBucketMap[tokenData.username]) {
+      // Para usuarios estáticos
+      const tokenBucket = userBucketMap[tokenData.username];
+      console.log(`[TAGS] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+      bucketToUse = tokenBucket;
+      
+      // Actualizar también req.username y req.userRole para las validaciones posteriores
+      req.username = tokenData.username;
+      req.userRole = userRoleMap[tokenData.username] || 'user';
+    }
+
+  } catch (tokenError) {
         console.error('[TAGS] Error al decodificar token de parámetros:', tokenError);
       }
     }
@@ -5225,93 +6536,8 @@ app.get('/api/tags', async (req, res) => {
   }
 });
 
-// Crear una nueva etiqueta
-app.post('/api/tags', express.json(), async (req, res) => {
-  try {
-    // Verificar si Supabase está configurado
-    if (!supabase) {
-      return res.status(500).json({
-        success: false,
-        message: 'Cliente de Supabase no configurado correctamente.'
-      });
-    }
-    
-    // Solo admin puede crear etiquetas
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para crear etiquetas. Se requiere rol de administrador.'
-      });
-    }
-    
-    const { tag_name, category } = req.body;
-    
-    if (!tag_name || !category) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requiere nombre de etiqueta y categoría'
-      });
-    }
-    
-    // Obtener el bucket específico del usuario desde el middleware
-    const bucketToUse = req.bucketName || defaultBucketName;
-    
-    console.log(`[TAGS] Creando etiqueta "${tag_name}" en categoría "${category}" para bucket ${bucketToUse}`);
-    
-    // Verificar si la etiqueta ya existe en esta categoría y bucket
-    const { data: existingTags, error: checkError } = await supabase
-      .from('tags_by_bucket')
-      .select('*')
-      .eq('bucket', bucketToUse)
-      .eq('tag_name', tag_name)
-      .eq('category', category);
-    
-    if (checkError) {
-      console.error('Error al verificar etiqueta existente:', checkError);
-      throw checkError;
-    }
-    
-    if (existingTags && existingTags.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message: 'Esta etiqueta ya existe en la categoría especificada'
-      });
-    }
-    
-    // Crear la etiqueta
-    const { data, error } = await supabase
-      .from('tags_by_bucket')
-      .insert([{
-        bucket: bucketToUse,
-        tag_name: tag_name,
-        category: category,
-        created_by: req.username || 'admin'
-      }])
-      .select();
-    
-    if (error) {
-      console.error('Error al crear etiqueta:', error);
-      throw error;
-    }
-    
-    return res.status(201).json({
-      success: true,
-      message: 'Etiqueta creada correctamente',
-      tag: data[0]
-    });
-  } catch (error) {
-    console.error('Error al crear etiqueta:', error);
-    
-    return res.status(500).json({
-      success: false,
-      message: 'Error interno al crear etiqueta',
-      error: error.message
-    });
-  }
-});
-
 // Eliminar una etiqueta
-app.delete('/api/tags/:id', async (req, res) => {
+app.delete('/api/tags/:id', hasAdminPermission('manage_tags'), async (req, res) => {
   try {
     // Verificar si Supabase está configurado
     if (!supabase) {
@@ -5320,18 +6546,8 @@ app.delete('/api/tags/:id', async (req, res) => {
         message: 'Cliente de Supabase no configurado correctamente.'
       });
     }
-    
-    // Solo admin puede eliminar etiquetas
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para eliminar etiquetas. Se requiere rol de administrador.'
-      });
-    }
-    
-    const tagId = req.params.id;
-    
-    if (!tagId) {
+        const tagId = req.params.id;
+        if (!tagId) {
       return res.status(400).json({
         success: false,
         message: 'Se requiere ID de etiqueta'
@@ -5390,6 +6606,63 @@ app.delete('/api/tags/:id', async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Error interno al eliminar etiqueta',
+      error: error.message
+    });
+  }
+});
+
+// Crear una nueva etiqueta
+app.post('/api/tags', hasAdminPermission('manage_tags'), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    const { tag_name, category } = req.body;
+    
+    if (!tag_name || !category) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere nombre de etiqueta y categoría'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    console.log(`[TAGS] Creando etiqueta "${tag_name}" en categoría "${category}" para bucket ${bucketToUse}`);
+    
+    // Insertar la nueva etiqueta
+    const { data, error } = await supabase
+      .from('tags_by_bucket')
+      .insert([{
+        bucket: bucketToUse,
+        category: category,
+        tag_name: tag_name,
+        created_by: req.username || 'admin'
+      }])
+      .select();
+    
+    if (error) {
+      console.error('Error al crear etiqueta:', error);
+      throw error;
+    }
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Etiqueta creada correctamente',
+      tag: data[0]
+    });
+  } catch (error) {
+    console.error('Error al crear etiqueta:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al crear etiqueta',
       error: error.message
     });
   }
@@ -5466,21 +6739,13 @@ app.get('/api/tags/categories', async (req, res) => {
 });
 
 // Crear una nueva categoría con etiquetas iniciales (opcional)
-app.post('/api/tags/categories', express.json(), async (req, res) => {
+app.post('/api/tags/categories', express.json(), hasAdminPermission('manage_tags'), async (req, res) => {
   try {
     // Verificar si Supabase está configurado
     if (!supabase) {
       return res.status(500).json({
         success: false,
         message: 'Cliente de Supabase no configurado correctamente.'
-      });
-    }
-    
-    // Solo admin puede crear categorías
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permisos para crear categorías. Se requiere rol de administrador.'
       });
     }
     

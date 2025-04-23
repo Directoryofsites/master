@@ -11,7 +11,8 @@
   "dotenv": "^16.4.7",
   "express": "^4.21.2",
   "mammoth": "^1.9.0",
-  "multer": "^1.4.5-lts.1"
+  "multer": "^1.4.5-lts.1",
+  "uuid": "^11.1.0"
  },
  "scripts": {
   "start": "SUPABASE_URL=https://cjhbhfvkcwwpnhqixlwd.supabase.co SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqaGJoZnZrY3d3cG5ocWl4bHdkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjMxOTYyNCwiZXhwIjoyMDU3ODk1NjI0fQ.RSRvD2NX-R9tT4pk7-Q4l_H-MqQH-VK666DyLbmkvrY BUCKET_NAME=master node server.js",
