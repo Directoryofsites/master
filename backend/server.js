@@ -4030,23 +4030,17 @@ app.get('/api/admin/download-backup/:filename', async (req, res) => {
 });
 
 // Endpoint para generar una copia de seguridad directa
-app.get('/api/admin/backup-direct', async (req, res) => {
+app.get('/api/admin/backup-direct', hasAdminPermission('manage_backup'), async (req, res) => {
   console.log('[BACKUP_DIRECT] Endpoint llamado');
   console.log('[BACKUP_DIRECT] Query params:', req.query);
   console.log('[BACKUP_DIRECT] Usuario:', req.username);
   console.log('[BACKUP_DIRECT] Bucket:', req.bucketName);
   
   try {
-    // Responder con un archivo simple para probar
-    res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Content-Disposition', 'attachment; filename="test-backup.txt"');
-    res.send('Este es un archivo de prueba para verificar que la descarga funciona.');
-    console.log('[BACKUP_DIRECT] Se envió archivo de prueba');
-  } catch (error) {
-    console.error('[BACKUP_DIRECT] Error:', error);
-    res.status(500).send('Error al generar archivo de prueba');
-  }
-});
+    const bucketName = req.query.bucket || req.bucketName;
+    console.log(`[BACKUP_DIRECT] Bucket a usar: ${bucketName}`);
+    
+    if (!bucketName) {
       return res.status(400).json({
         success: false,
         message: 'Se requiere especificar un bucket para la copia de seguridad'
