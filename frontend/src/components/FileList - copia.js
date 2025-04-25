@@ -1641,14 +1641,13 @@ const toggleActionsMenu = (filePath, e) => {
                     )}
                     </div>
                 
-                    <div className="file-actions" style={{
-  padding: '10px 15px',
-  borderTop: '1px solid #f0f0f0',
-  backgroundColor: '#f8f9fa',
-  display: 'flex',
-  justifyContent: 'flex-start',
-  position: 'relative'  // Añadimos position relative para posicionar los elementos absolutos dentro
-}}>
+                <div className="file-actions" style={{
+                  padding: '10px 15px',
+                  borderTop: '1px solid #f0f0f0',
+                  backgroundColor: '#f8f9fa',
+                  display: 'flex',
+                  justifyContent: 'flex-start'
+                }}>
                   {/* Solo administradores pueden ver el botón de acciones */}
                   {userRole === 'admin' && !multiSelectMode && (
                     <div className="dropdown" style={{ position: 'relative', display: 'inline-block' }}>
@@ -1824,20 +1823,11 @@ style={{
                   
                   {/* Mostrar campos de entrada si se está editando */}
                   {editingUrlFile === filePath && (
-  <div className="youtube-url-input-container" onClick={e => e.stopPropagation()} style={{
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    position: 'absolute',
-    top: '-50px',
-    left: '0',
-    right: '0',
-    zIndex: 1010,
-    backgroundColor: 'white',
-    padding: '10px',
-    boxShadow: '0 -4px 10px rgba(0,0,0,0.2)',
-    borderRadius: '4px'
-  }}>
+                    <div className="youtube-url-input-container" onClick={e => e.stopPropagation()} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      width: '100%'
+                    }}>
                       <input
                         type="text"
                         value={tempUrl}
@@ -1884,20 +1874,11 @@ style={{
                   )}
                   
                   {editingAudioFile === filePath && (
-  <div className="audio-url-input-container" onClick={e => e.stopPropagation()} style={{
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    position: 'absolute',
-    top: '-50px',
-    left: '0',
-    right: '0',
-    zIndex: 1010,
-    backgroundColor: 'white',
-    padding: '10px',
-    boxShadow: '0 -4px 10px rgba(0,0,0,0.2)',
-    borderRadius: '4px'
-  }}>
+                    <div className="audio-url-input-container" onClick={e => e.stopPropagation()} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      width: '100%'
+                    }}>
                       <input
                         type="text"
                         value={tempAudioUrl}
@@ -1944,20 +1925,11 @@ style={{
                   )}
                   
                   {editingImageFile === filePath && (
-  <div className="image-url-input-container" onClick={e => e.stopPropagation()} style={{
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    position: 'absolute',
-    top: '-50px',
-    left: '0',
-    right: '0',
-    zIndex: 1010,
-    backgroundColor: 'white',
-    padding: '10px',
-    boxShadow: '0 -4px 10px rgba(0,0,0,0.2)',
-    borderRadius: '4px'
-  }}>
+                    <div className="image-url-input-container" onClick={e => e.stopPropagation()} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      width: '100%'
+                    }}>
                       <input
                         type="text"
                         value={tempImageUrl}

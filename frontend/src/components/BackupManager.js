@@ -21,41 +21,81 @@ const BackupManager = () => {
     }
   };
 
-  // Función para iniciar el proceso de copia de seguridad
+  // Función para iniciar el proceso de copia de seguridad directa
+
   const handleBackup = async () => {
     if (!isAdmin()) {
       setError('Solo los administradores pueden realizar copias de seguridad');
       return;
     }
-
+  
     try {
       setIsLoading(true);
       setMessage('Iniciando generación de copia de seguridad...');
       setError('');
-
-      // Obtener el bucket actual del token en localStorage
+  
+      // Obtener el bucket actual
       const currentBucket = getCurrentBucket();
       
       if (!currentBucket) {
         throw new Error('No se pudo determinar el bucket actual');
       }
-
-      // Llamar a la nueva API para generar y descargar la copia de seguridad directamente
-      await api.generateBackupDirect(currentBucket);
+  
+      // Obtener el token
+      const token = localStorage.getItem('authToken');
       
-      setMessage('La copia de seguridad se ha iniciado. Se abrirá automáticamente el diálogo para guardar el archivo.');
+      console.log(`Generando copia de seguridad para bucket: ${currentBucket}`);
+      
+      // Llamar al endpoint con los headers correctos
+      const response = await fetch(`/api/admin/backup-direct?bucket=${encodeURIComponent(currentBucket)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error en la respuesta del servidor:', errorText);
+        throw new Error(`Error ${response.status}: ${errorText}`);
+      }
+      
+      console.log('Respuesta del servidor recibida, creando blob...');
+      
+      // Crear un blob a partir de la respuesta
+      const blob = await response.blob();
+      console.log('Tamaño del blob:', blob.size);
+      
+      if (blob.size === 0) {
+        throw new Error('El archivo generado está vacío. Verifica los logs del servidor.');
+      }
+      
+      // Crear una URL para el blob
+      const url = window.URL.createObjectURL(blob);
+      
+      // Crear un enlace para descargar el blob
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `backup-${currentBucket}-${new Date().toISOString().slice(0, 10)}.zip`;
+      
+      // Añadir el enlace al DOM y hacer clic en él
+      document.body.appendChild(a);
+      a.click();
+      
+      // Limpiar
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setMessage('La copia de seguridad se ha generado correctamente. Se ha iniciado la descarga del archivo.');
     } catch (error) {
       console.error('Error al generar copia de seguridad:', error);
       setError(`Error: ${error.message || 'No se pudo generar la copia de seguridad'}`);
       setMessage('');
     } finally {
-      // Establecer un temporizador para limpiar el mensaje después de 5 segundos
       setTimeout(() => {
         setIsLoading(false);
-        if (!error) {
-          setMessage('');
-        }
-      }, 5000);
+      }, 2000);
     }
   };
 
@@ -102,13 +142,15 @@ const BackupManager = () => {
       <h2>Gestión de Copias de Seguridad</h2>
       <p>Esta herramienta le permite generar una copia de seguridad completa de todos los archivos y carpetas en su bucket.</p>
       
-      <button 
-        onClick={handleBackup} 
-        disabled={isLoading}
-        className="backup-button"
-      >
-        {isLoading ? 'Generando copia...' : 'Generar copia de seguridad'}
-      </button>
+      <div className="backup-buttons">
+        <button 
+          onClick={handleBackup} 
+          disabled={isLoading}
+          className="backup-button main-button"
+        >
+          {isLoading ? 'Generando copia...' : 'Generar copia de seguridad'}
+        </button>
+      </div>
       
       {message && <div className="success-message">{message}</div>}
       {error && <div className="error-message">{error}</div>}

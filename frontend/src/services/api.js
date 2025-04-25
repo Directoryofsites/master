@@ -457,8 +457,8 @@ export const searchFilesByDate = async (dateValue, searchType = 'specific') => {
       url += `&token=${encodeURIComponent(token)}`;
     }
     
-    console.log('URL exacta de búsqueda por fecha:', url);
-    console.log('Enviando solicitud al endpoint de búsqueda por fecha...');
+    console.log('URL exacta de búsqueda combinada de múltiples etiquetas y fecha:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda combinada...');
     const startTime = new Date().getTime();
     
     // Realizar la solicitud
@@ -541,9 +541,10 @@ export const searchFilesCombined = async (tagValue, dateValue, dateType = 'speci
 /**
  * Busca archivos que coincidan con múltiples etiquetas simultáneamente
  * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
+ * @param {boolean} useIds - Si es true, interpreta tags como IDs de etiquetas en lugar de nombres
  * @returns {Promise<Array>} - Lista de archivos que coinciden con todas las etiquetas especificadas
  */
-export const searchFilesByMultipleTags = async (tags) => {
+export const searchFilesByMultipleTags = async (tags, useIds = false) => {
   try {
     console.log('INICIANDO búsqueda por múltiples etiquetas:', tags);
     
@@ -570,6 +571,11 @@ export const searchFilesByMultipleTags = async (tags) => {
     
     // Construir la URL con el parámetro de etiquetas
     let url = `${BASE_URL}/search-by-multiple-tags?tags=${encodeURIComponent(tagsParam.trim())}`;
+    
+    // Añadir parámetro para indicar si estamos usando IDs
+    if (useIds) {
+      url += `&useIds=true`;
+    }
     
     // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
     if (token) {
@@ -606,11 +612,12 @@ export const searchFilesByMultipleTags = async (tags) => {
  * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
  * @param {string} dateValue - Valor de fecha a buscar
  * @param {string} dateType - Tipo de búsqueda de fecha: 'specific', 'month', o 'year'
+ * @param {boolean} useIds - Si es true, interpreta tags como IDs de etiquetas en lugar de nombres
  * @returns {Promise<Array>} - Lista de archivos que coinciden con todos los criterios
  */
-export const searchMultipleTagsWithDate = async (tags, dateValue, dateType = 'specific') => {
+export const searchMultipleTagsWithDate = async (tags, dateValue, dateType = 'specific', useIds = false) => {
   try {
-    console.log(`INICIANDO búsqueda combinada de múltiples etiquetas y fecha: tags=${tags}, fecha=${dateValue}, tipo=${dateType}`);
+    console.log(`INICIANDO búsqueda combinada de múltiples etiquetas y fecha: tags=${tags}, fecha=${dateValue}, tipo=${dateType}, useIds=${useIds}`);
     
     // Verificar que los parámetros no estén vacíos
     if (!tags) {
@@ -640,6 +647,11 @@ export const searchMultipleTagsWithDate = async (tags, dateValue, dateType = 'sp
     // Construir la URL con los parámetros de búsqueda
     let url = `${BASE_URL}/search-multiple-tags-with-date?tags=${encodeURIComponent(tagsParam.trim())}&date=${encodeURIComponent(dateValue.trim())}&dateType=${encodeURIComponent(dateType)}`;
     
+    // Añadir parámetro para indicar si estamos usando IDs
+    if (useIds) {
+      url += `&useIds=true`;
+    }
+    
     // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
     if (token) {
       url += `&token=${encodeURIComponent(token)}`;
@@ -666,6 +678,85 @@ export const searchMultipleTagsWithDate = async (tags, dateValue, dateType = 'sp
     return data;
   } catch (error) {
     console.error('Error en searchMultipleTagsWithDate:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos que coincidan con un texto y etiquetas simultáneamente
+ * @param {string} searchText - Texto a buscar en los nombres de archivos
+ * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
+ * @param {boolean} useIds - Si es true, interpreta tags como IDs de etiquetas en lugar de nombres
+ * @param {boolean} requireAllTags - Si es true, requiere que todas las etiquetas coincidan (por defecto: false)
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con todos los criterios
+ */
+export const searchTextWithTags = async (searchText, tags, useIds = false, requireAllTags = false) => {
+  try {
+    console.log(`INICIANDO búsqueda combinada de texto y etiquetas: texto=${searchText}, tags=${tags}, useIds=${useIds}, requireAllTags=${requireAllTags}`);
+    
+    // Verificar que los parámetros no estén vacíos
+    if (!searchText || !searchText.trim()) {
+      throw new Error('Se requiere un texto para la búsqueda');
+    }
+    
+    if (!tags) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Manejar tanto string (formato "tag1,tag2,tag3") como arrays de etiquetas
+    let tagsParam;
+    if (Array.isArray(tags)) {
+      tagsParam = tags.join(',');
+    } else {
+      tagsParam = tags;
+    }
+    
+    // Verificar que no esté vacío después de procesar
+    if (!tagsParam.trim()) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-text-with-tags?text=${encodeURIComponent(searchText.trim())}&tags=${encodeURIComponent(tagsParam.trim())}`;
+    
+    // Añadir parámetros adicionales
+    if (useIds) {
+      url += `&useIds=true`;
+    }
+    
+    if (requireAllTags) {
+      url += `&requireAllTags=true`;
+    }
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda combinada de texto y etiquetas:', url);
+    console.log('Enviando solicitud al endpoint...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda combinada`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchTextWithTags:', error);
     throw error;
   }
 };
@@ -1538,7 +1629,7 @@ export const generateBackup = async (bucketName) => {
 /**
  * Genera y descarga directamente una copia de seguridad usando el diálogo nativo del navegador
  * @param {string} bucketName - Nombre del bucket a respaldar
- * @returns {Promise<void>} - No retorna datos, inicia la descarga directamente
+ * @returns {Promise<Object>} - Resultado de la operación
  */
 export const generateBackupDirect = async (bucketName) => {
   try {
@@ -1551,13 +1642,24 @@ export const generateBackupDirect = async (bucketName) => {
     // Obtener el token de autorización
     const token = getAuthToken();
     
+    // Verificar si estamos en desarrollo (usando localhost)
+    const isDevelopment = window.location.hostname === 'localhost';
+    
     // Construir la URL con el parámetro del bucket
-    let url = `${BASE_URL}/admin/backup-direct?bucket=${encodeURIComponent(bucketName)}`;
+    // Usar la URL absoluta para evitar problemas con el proxy en desarrollo
+    let url;
+    if (isDevelopment) {
+      url = `http://localhost:3000/api/admin/backup-direct?bucket=${encodeURIComponent(bucketName)}`;
+    } else {
+      url = `${BASE_URL}/admin/backup-direct?bucket=${encodeURIComponent(bucketName)}`;
+    }
     
     // Añadir el token como parámetro de URL para autenticación
     if (token) {
       url += `&token=${encodeURIComponent(token)}`;
     }
+    
+    console.log('URL de descarga:', url);
     
     // Crear un elemento <a> temporal para iniciar la descarga
     const downloadLink = document.createElement('a');

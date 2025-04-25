@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';
+import TagSelector from './TagSelector';
 
 const FileMetadataEditor = ({ filePath, isOpen, onClose, onSave }) => {
 
@@ -14,7 +15,9 @@ const FileMetadataEditor = ({ filePath, isOpen, onClose, onSave }) => {
     lastModified: new Date().toISOString().split('T')[0]
   });
   const [fileDate, setFileDate] = useState(new Date().toISOString().split('T')[0]);
+
   const [tags, setTags] = useState([]);
+  const [tagObjects, setTagObjects] = useState([]);
   const [newTag, setNewTag] = useState('');
   const [suggestedTags, setSuggestedTags] = useState([]);
   const [filteredSuggestions, setFilteredSuggestions] = useState([]);
@@ -245,15 +248,6 @@ alert("Metadatos guardados correctamente");
   }
 };
 
-// Función para añadir la etiqueta seleccionada al archivo
-const handleAddTag = () => {
-  if (newTag && !tags.includes(newTag)) {
-    // Añadir a las etiquetas actuales del archivo
-    setTags([...tags, newTag]);
-    // Resetear el selector
-    setNewTag('');
-  }
-};
 
   // Función para eliminar una etiqueta
   const handleRemoveTag = (tagToRemove) => {
@@ -331,29 +325,18 @@ const handleSelectSuggestion = (tag) => {
                 ))}
               </div>
               
-              <div className="add-tag-container">
-  <div className="tag-select-wrapper">
-    <select
-      value={newTag}
-      onChange={(e) => setNewTag(e.target.value)}
-      className="tag-select"
-    >
-      <option value="">-- Seleccionar etiqueta --</option>
-      {suggestedTags.map((tag, index) => (
-        <option key={index} value={tag}>
-          {tag}
-        </option>
-      ))}
-    </select>
-  </div>
-  <button
-    type="button"
-    onClick={handleAddTag}
-    className="add-tag-btn"
-    disabled={!newTag}
-  >
-    Añadir
-  </button>
+              <div className="tag-selector-container">
+  <TagSelector 
+    onTagsChange={(selectedTags) => {
+      // Guardar los objetos de etiqueta completos
+      setTagObjects(selectedTags);
+      
+      // Extraer solo los nombres de las etiquetas para mantener compatibilidad
+      const tagNames = selectedTags.map(tag => tag.name);
+      setTags(tagNames);
+    }}
+    maxTags={10}
+  />
 </div>
 
             </div>
