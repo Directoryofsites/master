@@ -16,6 +16,7 @@ const SearchForm = ({ onSearch, isLoading }) => {
   const [isCategorizedTagSearch, setIsCategorizedTagSearch] = useState(false);
   const [isTextAndTagSearch, setIsTextAndTagSearch] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [isContentSearch, setIsContentSearch] = useState(false);
   // Estados para búsqueda de etiquetas
   const [availableTags, setAvailableTags] = useState([]);
   const [loadingTags, setLoadingTags] = useState(false);
@@ -187,6 +188,7 @@ const SearchForm = ({ onSearch, isLoading }) => {
     setIsTextAndDateSearch(false);
     setIsCategorizedTagSearch(false);
     setIsTextAndTagSearch(false);
+    setIsContentSearch(false);
     
     // Activar solo el tipo seleccionado
     switch (type) {
@@ -221,6 +223,10 @@ const SearchForm = ({ onSearch, isLoading }) => {
       case 'categorizedTags':
         setIsCategorizedTagSearch(true);
         setSearchTerm('Búsqueda por etiquetas categorizadas');
+        break;
+      case 'content':
+        setIsContentSearch(true);
+        setSearchTerm('');
         break;
       default: // texto simple
         // Ya se resetean todos los estados arriba
@@ -436,6 +442,21 @@ const SearchForm = ({ onSearch, isLoading }) => {
     if (!searchTerm.trim()) return;
       
     try {
+
+      // Para búsqueda por contenido
+      if (isContentSearch) {
+        console.log('Realizando búsqueda por contenido');
+        
+        try {
+          const results = await api.searchByContent(searchTerm);
+          
+          console.log(`Búsqueda por contenido exitosa: ${results.length} resultados`);
+          onSearch(results, false, false, null, true, true, true); // El último parámetro indica que es búsqueda por contenido
+          return;
+        } catch (error) {
+          console.error('Error al realizar búsqueda por contenido:', error);
+        }
+      }
       // Para búsqueda de texto + etiqueta
       if (isTextAndTagSearch && textAndTagSearchText && textAndTagSelectedTagObjects.length > 0) {
         console.log('Realizando búsqueda por texto y etiquetas');
@@ -580,26 +601,30 @@ const SearchForm = ({ onSearch, isLoading }) => {
         <div className="search-container">
           {/* Opciones de Tipo de Búsqueda */}
           <div className="search-options-container">
+
             <div className="basic-search-options">
               <label className="search-option">
                 <input
                   type="radio"
                   name="searchType"
-                  checked={!isTagSearch && !isDateSearch && !isCombinedSearch && !isMultipleTagsSearch && !isMultipleTagsWithDateSearch && !isTextAndDateSearch && !isCategorizedTagSearch && !isTextAndTagSearch}
+                  checked={!isTagSearch && !isDateSearch && !isCombinedSearch && !isMultipleTagsSearch && !isMultipleTagsWithDateSearch && !isTextAndDateSearch && !isCategorizedTagSearch && !isTextAndTagSearch && !isContentSearch}
                   onChange={() => handleSearchTypeChange('text')}
                   disabled={isLoading}
                 />
                 Texto
               </label>
-              <label className="search-option">
+              
+              {/* Se oculta la opción de etiqueta simple */}
+              
+              <label className="search-option highlight-new-option">
                 <input
                   type="radio"
                   name="searchType"
-                  checked={isTagSearch}
-                  onChange={() => handleSearchTypeChange('tag')}
+                  checked={isContentSearch}
+                  onChange={() => handleSearchTypeChange('content')}
                   disabled={isLoading}
                 />
-                Etiqueta
+                Contenido
               </label>
               <label className="search-option">
                 <input
@@ -622,16 +647,8 @@ const SearchForm = ({ onSearch, isLoading }) => {
             
             {showAdvancedOptions && (
               <div className="advanced-search-types">
-                <label className="search-option">
-                  <input
-                    type="radio"
-                    name="searchType"
-                    checked={isCombinedSearch}
-                    onChange={() => handleSearchTypeChange('combined')}
-                    disabled={isLoading}
-                  />
-                  Etiqueta + Fecha
-                </label>
+                {/* Se oculta la opción de etiqueta + fecha */}
+                
                 <label className="search-option">
                   <input
                     type="radio"
@@ -672,16 +689,9 @@ const SearchForm = ({ onSearch, isLoading }) => {
                   />
                   Texto + Etiqueta
                 </label>
-                <label className="search-option highlight-new-option">
-                  <input
-                    type="radio"
-                    name="searchType"
-                    checked={isCategorizedTagSearch}
-                    onChange={() => handleSearchTypeChange('categorizedTags')}
-                    disabled={isLoading}
-                  />
-                  Búsqueda Avanzada por Etiquetas
-                </label>
+                
+                {/* Se oculta la opción de búsqueda avanzada por etiquetas */}
+                
               </div>
             )}
           </div>
@@ -701,19 +711,20 @@ const SearchForm = ({ onSearch, isLoading }) => {
                     disabled={isLoading || loadingTags}
                   />
                 </div>
-                <select 
-                  value={selectedTag} 
-                  onChange={handleTagChange}
-                  disabled={isLoading || loadingTags}
 
-                  className="tag-selector"
-                >
-                  <option value="">-- Seleccionar etiqueta --</option>
-                  {getFilteredTags().map((tag, index) => (
-                    <option key={index} value={tag}>{tag}</option>
-                  ))}
-                </select>
-                {loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+                <select 
+  value={selectedTag} 
+  onChange={handleTagChange}
+  disabled={isLoading || loadingTags}
+  className="tag-selector"
+>
+  <option value="">-- Seleccionar etiqueta --</option>
+  {getFilteredTags().map((tag, index) => 
+    <option key={index} value={tag}>{tag}</option>
+  )}
+</select>
+{loadingTags && <span className="loading-indicator">Cargando etiquetas...</span>}
+
               </div>
             )}
             
@@ -809,7 +820,7 @@ const SearchForm = ({ onSearch, isLoading }) => {
                 )}
               </div>
             )}
-            
+                        
             {/* Búsqueda Combinada (Etiqueta + Fecha) */}
             {isCombinedSearch && (
               <div className="combined-search-options">
@@ -884,14 +895,11 @@ const SearchForm = ({ onSearch, isLoading }) => {
                         onChange={() => {
                           setCombinedDateType('year');
                           updateCombinedSearchTerm();
-
-                          setCombinedDateType('year');
-                         updateCombinedSearchTerm();
-                       }}
-                       disabled={isLoading}
-                     />
-                     Año
-                   </label>
+                        }}
+                        disabled={isLoading}
+                      />
+                      Año
+                    </label>
                  </div>
                  
                  {combinedDateType === 'specific' && (
@@ -1319,6 +1327,30 @@ const SearchForm = ({ onSearch, isLoading }) => {
                <TagSearch onResults={(results) => onSearch(results, false, false, null, true, true)} />
              </div>
            )}
+
+           {/* Búsqueda por Contenido */}
+           {isContentSearch && (
+             <div className="content-search-options">
+               <div className="content-search-input-section">
+                 <label>Ingrese texto para buscar dentro de los documentos:</label>
+                 <input
+                   type="text"
+                   value={searchTerm}
+                   onChange={(e) => setSearchTerm(e.target.value)}
+                   placeholder="Buscar en el contenido de los archivos..."
+                   className="search-input"
+                   disabled={isLoading}
+                 />
+               </div>
+               
+               <div className="content-search-info">
+                 <small>
+                   La búsqueda por contenido examina el texto dentro de documentos DOCX, PDF y TXT.
+                 </small>
+               </div>
+             </div>
+           )}
+
          </div>
          
          {/* Campo de Búsqueda y Botón */}

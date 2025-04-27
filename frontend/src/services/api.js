@@ -818,6 +818,135 @@ export const searchTextWithDate = async (searchText, dateValue, dateType = 'spec
 };
 
 /**
+ * Busca archivos según el contenido dentro de ellos
+ * @param {string} searchText - Texto a buscar dentro del contenido de los archivos
+ * @returns {Promise<Array>} - Lista de archivos que contienen el texto
+ */
+export const searchByContent = async (searchText) => {
+  try {
+    console.log(`INICIANDO búsqueda por contenido: texto: ${searchText}`);
+    
+    // Verificar que el texto no esté vacío
+    if (!searchText || !searchText.trim()) {
+      throw new Error('Se requiere un texto para la búsqueda en contenido');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-by-content?text=${encodeURIComponent(searchText.trim())}`;
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda por contenido:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda por contenido...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda por contenido`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchByContent:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos según el contenido dentro de ellos con etiquetas específicas
+ * @param {string} searchText - Texto a buscar dentro del contenido de los archivos
+ * @param {string|Array} tags - Etiqueta(s) a buscar, puede ser un string con etiquetas separadas por comas o un array
+ * @param {boolean} useIds - Si es true, interpreta tags como IDs de etiquetas en lugar de nombres
+ * @param {boolean} requireAllTags - Si es true, requiere que todas las etiquetas coincidan (por defecto: false)
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con todos los criterios
+ */
+export const searchContentWithTags = async (searchText, tags, useIds = false, requireAllTags = false) => {
+  try {
+    console.log(`INICIANDO búsqueda de contenido con etiquetas: texto=${searchText}, tags=${tags}, useIds=${useIds}, requireAllTags=${requireAllTags}`);
+    
+    // Verificar que los parámetros no estén vacíos
+    if (!searchText || !searchText.trim()) {
+      throw new Error('Se requiere un texto para la búsqueda');
+    }
+    
+    if (!tags) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Manejar tanto string (formato "tag1,tag2,tag3") como arrays de etiquetas
+    let tagsParam;
+    if (Array.isArray(tags)) {
+      tagsParam = tags.join(',');
+    } else {
+      tagsParam = tags;
+    }
+    
+    // Verificar que no esté vacío después de procesar
+    if (!tagsParam.trim()) {
+      throw new Error('Se requiere al menos una etiqueta para la búsqueda');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-content-with-tags?text=${encodeURIComponent(searchText.trim())}&tags=${encodeURIComponent(tagsParam.trim())}`;
+    
+    // Añadir parámetros adicionales
+    if (useIds) {
+      url += `&useIds=true`;
+    }
+    
+    if (requireAllTags) {
+      url += `&requireAllTags=true`;
+    }
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      url += `&token=${encodeURIComponent(token)}`;
+    }
+    
+    console.log('URL exacta de búsqueda de contenido con etiquetas:', url);
+    console.log('Enviando solicitud al endpoint...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda de contenido con etiquetas`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchContentWithTags:', error);
+    throw error;
+  }
+};
+
+/**
  * Obtiene la URL de YouTube asociada a un archivo
  * @param {string} path - Ruta del archivo
  * @returns {Promise<string|null>} - URL de YouTube o null si no hay ninguna

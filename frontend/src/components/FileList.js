@@ -1223,23 +1223,42 @@ const toggleActionsMenu = (filePath, e) => {
     };
   
     // Función para formatear la fecha
-    const formatDate = (dateString) => {
-      if (!dateString) return '';
-      
-      try {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('es-CO', { 
-          year: 'numeric', 
-          month: 'short', 
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      } catch (error) {
-        console.error('Error al formatear fecha:', error);
-        return dateString;
-      }
-    };
+const formatDate = (dateString) => {
+  if (!dateString) return '';
+  
+  try {
+    // Si la fecha incluye hora (contiene 'T' o espacio y luego números), considerarla como ISO completa
+    const isFullDateTime = dateString.includes('T') || /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(dateString);
+    
+    // Crear objeto Date ajustando a zona horaria local
+    let date;
+    if (isFullDateTime) {
+      // Si es formato ISO completo, parsearlo directamente
+      date = new Date(dateString);
+    } else {
+      // Si es solo fecha (YYYY-MM-DD), agregarle 12:00 hora local para evitar problemas de zona horaria
+      date = new Date(`${dateString}T12:00:00`);
+    }
+    
+    // Verificar si la fecha es válida
+    if (isNaN(date.getTime())) {
+      console.error('Fecha inválida:', dateString);
+      return dateString;
+    }
+    
+    // Formatear la fecha en español con opciones específicas
+    return date.toLocaleDateString('es-CO', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric',
+      hour: isFullDateTime ? '2-digit' : undefined,
+      minute: isFullDateTime ? '2-digit' : undefined
+    });
+  } catch (error) {
+    console.error('Error al formatear fecha:', error, 'Fecha original:', dateString);
+    return dateString;
+  }
+};
   
     // Función para obtener la ubicación del archivo
     const getFileLocation = (file) => {
@@ -1423,29 +1442,32 @@ const toggleActionsMenu = (filePath, e) => {
               // Obtener los metadatos del archivo
               const metadata = fileMetadata[filePath] || {};
               
-              // Obtener fecha de creación o subida
-              const uploadDate = metadata.uploadDate || file.updated || '';
-              
-              // Obtener las etiquetas
-              const tags = metadata.tags || [];
+              // Obtener fecha modificable del archivo (fileDate) en lugar de la fecha de subida
+const uploadDate = metadata.fileDate || metadata.uploadDate || file.updated || '';
+
+// Obtener las etiquetas
+const tags = metadata.tags || [];
               
               // Verificar si hay URLs asociadas
               const hasYoutubeUrl = youtubeUrls[filePath] ? true : false;
               const hasAudioUrl = audioUrls[filePath] ? true : false;
               const hasImageUrl = imageUrls[filePath] ? true : false;
               
-              return (
-                <div key={file.name || file.path} className="file-card" style={{
-                  backgroundColor: 'white',
-                  borderRadius: '8px',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                  overflow: 'hidden',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  height: '100%',
-                  border: selectedItems.some(item => item.path === filePath) ? '2px solid #007bff' : '1px solid #e0e0e0',
-                  transition: 'all 0.2s ease'
-                }}>
+              // Verificar si el archivo fue encontrado por búsqueda de contenido
+const isContentMatch = isSearchResults && file.metadata && (file.metadata.foundByContent || file.foundByContent);
+
+return (
+<div key={file.name || file.path} className={`file-card ${isContentMatch ? 'content-match' : ''}`} style={{
+  backgroundColor: isContentMatch ? '#fff8e1' : 'white', // Fondo amarillo claro para coincidencias de contenido
+  borderRadius: '8px',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+  overflow: 'hidden',
+  display: 'flex',
+  flexDirection: 'column',
+  height: '100%',
+  border: selectedItems.some(item => item.path === filePath) ? '2px solid #007bff' : isContentMatch ? '2px solid #ffc107' : '1px solid #e0e0e0',
+  transition: 'all 0.2s ease'
+}}>
                   <div 
                     className="file-card-header"
                     onClick={() => handleFileClick(file)}
@@ -1477,12 +1499,63 @@ const toggleActionsMenu = (filePath, e) => {
                     )}
                     
                     <div className="file-icon" style={{
-                      fontSize: '32px',
-                      marginRight: '15px',
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}>
-                      {file.isFolder ? '📁' : getFileIcon(file.name)}
+  fontSize: '32px',
+  marginRight: '15px',
+  display: 'flex',
+  alignItems: 'center',
+  position: 'relative'
+}}>
+  {file.isFolder ? '📁' : getFileIcon(file.name)}
+  
+  {/* Indicador de coincidencia por contenido */}
+  {isContentMatch && (
+    <span 
+      className="content-match-indicator" 
+      style={{
+        position: 'absolute',
+        top: '-8px',
+        right: '-8px',
+        backgroundColor: '#ffc107',
+        color: '#212529',
+        borderRadius: '50%',
+        width: '20px',
+        height: '20px',
+        fontSize: '12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+      }}
+      title="Coincidencia encontrada en el contenido"
+    >
+      🔍
+    </span>
+  )}
+  
+  {/* Indicador de coincidencia por contenido */}
+  {isContentMatch && (
+    <span 
+      className="content-match-indicator" 
+      style={{
+        position: 'absolute',
+        top: '-8px',
+        right: '-8px',
+        backgroundColor: '#ffc107',
+        color: '#212529',
+        borderRadius: '50%',
+        width: '20px',
+        height: '20px',
+        fontSize: '12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+      }}
+      title="Coincidencia encontrada en el contenido"
+    >
+      🔍
+    </span>
+  )}
                       
                       {/* Mostrar iconos de enlaces si existen */}
                       <div className="file-link-icons" style={{
@@ -1637,6 +1710,21 @@ const toggleActionsMenu = (filePath, e) => {
                             ))}
                           </div>
                         )}
+
+                        {/* Mostrar fragmento de coincidencia si fue encontrado por contenido */}
+{isContentMatch && file.matchExcerpt && (
+  <div className="content-match-excerpt" style={{
+    marginTop: '10px',
+    padding: '8px',
+    backgroundColor: '#fffbea',
+    borderRadius: '4px',
+    fontSize: '12px',
+    border: '1px dashed #ffc107'
+  }}>
+    <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>Coincidencia encontrada:</div>
+    <div style={{ fontStyle: 'italic' }}>"{file.matchExcerpt}"</div>
+  </div>
+)}
                       </>
                     )}
                     </div>
@@ -2007,17 +2095,17 @@ style={{
             );
           })}
         </div>
-      )}
+     )}
 
-      {/* Editor de metadatos */}
-      <FileMetadataEditor
-        filePath={selectedFilePath}
-        isOpen={showMetadataEditor}
-        onClose={handleCloseMetadataEditor}
-        onSave={handleMetadataEdited}
-      />
-    </div>
-  );
+     {/* Editor de metadatos */}
+     <FileMetadataEditor
+       filePath={selectedFilePath}
+       isOpen={showMetadataEditor}
+       onClose={handleCloseMetadataEditor}
+       onSave={handleMetadataEdited}
+     />
+   </div>
+ );
 };
 
 export default FileList;

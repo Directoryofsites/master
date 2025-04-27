@@ -62,7 +62,7 @@ const FileExplorer = ({ userRole, username }) => {
 
   // Función mejorada para manejar la búsqueda (normal, por etiquetas y por fecha)
 
-  const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false, filterMetadata = true) => {
+  const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false, filterMetadata = true, isContentSearch = false) => {
     setIsLoading(true);
     setError(null);
     
@@ -86,6 +86,7 @@ const FileExplorer = ({ userRole, username }) => {
         results = await api.searchFilesByTag(term);
         console.log('Resultados finales de búsqueda por etiqueta:', results);
       }
+
       else if (isDateSearch) {
         console.log('Iniciando búsqueda por fecha:', term);
         setSearchTerm(term);
@@ -116,6 +117,26 @@ const FileExplorer = ({ userRole, username }) => {
         results = await api.searchFilesByDate(searchDate, searchType);
         console.log('Resultados finales de búsqueda por fecha:', results);
       }
+
+      else if (isContentSearch) {
+        console.log('Iniciando búsqueda por contenido:', term);
+        setSearchTerm(term);
+        
+        // Indicar al usuario que la búsqueda puede tardar
+        setError('Buscando en el contenido de los archivos. Esto puede tardar un momento...');
+        
+        // Ya tenemos los resultados directos de la búsqueda por contenido
+        results = await api.searchByContent(term);
+        
+        // Marcar los resultados como encontrados por contenido para visualización
+        results = results.map(file => ({
+          ...file,
+          foundByContent: true
+        }));
+        
+        console.log('Resultados finales de búsqueda por contenido:', results);
+      }
+
       else {
         // Búsqueda normal por nombre
         setSearchTerm(term);
