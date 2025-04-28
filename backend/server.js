@@ -7770,6 +7770,204 @@ app.post('/api/admin/folder-permissions', isAdmin, express.json(), async (req, r
   }
 });
 
+const { spawn } = require('child_process');
+const os = require('os');
+
+// Endpoint para transcribir archivos de audio (MP3)
+app.post('/api/transcribe-audio', express.json(), async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener el bucket específico del usuario desde el middleware
+    const bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Obtener la ruta del archivo MP3 desde el cuerpo de la solicitud
+    const { filePath, deleteOriginal = true } = req.body;
+    
+    if (!filePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere la ruta del archivo MP3'
+      });
+    }
+    
+    // Verificar que el archivo sea un MP3
+    if (!filePath.toLowerCase().endsWith('.mp3')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un MP3'
+      });
+    }
+    
+    // Normalizar la ruta
+    let normalizedPath = filePath;
+    if (normalizedPath.startsWith('/')) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+    
+    console.log(`[TRANSCRIBE] Procesando archivo MP3: ${normalizedPath}`);
+    
+    // Descargar el archivo desde Supabase
+    const { data, error: downloadError } = await supabase.storage
+      .from(bucketToUse)
+      .download(normalizedPath);
+    
+    if (downloadError) {
+      console.error(`Error al descargar archivo MP3 ${normalizedPath}:`, downloadError);
+      throw downloadError;
+    }
+    
+    // Crear un archivo temporal para el MP3
+    const tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    const tempMP3Path = path.join(tempDir, path.basename(normalizedPath));
+    
+    // Guardar el archivo descargado al sistema de archivos temporal
+    fs.writeFileSync(tempMP3Path, Buffer.from(await data.arrayBuffer()));
+    console.log(`[TRANSCRIBE] Archivo MP3 guardado temporalmente en: ${tempMP3Path}`);
+    
+    // Ejecutar el script de Python para transcribir el audio
+    const scriptPath = path.join(__dirname, 'scripts', 'transcribe_audio.py');
+    
+    console.log(`[TRANSCRIBE] Ejecutando script Python: ${scriptPath}`);
+    console.log(`[TRANSCRIBE] Argumentos: ${tempMP3Path}`);
+    
+    return new Promise((resolve, reject) => {
+      const pythonProcess = spawn('python', [scriptPath, tempMP3Path]);
+      
+      let outputData = '';
+      let errorData = '';
+      
+      // Capturar la salida del script
+      pythonProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        console.log(`[PYTHON] ${output}`);
+        outputData += output;
+      });
+      
+      // Capturar errores del script
+      pythonProcess.stderr.on('data', (data) => {
+        const error = data.toString();
+        console.error(`[PYTHON ERROR] ${error}`);
+        errorData += error;
+      });
+      
+      // Manejar finalización del script
+      pythonProcess.on('close', async (code) => {
+        console.log(`[TRANSCRIBE] Proceso Python terminado con código: ${code}`);
+        
+        if (code !== 0) {
+          // Si el proceso terminó con error
+          const error = new Error(`Falló la transcripción: ${errorData}`);
+          fs.unlinkSync(tempMP3Path); // Limpiar archivo temporal
+          return reject(error);
+        }
+        
+        try {
+          // Obtener el archivo de transcripción generado
+          const baseFileName = path.basename(normalizedPath, '.mp3');
+          const transcriptionFileName = `${baseFileName}_transcripcion.txt`;
+          const transcriptionFilePath = path.join(tempDir, transcriptionFileName);
+          
+          if (!fs.existsSync(transcriptionFilePath)) {
+            throw new Error('El archivo de transcripción no fue generado');
+          }
+          
+          // Leer el contenido del archivo de transcripción
+          const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
+          
+          // Subir el archivo de transcripción a Supabase
+          const folderPath = path.dirname(normalizedPath);
+          const transcriptionPath = folderPath === '.' 
+            ? transcriptionFileName 
+            : `${folderPath}/${transcriptionFileName}`;
+          
+          console.log(`[TRANSCRIBE] Subiendo transcripción a: ${transcriptionPath}`);
+          
+          const { error: uploadError } = await supabase.storage
+            .from(bucketToUse)
+            .upload(transcriptionPath, transcriptionContent, {
+              contentType: 'text/plain',
+              upsert: true
+            });
+          
+          if (uploadError) {
+            throw uploadError;
+          }
+          
+          // Si se solicitó eliminar el archivo original
+          if (deleteOriginal) {
+            console.log(`[TRANSCRIBE] Eliminando archivo MP3 original: ${normalizedPath}`);
+            
+            const { error: deleteError } = await supabase.storage
+              .from(bucketToUse)
+              .remove([normalizedPath]);
+            
+            if (deleteError) {
+              console.error(`Error al eliminar archivo original ${normalizedPath}:`, deleteError);
+              // No fallar la operación si no se puede eliminar el original
+            }
+          }
+          
+          // Limpiar archivos temporales
+          fs.unlinkSync(tempMP3Path);
+          fs.unlinkSync(transcriptionFilePath);
+          
+          // Responder con éxito y la ruta del archivo de transcripción
+          resolve(res.status(200).json({
+            success: true,
+            message: 'Transcripción completada correctamente',
+            transcriptionPath: `/${transcriptionPath}`,
+            originalDeleted: deleteOriginal
+          }));
+          
+        } catch (error) {
+          console.error('Error al procesar resultado de transcripción:', error);
+          // Limpiar archivos temporales en caso de error
+          if (fs.existsSync(tempMP3Path)) {
+            fs.unlinkSync(tempMP3Path);
+          }
+          reject(error);
+        }
+      });
+      
+      // Manejar errores del proceso
+      pythonProcess.on('error', (error) => {
+        console.error('Error al iniciar proceso Python:', error);
+        // Limpiar archivos temporales
+        if (fs.existsSync(tempMP3Path)) {
+          fs.unlinkSync(tempMP3Path);
+        }
+        reject(error);
+      });
+    }).catch(error => {
+      console.error('Error en proceso de transcripción:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error en el proceso de transcripción',
+        error: error.message
+      });
+    });
+  } catch (error) {
+    console.error('Error general en transcripción de audio:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al transcribir audio',
+      error: error.message
+    });
+  }
+});
+
 // Asignar carpetas a un usuario
 app.patch('/api/admin/assign-folders', isAdmin, express.json(), async (req, res) => {
   try {

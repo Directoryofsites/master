@@ -14,6 +14,7 @@ const FileExplorer = ({ userRole, username }) => {
   const [isSearchMode, setIsSearchMode] = useState(false);  // Nuevo estado para modo de búsqueda
   const [searchResults, setSearchResults] = useState([]);   // Estado para resultados de búsqueda
   const [searchTerm, setSearchTerm] = useState('');         // Almacenar el término de búsqueda actual
+  const [selectedFile, setSelectedFile] = useState(null);
 
   const fetchFiles = async (path) => {
     if (isSearchMode) return; // No cargar archivos si estamos en modo búsqueda
@@ -334,14 +335,16 @@ const findFilesByDate = async (files, dateSearch, searchType) => {
         <div className="loading">Cargando...</div>
       ) : (
         <>
-          <FileList 
-            files={isSearchMode ? searchResults : files} 
-            currentPath={currentPath} 
-            onNavigate={handleNavigate} 
-            userRole={userRole}
-            onActionComplete={handleActionComplete}
-            isSearchResults={isSearchMode}
-          />
+         <FileList 
+  files={isSearchMode ? searchResults : files} 
+  currentPath={currentPath} 
+  onNavigate={handleNavigate} 
+  userRole={userRole}
+  onActionComplete={handleActionComplete}
+  isSearchResults={isSearchMode}
+  onSelectFile={setSelectedFile}  // Añadir esta prop
+  selectedFile={selectedFile}     // Añadir esta prop
+/>
           
           {!isSearchMode && (
   userRole === 'admin' || 
@@ -354,9 +357,10 @@ const findFilesByDate = async (files, dateSearch, searchType) => {
      hasAdminPermission('create_folders') || 
      hasAdminPermission('delete_folders')) && (
       <FileActions 
-        currentPath={currentPath} 
-        onActionComplete={handleActionComplete} 
-      />
+  currentPath={currentPath} 
+  onActionComplete={handleActionComplete} 
+  selectedFile={selectedFile}  // Añadir esta prop
+/>
     )}
     
     {(userRole === 'admin' || 

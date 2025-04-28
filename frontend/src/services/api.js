@@ -947,6 +947,59 @@ export const searchContentWithTags = async (searchText, tags, useIds = false, re
 };
 
 /**
+ * Transcribe un archivo MP3 a texto
+ * @param {string} filePath - Ruta del archivo MP3 en el bucket
+ * @param {boolean} deleteOriginal - Si se debe eliminar el archivo original después de la transcripción
+ * @returns {Promise<Object>} - Resultado de la transcripción
+ */
+export const transcribeAudio = async (filePath, deleteOriginal = true) => {
+  try {
+    console.log(`Iniciando transcripción de audio: ${filePath}`);
+    
+    // Verificar que sea un archivo MP3
+    if (!filePath.toLowerCase().endsWith('.mp3')) {
+      throw new Error('Solo se pueden transcribir archivos MP3');
+    }
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL del endpoint
+    const url = `${BASE_URL}/transcribe-audio`;
+    
+    // Configurar la solicitud
+    const options = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : ''
+      },
+      body: JSON.stringify({
+        filePath,
+        deleteOriginal
+      })
+    };
+    
+    // Realizar la solicitud
+    console.log('Enviando solicitud de transcripción...');
+    const response = await fetch(url, options);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('Transcripción completada correctamente:', data);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en transcribeAudio:', error);
+    throw error;
+  }
+};
+
+/**
  * Obtiene la URL de YouTube asociada a un archivo
  * @param {string} path - Ruta del archivo
  * @returns {Promise<string|null>} - URL de YouTube o null si no hay ninguna

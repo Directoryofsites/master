@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
 import { hasAdminPermission } from '../services/auth';  // Importar función de verificación de permisos
 
-const FileActions = ({ currentPath, onActionComplete }) => {
+const FileActions = ({ currentPath, selectedFile, onActionComplete }) => {
   const [folderName, setFolderName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
   const [showFolderInput, setShowFolderInput] = useState(false);
 
   const handleCreateFolder = async () => {
@@ -15,10 +16,10 @@ const FileActions = ({ currentPath, onActionComplete }) => {
     }
   
     // Verificar si el usuario tiene permiso para crear carpetas
-if (!hasAdminPermission('create_folders')) {
-  setError('No tienes permiso para crear carpetas');
-  return;
-}
+    if (!hasAdminPermission('create_folders')) {
+      setError('No tienes permiso para crear carpetas');
+      return;
+    }
   
     setIsLoading(true);
     setError(null);
@@ -44,6 +45,49 @@ if (!hasAdminPermission('create_folders')) {
     } catch (error) {
       console.error('Error al crear carpeta:', error);
       setError(`Error: ${error.message || 'Ocurrió un error al crear la carpeta'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Nueva función para manejar la transcripción de audio
+  const handleTranscribeAudio = async () => {
+    if (!selectedFile || !selectedFile.path) {
+      setError('No hay archivo seleccionado para transcribir');
+      return;
+    }
+
+    if (!selectedFile.path.toLowerCase().endsWith('.mp3')) {
+      setError('Solo se pueden transcribir archivos MP3');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      // Confirmar si desea eliminar el original
+      const confirmDelete = window.confirm(
+        '¿Desea eliminar el archivo MP3 original después de la transcripción? Esto ahorrará espacio de almacenamiento.'
+      );
+
+      console.log('Transcribiendo archivo:', selectedFile.path);
+      
+      // Llamar a la API para transcribir
+      const result = await api.transcribeAudio(selectedFile.path, confirmDelete);
+
+      if (result && result.success) {
+        setSuccess('Archivo transcrito correctamente. El texto se ha guardado en la misma carpeta.');
+        if (onActionComplete) {
+          onActionComplete();
+        }
+      } else {
+        setError(`Error: ${result && result.message ? result.message : 'No se pudo transcribir el archivo'}`);
+      }
+    } catch (error) {
+      console.error('Error al transcribir audio:', error);
+      setError(`Error: ${error.message || 'Ocurrió un error al transcribir el audio'}`);
     } finally {
       setIsLoading(false);
     }
@@ -81,18 +125,35 @@ if (!hasAdminPermission('create_folders')) {
               Cancelar
             </button>
           </div>
-          {error && <div className="error-message">{error}</div>}
         </div>
       ) : (
-        hasAdminPermission('create_folders') && (
-          <button
-            onClick={() => setShowFolderInput(true)}
-            className="btn btn-primary"
-          >
-            Nueva Carpeta
-          </button>
-        )
+        <div className="action-buttons">
+          {hasAdminPermission('create_folders') && (
+            <button
+              onClick={() => setShowFolderInput(true)}
+              className="btn btn-primary"
+              disabled={isLoading}
+            >
+              Nueva Carpeta
+            </button>
+          )}
+          
+          {/* Nuevo botón para transcribir audio MP3 */}
+          {selectedFile && selectedFile.path && selectedFile.path.toLowerCase().endsWith('.mp3') && (
+            <button
+              onClick={handleTranscribeAudio}
+              className="btn btn-info ml-2"
+              disabled={isLoading}
+            >
+              {isLoading ? 'Transcribiendo...' : 'Transcribir Audio'}
+            </button>
+          )}
+        </div>
       )}
+      
+      {/* Mostrar mensajes de error o éxito */}
+      {error && <div className="error-message mt-2">{error}</div>}
+      {success && <div className="success-message mt-2">{success}</div>}
     </div>
   );
 };
