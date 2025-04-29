@@ -3,6 +3,7 @@ require('dotenv').config();
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
 
+
 const bcrypt = require('bcrypt');
 
 
@@ -13,6 +14,13 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Asegurarse de que existe el directorio de almacenamiento local
+const localStorageDir = path.join(__dirname, 'local_storage');
+if (!fs.existsSync(localStorageDir)) {
+  fs.mkdirSync(localStorageDir, { recursive: true });
+  console.log(`[LOCAL] Directorio de almacenamiento local creado: ${localStorageDir}`);
+}
+
 const mammoth = require('mammoth');
 
 const pdfParse = require('pdf-parse');
@@ -21,8 +29,6 @@ const pdfParse = require('pdf-parse');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-
-
 // Middleware
 app.use(cors({
   origin: ['https://directoryofsites.github.io', 'http://localhost:3000'],
@@ -30,7 +36,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
-
 
 app.use(express.json());
 
@@ -54,7 +59,6 @@ app.use((err, req, res, next) => {
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const defaultBucketName = process.env.BUCKET_NAME || 'master';
-
 
 // Definir mapeo de usuarios a buckets
 const userBucketMap = {
@@ -3534,8 +3538,6 @@ async function calculateBucketSize(bucketToCheck = defaultBucketName) {
 }
 
 // Ruta para subir archivos
-
-
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -7773,6 +7775,41 @@ app.post('/api/admin/folder-permissions', isAdmin, express.json(), async (req, r
 const { spawn } = require('child_process');
 const os = require('os');
 
+// Función auxiliar para realizar reintentos con backoff exponencial
+async function retryOperation(operation, maxRetries = 3, initialDelay = 1000, fallbackFn = null) {
+  let lastError;
+  let delay = initialDelay;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      console.log(`Intento ${attempt + 1}/${maxRetries} falló:`, error.message);
+      lastError = error;
+      
+      // Si no es el último intento, esperar antes de reintentar
+      if (attempt < maxRetries - 1) {
+        console.log(`Reintentando en ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // Backoff exponencial
+      }
+    }
+  }
+  
+  // Si hay una función de fallback, ejecutarla como último recurso
+  if (fallbackFn) {
+    console.log('Ejecutando función alternativa local después de agotar reintentos');
+    try {
+      return await fallbackFn();
+    } catch (fallbackError) {
+      console.error('Error en función alternativa:', fallbackError);
+      throw fallbackError;
+    }
+  }
+  
+  throw lastError; // Lanzar el último error si todos los intentos fallan
+}
+
 // Endpoint para transcribir archivos de audio (MP3)
 app.post('/api/transcribe-audio', express.json(), async (req, res) => {
   try {
@@ -7783,12 +7820,18 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
         message: 'Cliente de Supabase no configurado correctamente.'
       });
     }
-    
+       
+    console.log('[TRANSCRIBE] Datos recibidos:', {
+      processWithGPT: req.body.processWithGPT,
+      customPrompt: req.body.customPrompt,
+      confirmDelete: req.body.confirmDelete
+    });
+
     // Obtener el bucket específico del usuario desde el middleware
     const bucketToUse = req.bucketName || defaultBucketName;
     
-    // Obtener la ruta del archivo MP3 desde el cuerpo de la solicitud
-    const { filePath, deleteOriginal = true } = req.body;
+    // Obtener la ruta del archivo MP3 y opciones desde el cuerpo de la solicitud
+    const { filePath, deleteOriginal = true, processWithGPT = false } = req.body;
     
     if (!filePath) {
       return res.status(400).json({
@@ -7813,13 +7856,22 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
     
     console.log(`[TRANSCRIBE] Procesando archivo MP3: ${normalizedPath}`);
     
-    // Descargar el archivo desde Supabase
-    const { data, error: downloadError } = await supabase.storage
-      .from(bucketToUse)
-      .download(normalizedPath);
-    
-    if (downloadError) {
-      console.error(`Error al descargar archivo MP3 ${normalizedPath}:`, downloadError);
+    // Descargar el archivo desde Supabase con reintentos
+    let data;
+    try {
+      const result = await retryOperation(async () => {
+        return await supabase.storage
+          .from(bucketToUse)
+          .download(normalizedPath);
+      }, 3, 2000);
+      
+      if (result.error) {
+        throw result.error;
+      }
+      
+      data = result.data;
+    } catch (downloadError) {
+      console.error(`Error al descargar archivo MP3 ${normalizedPath} después de reintentos:`, downloadError);
       throw downloadError;
     }
     
@@ -7885,7 +7937,7 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
           // Leer el contenido del archivo de transcripción
           const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
           
-          // Subir el archivo de transcripción a Supabase
+          // Subir el archivo de transcripción a Supabase con reintentos
           const folderPath = path.dirname(normalizedPath);
           const transcriptionPath = folderPath === '.' 
             ? transcriptionFileName 
@@ -7893,28 +7945,235 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
           
           console.log(`[TRANSCRIBE] Subiendo transcripción a: ${transcriptionPath}`);
           
-          const { error: uploadError } = await supabase.storage
-            .from(bucketToUse)
-            .upload(transcriptionPath, transcriptionContent, {
-              contentType: 'text/plain',
-              upsert: true
-            });
-          
-          if (uploadError) {
+          try {
+            const { error: uploadError } = await retryOperation(async () => {
+              return await supabase.storage
+                .from(bucketToUse)
+                .upload(transcriptionPath, transcriptionContent, {
+                  contentType: 'text/plain',
+                  upsert: true
+                });
+            }, 5, 2000); // 5 reintentos, empezando con 2 segundos
+            
+            if (uploadError) {
+              throw uploadError;
+            }
+            
+            // Si se solicitó eliminar el archivo original
+            if (deleteOriginal) {
+              console.log(`[TRANSCRIBE] Eliminando archivo MP3 original: ${normalizedPath}`);
+              
+              try {
+                const { error: deleteError } = await retryOperation(async () => {
+                  return await supabase.storage
+                    .from(bucketToUse)
+                    .remove([normalizedPath]);
+                }, 3, 1000); // 3 reintentos, empezando con 1 segundo
+                
+                if (deleteError) {
+                  console.error(`Error al eliminar archivo original ${normalizedPath}:`, deleteError);
+                  // No fallar la operación si no se puede eliminar el original
+                }
+              } catch (deleteError) {
+                console.error(`Error al eliminar archivo original después de reintentos: ${normalizedPath}`, deleteError);
+                // No fallar la operación si no se puede eliminar el original
+              }
+            }
+          } catch (uploadError) {
+            console.error('[TRANSCRIBE] Error al subir archivo a Supabase después de reintentos:', uploadError);
             throw uploadError;
           }
+
+          // Procesar con Perplexity si se solicitó
+          let processedDocxPath = null;
+          let processedFilePath = transcriptionPath;
           
-          // Si se solicitó eliminar el archivo original
-          if (deleteOriginal) {
-            console.log(`[TRANSCRIBE] Eliminando archivo MP3 original: ${normalizedPath}`);
-            
-            const { error: deleteError } = await supabase.storage
-              .from(bucketToUse)
-              .remove([normalizedPath]);
-            
-            if (deleteError) {
-              console.error(`Error al eliminar archivo original ${normalizedPath}:`, deleteError);
-              // No fallar la operación si no se puede eliminar el original
+          if (processWithGPT) {
+            try {
+              console.log('[IA] Procesando transcripción con Perplexity');
+              
+              // Ruta al script Python
+              const perplexityScriptPath = path.join(__dirname, 'scripts', 'process_transcript_perplexity.py');
+              
+              // Obtener API Key de las variables de entorno
+              const perplexityApiKey = process.env.PERPLEXITY_API_KEY || '';
+              
+              if (!perplexityApiKey) {
+                console.warn('[IA] No se encontró API Key de Perplexity en las variables de entorno');
+              }
+              
+              // Construir la ruta del archivo procesado
+              const baseFileName = path.basename(normalizedPath, '.mp3');
+              const processedFileName = `${baseFileName}_acta_formatada.txt`;
+              const processedLocalPath = path.join(tempDir, processedFileName);
+                            
+            // Procesar con Perplexity usando prompt personalizado si está disponible
+const perplexityArgs = [
+  perplexityScriptPath,
+  transcriptionFilePath,
+  '--api_key', perplexityApiKey,
+  '--output', processedLocalPath
+];
+
+// Añadir el prompt personalizado si existe
+if (req.body.customPrompt) {
+  perplexityArgs.push('--prompt', req.body.customPrompt);
+}
+
+const perplexityProcess = spawn('python', perplexityArgs);
+              
+              // Esperar a que termine el proceso
+              await new Promise((resolvePerplexity, rejectPerplexity) => {
+                let perplexityOutput = '';
+                let perplexityError = '';
+                
+                perplexityProcess.stdout.on('data', (data) => {
+                  const output = data.toString();
+                  console.log(`[IA] ${output}`);
+                  perplexityOutput += output;
+                });
+                
+                perplexityProcess.stderr.on('data', (data) => {
+                  const error = data.toString();
+                  console.error(`[IA ERROR] ${error}`);
+                  perplexityError += error;
+                });
+                
+                perplexityProcess.on('close', (code) => {
+                  console.log(`[IA] Proceso terminado con código: ${code}`);
+                  
+                  if (code !== 0) {
+                    rejectPerplexity(new Error(`Error al procesar con Perplexity: ${perplexityError}`));
+                  } else {
+                    resolvePerplexity();
+                  }
+                });
+                
+                perplexityProcess.on('error', (error) => {
+                  rejectPerplexity(error);
+                });
+              });
+              
+              // Verificar que el archivo procesado existe
+              if (fs.existsSync(processedLocalPath)) {
+
+                // Subir el archivo procesado a Supabase con reintentos
+const folderPath = path.dirname(normalizedPath);
+const processedPath = folderPath === '.' 
+  ? processedFileName 
+  : `${folderPath}/${processedFileName}`;
+
+console.log(`[IA] Subiendo transcripción procesada a: ${processedPath}`);
+
+const processedContent = fs.readFileSync(processedLocalPath, 'utf8');
+
+try {
+  const { error: uploadError } = await retryOperation(async () => {
+    return await supabase.storage
+      .from(bucketToUse)
+      .upload(processedPath, processedContent, {
+        contentType: 'text/plain',
+        upsert: true
+      });
+  }, 5, 2000); // 5 reintentos, empezando con 2 segundos
+  
+  if (uploadError) {
+    console.error('[IA] Error al subir archivo procesado TXT:', uploadError);
+  } else {
+    // Actualizar la ruta para responder con ambos archivos
+    processedFilePath = processedPath;
+    
+    // Verificar si existe la versión Word del documento
+    const docxLocalPath = processedLocalPath.replace('.txt', '.docx');
+    if (fs.existsSync(docxLocalPath)) {
+      // Si existe, intentar subirlo también
+      const docxFileName = processedFileName.replace('.txt', '.docx');
+      const docxRemotePath = folderPath === '.' 
+        ? docxFileName 
+        : `${folderPath}/${docxFileName}`;
+      
+      console.log(`[IA] Se encontró versión Word del acta, subiendo a: ${docxRemotePath}`);
+      
+      try {
+        // Leer el archivo binario
+        const docxContent = fs.readFileSync(docxLocalPath);
+        
+        // Subir el archivo Word a Supabase
+        const { error: docxUploadError } = await retryOperation(async () => {
+          return await supabase.storage
+            .from(bucketToUse)
+            .upload(docxRemotePath, docxContent, {
+              contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              upsert: true
+            });
+        }, 5, 2000);
+        
+        if (docxUploadError) {
+          console.error('[IA] Error al subir archivo Word:', docxUploadError);
+        } else {
+          console.log(`[IA] Archivo Word subido correctamente a: ${docxRemotePath}`);
+          // Guardar la ruta del archivo docx para incluirla en la respuesta
+          processedDocxPath = docxRemotePath;
+          // Limpiar archivo temporal
+          fs.unlinkSync(docxLocalPath);
+        }
+      } catch (docxError) {
+        console.error('[IA] Error al procesar archivo Word:', docxError);
+      }
+    } else {
+      console.log('[IA] No se encontró versión Word del acta');
+    }
+    
+    // Limpiar archivo temporal del procesamiento
+    fs.unlinkSync(processedLocalPath);
+  }
+                } catch (uploadError) {
+                  console.error('[IA] Error al subir archivo procesado después de reintentos:', uploadError);
+                  // Continuar con la respuesta normal aunque falle la subida del procesamiento
+                }
+              } else {
+                // Intentar con el nombre generado automáticamente por el script
+                const autoProcessedFileName = `${baseFileName}_acta_formatada.txt`;
+                const autoProcessedPath = path.join(tempDir, autoProcessedFileName);
+                
+                if (fs.existsSync(autoProcessedPath)) {
+                  // Usar este archivo en su lugar
+                  const folderPath = path.dirname(normalizedPath);
+                  const processedPath = folderPath === '.' 
+                    ? autoProcessedFileName 
+                    : `${folderPath}/${autoProcessedFileName}`;
+                  
+                  console.log(`[IA] Usando archivo alternativo: ${autoProcessedPath}`);
+                  console.log(`[IA] Subiendo a: ${processedPath}`);
+                  
+                  const processedContent = fs.readFileSync(autoProcessedPath, 'utf8');
+                  
+                  try {
+                    const { error: uploadError } = await retryOperation(async () => {
+                      return await supabase.storage
+                        .from(bucketToUse)
+                        .upload(processedPath, processedContent, {
+                          contentType: 'text/plain',
+                          upsert: true
+                        });
+                    }, 5, 2000);
+                    
+                    if (uploadError) {
+                      console.error('[IA] Error al subir archivo alternativo:', uploadError);
+                    } else {
+                      processedFilePath = processedPath;
+                      fs.unlinkSync(autoProcessedPath);
+                    }
+                  } catch (uploadError) {
+                    console.error('[IA] Error al subir archivo alternativo después de reintentos:', uploadError);
+                  }
+                } else {
+                  console.error('[IA] El archivo procesado no fue generado');
+                }
+              }
+            } catch (perplexityError) {
+              console.error('[IA] Error al procesar con Perplexity:', perplexityError);
+              // Continuar con la respuesta normal aunque falle el procesamiento
             }
           }
           
@@ -7923,13 +8182,15 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
           fs.unlinkSync(transcriptionFilePath);
           
           // Responder con éxito y la ruta del archivo de transcripción
-          resolve(res.status(200).json({
-            success: true,
-            message: 'Transcripción completada correctamente',
-            transcriptionPath: `/${transcriptionPath}`,
-            originalDeleted: deleteOriginal
-          }));
-          
+resolve(res.status(200).json({
+  success: true,
+  message: processWithGPT ? 'Transcripción y procesamiento con IA completados' : 'Transcripción completada correctamente',
+  transcriptionPath: `/${transcriptionPath}`,
+  processedPath: processWithGPT ? `/${processedFilePath}` : null,
+  processedDocxPath: processWithGPT && processedDocxPath ? `/${processedDocxPath}` : null,
+  originalDeleted: deleteOriginal,
+  processedWithGPT: processWithGPT
+}));          
         } catch (error) {
           console.error('Error al procesar resultado de transcripción:', error);
           // Limpiar archivos temporales en caso de error
@@ -7965,6 +8226,226 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
       message: 'Error interno al transcribir audio',
       error: error.message
     });
+  }
+});
+
+const uploadLocal = multer({ dest: path.join(__dirname, 'local_storage', 'uploads') });
+
+// Endpoint para subir archivos MP3 directamente
+app.post('/api/upload-audio-local', uploadLocal.single('audioFile'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No se ha proporcionado ningún archivo' 
+      });
+    }
+    
+    // Verificar que el archivo es un MP3
+    if (!req.file.originalname.toLowerCase().endsWith('.mp3')) {
+      fs.unlinkSync(req.file.path); // Eliminar archivo si no es MP3
+      return res.status(400).json({ 
+        success: false, 
+        message: 'El archivo debe ser un MP3' 
+      });
+    }
+    
+    // Guardar el archivo con su nombre original
+    const targetPath = path.join(__dirname, 'local_storage', req.file.originalname);
+    fs.renameSync(req.file.path, targetPath);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Archivo subido correctamente',
+      filePath: req.file.originalname
+    });
+  } catch (error) {
+    console.error('Error al subir archivo:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al procesar el archivo',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para transcribir archivos locales
+app.post('/api/transcribe-local', express.json(), async (req, res) => {
+  try {
+    const { fileName, processWithGPT = false } = req.body;
+    
+    if (!fileName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere el nombre del archivo MP3'
+      });
+    }
+    
+    // Verificar que el archivo existe localmente
+    const filePath = path.join(__dirname, 'local_storage', fileName);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Archivo no encontrado'
+      });
+    }
+    
+    console.log(`[LOCAL] Procesando archivo MP3 local: ${fileName}`);
+    
+    // Ejecutar el script de Python para transcribir el audio
+    const scriptPath = path.join(__dirname, 'scripts', 'transcribe_audio.py');
+    
+    console.log(`[LOCAL] Ejecutando script Python: ${scriptPath}`);
+    console.log(`[LOCAL] Argumentos: ${filePath}`);
+    
+    const pythonProcess = spawn('python', [scriptPath, filePath]);
+    
+    let outputData = '';
+    let errorData = '';
+    
+    // Capturar la salida del script
+    pythonProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[PYTHON] ${output}`);
+      outputData += output;
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      const error = data.toString();
+      console.error(`[PYTHON ERROR] ${error}`);
+      errorData += error;
+    });
+    
+    // Esperar a que el proceso termine
+    const code = await new Promise((resolve) => {
+      pythonProcess.on('close', resolve);
+    });
+    
+    if (code !== 0) {
+      return res.status(500).json({
+        success: false,
+        message: `Error en la transcripción: ${errorData}`
+      });
+    }
+    
+    // Obtener el archivo de transcripción generado
+    const baseFileName = path.basename(fileName, '.mp3');
+    const transcriptionFileName = `${baseFileName}_transcripcion.txt`;
+    const transcriptionFilePath = path.join(path.dirname(filePath), transcriptionFileName);
+    
+    if (!fs.existsSync(transcriptionFilePath)) {
+      return res.status(500).json({
+        success: false,
+        message: 'La transcripción no fue generada'
+      });
+    }
+    
+    // Copiar el archivo a la carpeta local_storage (si no está ahí ya)
+    const localTranscriptionPath = path.join(__dirname, 'local_storage', transcriptionFileName);
+    if (transcriptionFilePath !== localTranscriptionPath) {
+      fs.copyFileSync(transcriptionFilePath, localTranscriptionPath);
+    }
+    
+    let processedFilePath = null;
+    
+    // Procesar con Perplexity si se solicitó
+    if (processWithGPT) {
+      try {
+        console.log('[IA-LOCAL] Procesando transcripción con Perplexity');
+        
+        // Ruta al script Python
+        const perplexityScriptPath = path.join(__dirname, 'scripts', 'process_transcript_perplexity.py');
+        
+        // Obtener API Key de las variables de entorno
+        const perplexityApiKey = process.env.PERPLEXITY_API_KEY || '';
+        
+        if (!perplexityApiKey) {
+          console.warn('[IA-LOCAL] No se encontró API Key de Perplexity en las variables de entorno');
+          return res.status(500).json({
+            success: false,
+            message: 'No se encontró API Key de Perplexity'
+          });
+        }
+        
+        // Construir la ruta del archivo procesado
+        const processedFileName = `${baseFileName}_acta_formatada.txt`;
+        const processedLocalPath = path.join(__dirname, 'local_storage', processedFileName);
+        
+        // Llamar al script Python de Perplexity
+        const perplexityProcess = spawn('python', [
+          perplexityScriptPath,
+          localTranscriptionPath,
+          '--api_key', perplexityApiKey,
+          '--output', processedLocalPath
+        ]);
+        
+        let perplexityOutput = '';
+        let perplexityError = '';
+        
+        perplexityProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          console.log(`[IA-LOCAL] ${output}`);
+          perplexityOutput += output;
+        });
+        
+        perplexityProcess.stderr.on('data', (data) => {
+          const error = data.toString();
+          console.error(`[IA-LOCAL ERROR] ${error}`);
+          perplexityError += error;
+        });
+        
+        // Esperar a que termine el proceso de Perplexity
+        const perplexityCode = await new Promise((resolve) => {
+          perplexityProcess.on('close', resolve);
+        });
+        
+        if (perplexityCode !== 0) {
+          console.error(`[IA-LOCAL] Error al procesar con Perplexity: ${perplexityError}`);
+        } else if (fs.existsSync(processedLocalPath)) {
+          processedFilePath = processedFileName;
+          console.log(`[IA-LOCAL] Archivo procesado guardado en: ${processedLocalPath}`);
+        }
+      } catch (perplexityError) {
+        console.error('[IA-LOCAL] Error al procesar con Perplexity:', perplexityError);
+      }
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: processWithGPT ? 'Transcripción y procesamiento con IA completados localmente' : 'Transcripción completada localmente',
+      transcriptionPath: transcriptionFileName,
+      processedPath: processedFilePath,
+      localMode: true
+    });
+  } catch (error) {
+    console.error('Error general en transcripción local:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al transcribir audio localmente',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para descargar archivos locales
+app.get('/api/download-local', (req, res) => {
+  try {
+    const { fileName } = req.query;
+    
+    if (!fileName) {
+      return res.status(400).send('Se requiere el nombre del archivo');
+    }
+    
+    const filePath = path.join(__dirname, 'local_storage', fileName);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send('Archivo no encontrado');
+    }
+    
+    res.download(filePath);
+  } catch (error) {
+    console.error('Error al descargar archivo local:', error);
+    res.status(500).send('Error al descargar el archivo');
   }
 });
 
@@ -8433,4 +8914,3 @@ app.listen(PORT, () => {
   console.log(`Supabase URL: ${supabaseUrl}`);
   console.log(`Supabase Key configurada: ${!!supabaseKey}`);
 });
-

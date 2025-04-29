@@ -667,129 +667,357 @@ const toggleActionsMenu = (filePath, e) => {
         } else if (isMP3) {
           console.log('Archivo MP3 reproducible en navegador');
           try {
+            
             // Obtener la URL para reproducción
-            const url = await api.getDownloadUrl(filePath, false);
-            console.log('URL obtenida para MP3:', url);
-            
-            // Crear un reproductor de audio sencillo
-            const audioPlayer = document.createElement('audio');
-            audioPlayer.controls = true;
-            audioPlayer.src = url;
-            audioPlayer.style.position = 'fixed';
-            audioPlayer.style.bottom = '0';
-            audioPlayer.style.left = '0';
-            audioPlayer.style.width = '100%';
-            audioPlayer.style.zIndex = '1000';
-            audioPlayer.style.backgroundColor = '#f5f5f5';
-            audioPlayer.style.padding = '10px';
-            audioPlayer.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
+const url = await api.getDownloadUrl(filePath, false);
+console.log('URL obtenida para MP3:', url);
+
+// Remover reproductor anterior si existe
+const oldPlayer = document.getElementById('audio-player-container');
+if (oldPlayer) {
+  oldPlayer.remove();
+}
+
+// Crear contenedor para el reproductor
+const audioContainer = document.createElement('div');
+audioContainer.id = 'audio-player-container';
+audioContainer.style.position = 'fixed';
+audioContainer.style.bottom = '0';
+audioContainer.style.left = '0';
+audioContainer.style.width = '100%';
+audioContainer.style.zIndex = '1000';
+audioContainer.style.backgroundColor = '#f5f5f5';
+audioContainer.style.padding = '10px';
+audioContainer.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
+
+// Crear un reproductor de audio
+const audioPlayer = document.createElement('audio');
+audioPlayer.controls = true;
+audioPlayer.id = 'audio-player';
+audioPlayer.style.width = '100%';
+
+// Agregar múltiples fuentes para mejor compatibilidad
+// Agregar la URL original como fuente principal
+const sourceOriginal = document.createElement('source');
+sourceOriginal.src = url;
+sourceOriginal.type = 'audio/mpeg';
+audioPlayer.appendChild(sourceOriginal);
+
+// Mensaje de fallback
+audioPlayer.appendChild(document.createTextNode('Su navegador no soporta la reproducción de audio.'));
+
+// Agregar el reproductor al contenedor
+audioContainer.appendChild(audioPlayer);
+
+// Agregar el contenedor al cuerpo del documento
+document.body.appendChild(audioContainer);
+
+// Intentar reproducir después de adjuntar al DOM y esperar a que cargue
+audioPlayer.addEventListener('canplay', () => {
+  try {
+    const playPromise = audioPlayer.play();
+    
+    if (playPromise !== undefined) {
+      playPromise.catch(error => {
+        console.error('Error al reproducir audio:', error);
+        // No mostrar error al usuario, ya que podría ser por política de autoplay
+      });
+    }
+  } catch (playError) {
+    console.error('Error al intentar reproducir:', playError);
+  }
+});
+
+// Manejar errores de carga
+audioPlayer.addEventListener('error', (e) => {
+  console.error('Error al cargar el audio:', e);
+});
+
+// Mostrar opciones adicionales para archivos MP3
+const audioOptions = document.createElement('div');
+audioOptions.className = 'mp3-options';
+audioOptions.style.position = 'fixed';
+audioOptions.style.bottom = '50px';
+audioOptions.style.left = '0';
+audioOptions.style.width = '100%';
+audioOptions.style.backgroundColor = '#e9f5ff';
+audioOptions.style.padding = '10px';
+audioOptions.style.textAlign = 'center';
+audioOptions.style.zIndex = '999';
+audioOptions.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
+
+// Código para crear botones de transcripción con mejor visibilidad
+const transcribeButton = document.createElement('button');
+transcribeButton.textContent = 'Transcribir Audio';
+transcribeButton.style.padding = '10px 20px';
+transcribeButton.style.margin = '5px';
+transcribeButton.style.backgroundColor = '#4CAF50';
+transcribeButton.style.color = 'white';
+transcribeButton.style.border = 'none';
+transcribeButton.style.borderRadius = '4px';
+transcribeButton.style.cursor = 'pointer';
+transcribeButton.style.fontSize = '16px';
+transcribeButton.style.fontWeight = 'bold';
+
+// Aplicar estilos similares a otros botones como closeButton
+// ... (código para otros botones)
+
+// Mejorar la visibilidad del contenedor de opciones
+audioOptions.style.position = 'fixed';
+audioOptions.style.bottom = '120px'; // Aumentar distancia del reproductor
+audioOptions.style.left = '50%';
+audioOptions.style.transform = 'translateX(-50%)';
+audioOptions.style.backgroundColor = 'rgba(240, 240, 240, 0.95)';
+audioOptions.style.padding = '20px';
+audioOptions.style.borderRadius = '8px';
+audioOptions.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+audioOptions.style.zIndex = '1000';
+audioOptions.style.display = 'flex';
+audioOptions.style.flexDirection = 'column';
+audioOptions.style.alignItems = 'center';
+
+// Evento de clic para transcribir
+transcribeButton.onclick = async () => {
+  // Preguntar si desea eliminar el archivo original
+  const confirmDelete = window.confirm(
+    '¿Desea eliminar el archivo MP3 original después de la transcripción? Esto ahorrará espacio de almacenamiento.'
+  );
+  
+  // Mostrar un diálogo personalizado para configurar el procesamiento con IA
+const showCustomPromptDialog = () => {
+  // Crear el fondo modal
+  const modalBackground = document.createElement('div');
+  modalBackground.style.position = 'fixed';
+  modalBackground.style.top = '0';
+  modalBackground.style.left = '0';
+  modalBackground.style.width = '100%';
+  modalBackground.style.height = '100%';
+  modalBackground.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+  modalBackground.style.zIndex = '1000';
+  modalBackground.style.display = 'flex';
+  modalBackground.style.justifyContent = 'center';
+  modalBackground.style.alignItems = 'center';
+  
+  // Crear el contenido del modal
+  const modalContent = document.createElement('div');
+  modalContent.style.backgroundColor = 'white';
+  modalContent.style.padding = '20px';
+  modalContent.style.borderRadius = '8px';
+  modalContent.style.width = '60%';
+  modalContent.style.maxWidth = '600px';
+  modalContent.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+  
+  // Crear título
+  const title = document.createElement('h3');
+  title.textContent = 'Procesamiento con IA';
+  title.style.marginTop = '0';
+  
+  // Crear descripción
+  const description = document.createElement('p');
+  description.textContent = 'Desea mejorar la transcripción automáticamente con IA? Esto creará un documento adicional con el texto mejorado.';
+  
+  // Crear campo para el prompt personalizado
+  const promptLabel = document.createElement('label');
+  promptLabel.textContent = 'Prompt personalizado (opcional):';
+  promptLabel.style.display = 'block';
+  promptLabel.style.marginTop = '15px';
+  promptLabel.style.marginBottom = '5px';
+  
+  const promptTextarea = document.createElement('textarea');
+  promptTextarea.style.width = '100%';
+  promptTextarea.style.height = '100px';
+  promptTextarea.style.padding = '8px';
+  promptTextarea.style.border = '1px solid #ddd';
+  promptTextarea.style.borderRadius = '4px';
+  promptTextarea.style.resize = 'vertical';
+  promptTextarea.placeholder = 'Deje este campo vacío para usar el prompt predeterminado o ingrese instrucciones específicas para el procesamiento.';
+  
+  // Contenedor de botones
+  const buttonContainer = document.createElement('div');
+  buttonContainer.style.marginTop = '20px';
+  buttonContainer.style.display = 'flex';
+  buttonContainer.style.justifyContent = 'flex-end';
+  
+  // Botón cancelar
+  const cancelButton = document.createElement('button');
+  cancelButton.textContent = 'Cancelar';
+  cancelButton.style.padding = '8px 16px';
+  cancelButton.style.marginRight = '10px';
+  cancelButton.style.backgroundColor = '#f44336';
+  cancelButton.style.color = 'white';
+  cancelButton.style.border = 'none';
+  cancelButton.style.borderRadius = '4px';
+  cancelButton.style.cursor = 'pointer';
+  
+  // Botón procesar
+  const processButton = document.createElement('button');
+  processButton.textContent = 'Procesar';
+  processButton.style.padding = '8px 16px';
+  processButton.style.backgroundColor = '#4CAF50';
+  processButton.style.color = 'white';
+  processButton.style.border = 'none';
+  processButton.style.borderRadius = '4px';
+  processButton.style.cursor = 'pointer';
+  
+  // Añadir todos los elementos al modal
+  buttonContainer.appendChild(cancelButton);
+  buttonContainer.appendChild(processButton);
+  
+  modalContent.appendChild(title);
+  modalContent.appendChild(description);
+  modalContent.appendChild(promptLabel);
+  modalContent.appendChild(promptTextarea);
+  modalContent.appendChild(buttonContainer);
+  
+  modalBackground.appendChild(modalContent);
+  
+  // Añadir el modal al body
+  document.body.appendChild(modalBackground);
+  
+  // Devolver una promesa que se resolverá cuando el usuario tome una decisión
+  return new Promise((resolve) => {
+    cancelButton.onclick = () => {
+      document.body.removeChild(modalBackground);
+      resolve({ process: false });
+    };
+    
+    processButton.onclick = () => {
+      const customPrompt = promptTextarea.value.trim();
+      document.body.removeChild(modalBackground);
+      resolve({ 
+        process: true, 
+        customPrompt: customPrompt.length > 0 ? customPrompt : null 
+      });
+    };
+  });
+};
+
+// Reemplazar la llamada a window.confirm con nuestro diálogo personalizado
+// Guarda el resultado en una variable para usar en tu lógica existente
+let processWithGPTResult = { process: false, customPrompt: null };
+// Cuando necesites obtener la decisión del usuario:
+await showCustomPromptDialog().then(result => {
+  processWithGPTResult = result;
+});
+const processWithGPT = processWithGPTResult.process;
+  
+  try {
+    // Mostrar mensaje de carga
+    let loadingMessage = '<p style="color: #007bff;"><strong>Transcribiendo audio, por favor espere...</strong> Este proceso puede tardar varios minutos dependiendo de la duración del audio.';
+    
+    if (processWithGPT) {
+      loadingMessage += '<br><em>Se aplicará procesamiento adicional con IA al finalizar la transcripción.</em>';
+    }
+    
+    loadingMessage += '</p>';
+    audioOptions.innerHTML = loadingMessage;
+    
+    // Llamar a la API para transcribir con el nuevo parámetro, incluyendo la opción de confirmDelete
+    const result = await api.transcribeAudio(
+      filePath, 
+      processWithGPT, 
+      processWithGPTResult.customPrompt,
+      confirmDelete  // Pasar el valor de confirmDelete al backend
+    );
+    
+    if (result && result.success) {
+      // Mostrar resultado exitoso
+      let successMessage = `
+        <div style="background-color: #d4edda; padding: 15px; border-radius: 4px; text-align: left;">
+          <h3 style="color: #155724; margin-top: 0;">Transcripción Completada</h3>
+          <p>El texto se ha guardado como: <strong>${result.transcriptionPath}</strong></p>`;
+      
+      // Mostrar información del archivo procesado por IA si existe
+      if (result.processedWithGPT && result.processedPath) {
+        successMessage += `
+          <p>Versión mejorada con IA disponible en: <strong>${result.processedPath}</strong></p>`;
+        
+        // Mostrar enlace al documento Word si está disponible
+        if (result.processedDocxPath) {
+          successMessage += `
+          <p>Documento Word con formato mejorado: <strong>${result.processedDocxPath}</strong></p>
+          <p><small><i>(Recomendado para mejor presentación e impresión)</i></small></p>`;
+        }
+      }
+      
+      successMessage += `
+          <p>${confirmDelete ? 'El archivo MP3 original ha sido eliminado.' : 'El archivo MP3 original se ha conservado.'}</p>
+          <button id="refresh-button" style="background-color: #28a745; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Actualizar Lista de Archivos</button>
+        </div>
+      `;
+      
+      audioOptions.innerHTML = successMessage;  
+      // Añadir evento para actualizar lista
+      document.getElementById('refresh-button').onclick = () => {
+        if (onActionComplete) {
+          onActionComplete();
+        }
+        // Eliminar opciones y reproductor
+        audioOptions.remove();
+        audioContainer.remove();
+      };
+    } else {
+      // Mostrar error
+      audioOptions.innerHTML = `
+        <div style="background-color: #f8d7da; padding: 15px; border-radius: 4px; text-align: left;">
+          <h3 style="color: #721c24; margin-top: 0;">Error en la Transcripción</h3>
+          <p>${result?.message || 'No se pudo completar la transcripción.'}</p>
+          <button id="close-error" style="background-color: #dc3545; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Cerrar</button>
+        </div>
+      `;
+      
+      document.getElementById('close-error').onclick = () => {
+        audioOptions.remove();
+      };
+    }
+  } catch (error) {
+    console.error('Error al transcribir audio:', error);
+    // Mostrar error
+    audioOptions.innerHTML = `
+      <div style="background-color: #f8d7da; padding: 15px; border-radius: 4px; text-align: left;">
+        <h3 style="color: #721c24; margin-top: 0;">Error en la Transcripción</h3>
+        <p>${error.message || 'Ocurrió un error durante la transcripción.'}</p>
+        <button id="close-error" style="background-color: #dc3545; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Cerrar</button>
+      </div>
+    `;
+    
+    document.getElementById('close-error').onclick = () => {
+      audioOptions.remove();
+    };
+  }
+};
+
+// Agregar el botón de transcripción a las opciones
+audioOptions.appendChild(transcribeButton);
+
+// Botón para cerrar el reproductor
+const closeButton = document.createElement('button');
+closeButton.textContent = 'Cerrar Reproductor';
+closeButton.style.backgroundColor = '#dc3545';
+closeButton.style.color = 'white';
+closeButton.style.border = 'none';
+closeButton.style.borderRadius = '4px';
+closeButton.style.padding = '8px 16px';
+closeButton.style.cursor = 'pointer';
+closeButton.style.margin = '0 10px';
+
+closeButton.onclick = () => {
+  audioContainer.remove();
+  audioOptions.remove();
+};
+
+audioOptions.appendChild(closeButton);
+
+// Añadir las opciones al cuerpo del documento
+document.body.appendChild(audioOptions);
 
 
-            // Eliminar reproductor anterior si existe
-            const oldPlayer = document.getElementById('audio-player');
-            if (oldPlayer) {
-              oldPlayer.remove();
-            }
-            
-            audioPlayer.id = 'audio-player';
-            document.body.appendChild(audioPlayer);
-            audioPlayer.play();
-            
-            // Mostrar opciones adicionales para archivos MP3
-            const audioOptions = document.createElement('div');
-            audioOptions.className = 'mp3-options';
-            audioOptions.style.position = 'fixed';
-            audioOptions.style.bottom = '50px';
-            audioOptions.style.left = '0';
-            audioOptions.style.width = '100%';
-            audioOptions.style.backgroundColor = '#e9f5ff';
-            audioOptions.style.padding = '10px';
-            audioOptions.style.textAlign = 'center';
-            audioOptions.style.zIndex = '999';
-            audioOptions.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.1)';
-            
-            // Botón de transcripción
-            const transcribeButton = document.createElement('button');
-            transcribeButton.textContent = 'Transcribir a Texto';
-            transcribeButton.style.backgroundColor = '#007bff';
-            transcribeButton.style.color = 'white';
-            transcribeButton.style.border = 'none';
-            transcribeButton.style.borderRadius = '4px';
-            transcribeButton.style.padding = '8px 16px';
-            transcribeButton.style.cursor = 'pointer';
-            transcribeButton.style.margin = '0 10px';
-            
-            // Evento de clic para transcribir
-            transcribeButton.onclick = async () => {
-              const confirmDelete = window.confirm(
-                '¿Desea eliminar el archivo MP3 original después de la transcripción? Esto ahorrará espacio de almacenamiento.'
-              );
-              
-              try {
-                // Mostrar mensaje de carga
-                audioOptions.innerHTML = '<p style="color: #007bff;"><strong>Transcribiendo audio, por favor espere...</strong> Este proceso puede tardar varios minutos dependiendo de la duración del audio.</p>';
-                
-                // Llamar a la API para transcribir
-                const result = await api.transcribeAudio(filePath, confirmDelete);
-                
-                if (result && result.success) {
-                  // Mostrar resultado exitoso
-                  audioOptions.innerHTML = `
-                    <div style="background-color: #d4edda; padding: 15px; border-radius: 4px; text-align: left;">
-                      <h3 style="color: #155724; margin-top: 0;">Transcripción Completada</h3>
-                      <p>El texto se ha guardado como: <strong>${result.transcriptionPath}</strong></p>
-                      <p>${confirmDelete ? 'El archivo MP3 original ha sido eliminado.' : 'El archivo MP3 original se ha conservado.'}</p>
-                      <button id="refresh-button" style="background-color: #28a745; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Actualizar Lista de Archivos</button>
-                    </div>
-                  `;
-                  
-                  // Añadir evento para actualizar lista
-                  document.getElementById('refresh-button').onclick = () => {
-                    if (onActionComplete) {
-                      onActionComplete();
-                    }
-                    // Eliminar opciones y reproductor
-                    audioOptions.remove();
-                    audioPlayer.remove();
-                  };
-                } else {
-                  // Mostrar error
-                  audioOptions.innerHTML = `
-                    <div style="background-color: #f8d7da; padding: 15px; border-radius: 4px; text-align: left;">
-                      <h3 style="color: #721c24; margin-top: 0;">Error en la Transcripción</h3>
-                      <p>${result?.message || 'No se pudo completar la transcripción.'}</p>
-                      <button id="close-error" style="background-color: #dc3545; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Cerrar</button>
-                    </div>
-                  `;
-                  
-                  document.getElementById('close-error').onclick = () => {
-                    audioOptions.remove();
-                  };
-                }
-              } catch (error) {
-                console.error('Error al transcribir audio:', error);
-                // Mostrar error
-                audioOptions.innerHTML = `
-                  <div style="background-color: #f8d7da; padding: 15px; border-radius: 4px; text-align: left;">
-                    <h3 style="color: #721c24; margin-top: 0;">Error en la Transcripción</h3>
-                    <p>${error.message || 'Ocurrió un error durante la transcripción.'}</p>
-                    <button id="close-error" style="background-color: #dc3545; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer;">Cerrar</button>
-                  </div>
-                `;
-                
-                document.getElementById('close-error').onclick = () => {
-                  audioOptions.remove();
-                };
-              }
-            };
-            
-            audioOptions.appendChild(transcribeButton);
-            document.body.appendChild(audioOptions);
           } catch (error) {
             console.error('Error al manejar archivo MP3:', error);
             alert('No se pudo reproducir el archivo de audio');
           }
         } else {
+          
           // Para otros tipos de archivo, mantener el comportamiento actual (descarga)
           const url = await api.getDownloadUrl(filePath);
           window.open(url, '_blank');

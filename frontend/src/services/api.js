@@ -950,55 +950,52 @@ export const searchContentWithTags = async (searchText, tags, useIds = false, re
  * Transcribe un archivo MP3 a texto
  * @param {string} filePath - Ruta del archivo MP3 en el bucket
  * @param {boolean} deleteOriginal - Si se debe eliminar el archivo original después de la transcripción
+ * @param {boolean} processWithGPT - Si se debe procesar la transcripción con ChatGPT
  * @returns {Promise<Object>} - Resultado de la transcripción
  */
-export const transcribeAudio = async (filePath, deleteOriginal = true) => {
+export const transcribeAudio = async (filePath, processWithGPT, customPrompt = null, confirmDelete = false) => {
   try {
-    console.log(`Iniciando transcripción de audio: ${filePath}`);
-    
-    // Verificar que sea un archivo MP3
-    if (!filePath.toLowerCase().endsWith('.mp3')) {
-      throw new Error('Solo se pueden transcribir archivos MP3');
-    }
-    
-    // Obtener el token de autenticación
+    // Obtener el token de autorización
     const token = getAuthToken();
-    
-    // Construir la URL del endpoint
-    const url = `${BASE_URL}/transcribe-audio`;
-    
-    // Configurar la solicitud
-    const options = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': token ? `Bearer ${token}` : ''
-      },
-      body: JSON.stringify({
-        filePath,
-        deleteOriginal
-      })
+    const headers = {
+      'Content-Type': 'application/json'
     };
     
-    // Realizar la solicitud
-    console.log('Enviando solicitud de transcripción...');
-    const response = await fetch(url, options);
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `Error ${response.status}`);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-    
+
+    const response = await fetch(`${BASE_URL}/transcribe-audio`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ 
+        filePath,
+        processWithGPT,
+        customPrompt,
+        confirmDelete  // Agregar el parámetro confirmDelete
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error ${response.status}: ${errorText}`);
+    }
+
     const data = await response.json();
-    console.log('Transcripción completada correctamente:', data);
-    
+        
+    // Corregir manualmente el nombre del archivo procesado si es igual al de la transcripción
+    if (processWithGPT && data.processedPath === data.transcriptionPath) {
+      // Generar la ruta correcta del archivo procesado
+      const basePath = data.transcriptionPath.substring(0, data.transcriptionPath.lastIndexOf('_'));
+      data.processedPath = `${basePath}_acta_formatada.txt`;
+    }
+
     return data;
   } catch (error) {
-    console.error('Error en transcribeAudio:', error);
+    console.error('Error transcribing audio:', error);
     throw error;
   }
 };
-
 /**
  * Obtiene la URL de YouTube asociada a un archivo
  * @param {string} path - Ruta del archivo

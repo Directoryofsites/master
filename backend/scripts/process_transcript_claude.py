@@ -1,13 +1,13 @@
 import os
 import sys
 import argparse
-import requests
 import json
 import time
+import anthropic
 
-def process_with_chatgpt(transcript_file, openai_key, custom_prompt=None):
+def process_with_claude(transcript_file, anthropic_key, custom_prompt=None):
     """
-    Procesa un archivo de transcripción con ChatGPT usando un prompt personalizado
+    Procesa un archivo de transcripción con Claude usando un prompt personalizado
     """
     # Leer el archivo de transcripción
     try:
@@ -27,7 +27,7 @@ def process_with_chatgpt(transcript_file, openai_key, custom_prompt=None):
         print(f"Error al extraer la transcripción completa: {e}")
         transcript_content = transcript_text
     
-    # Definir el prompt para asambleas si no se proporciona uno personalizado
+    # Crear el prompt para Claude
     if not custom_prompt:
         custom_prompt = """# 🧭 PROMPT MAESTRO MEJORADO PARA RESUMIR Y FORMATEAR ACTAS DE ASAMBLEAS
 
@@ -130,82 +130,71 @@ Nota importante: el acta debe terminar con las firmas. Es lo último.
 -   **Siempre incluir la sección de firmas al final, aunque no haya datos de firmantes.**
 -   **Hacer que el lector pueda imaginar que estuvo en la reunión.**
 
-A continuación te presento una transcripción que debes transformar según estas instrucciones. Mantén todas las reglas descritas anteriormente y sigue el formato especificado.
+A continuación te presento una transcripción que debes transformar según estas instrucciones.
 """
     
-    # Mensaje completo para enviar a ChatGPT
-    messages = [
-        {"role": "system", "content": custom_prompt},
-        {"role": "user", "content": transcript_content}
-    ]
+    # Configurar el cliente de Claude
+    client = anthropic.Anthropic(api_key=anthropic_key)
     
-    # Configurar la llamada a la API
-    api_url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {openai_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-    "model": "gpt-3.5-turbo",
-    "messages": messages,
-    "temperature": 0.7,
-    "max_tokens": 2000  # Reducir a 2000 para tener menos carga
-}
+    # Mensaje completo para enviar a Claude
+    system_prompt = custom_prompt
+    user_prompt = transcript_content
     
-    # Llamar a la API de OpenAI con reintentos
-    max_retries = 5
-    retry_delay = 10  # segundos
+    # Llamar a la API de Claude con reintentos
+    max_retries = 3
+    retry_delay = 5  # segundos
     
     for attempt in range(max_retries):
         try:
-            response = requests.post(api_url, headers=headers, data=json.dumps(data))
-            if response.status_code == 200:
-                result = response.json()
-                improved_text = result["choices"][0]["message"]["content"]
-                
-                # Crear nombre para el archivo mejorado
-                base_name = os.path.basename(transcript_file)
-                dir_name = os.path.dirname(transcript_file)
-                output_file_name = os.path.splitext(base_name)[0] + "_acta_formatada.txt"
-                output_file = os.path.join(dir_name, output_file_name)
-                
-                # Guardar el texto mejorado
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    f.write(improved_text)
-                
-                print(f"Acta formateada guardada en: {output_file}")
-                return output_file
-            elif response.status_code == 429:  # Rate limit exceeded
-                if attempt < max_retries - 1:
-                    print(f"Límite de tasa excedido. Reintentando en {retry_delay} segundos...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Backoff exponencial
-                else:
-                    print("Excedido el número máximo de reintentos.")
-                    return False
-            else:
-                print(f"Error al llamar a la API de OpenAI: {response.status_code}")
-                print(response.text)
-                return False
+            print(f"Llamando a la API de Claude (intento {attempt+1}/{max_retries})...")
+            
+            # Crear la solicitud a Claude
+            response = client.messages.create(
+                model="claude-3-sonnet-20240229",  # Puedes ajustar al modelo adecuado
+                max_tokens=4000,
+                temperature=0.5,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            
+            # Extraer el contenido de la respuesta
+            improved_text = response.content[0].text
+            
+            # Crear nombre para el archivo mejorado
+            base_name = os.path.basename(transcript_file)
+            dir_name = os.path.dirname(transcript_file)
+            output_file_name = os.path.splitext(base_name)[0] + "_acta_formatada.txt"
+            output_file = os.path.join(dir_name, output_file_name)
+            
+            # Guardar el texto mejorado
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(improved_text)
+            
+            print(f"Acta formateada guardada en: {output_file}")
+            return output_file
+        
         except Exception as e:
-            print(f"Error en la llamada a ChatGPT: {e}")
+            print(f"Error en la llamada a Claude: {e}")
             if attempt < max_retries - 1:
                 print(f"Reintentando en {retry_delay} segundos...")
                 time.sleep(retry_delay)
-                retry_delay *= 2
+                retry_delay *= 2  # Backoff exponencial
             else:
+                print("Excedido el número máximo de reintentos.")
                 return False
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Procesa transcripciones con ChatGPT para formatear actas de asambleas')
+    parser = argparse.ArgumentParser(description='Procesa transcripciones con Claude para formatear actas de asambleas')
     parser.add_argument('transcript_file', help='Ruta al archivo de transcripción')
-    parser.add_argument('--api_key', help='API Key de OpenAI', required=True)
-    parser.add_argument('--prompt', help='Prompt personalizado para ChatGPT')
+    parser.add_argument('--api_key', help='API Key de Anthropic', required=True)
+    parser.add_argument('--prompt', help='Prompt personalizado para Claude')
     parser.add_argument('--output', help='Ruta de salida para el archivo formateado')
     
     args = parser.parse_args()
     
-    result_file = process_with_chatgpt(args.transcript_file, args.api_key, args.prompt)
+    result_file = process_with_claude(args.transcript_file, args.api_key, args.prompt)
     if result_file and args.output:
         # Si se especificó una ruta de salida, actualizar el nombre del archivo
         try:
