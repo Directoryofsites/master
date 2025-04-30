@@ -1,4 +1,6 @@
+// Importar módulos requeridos al inicio
 require('dotenv').config();
+const { spawn } = require('child_process');
 
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
@@ -7,7 +9,16 @@ console.log(Object.keys(process.env));
 const isProduction = process.env.NODE_ENV === 'production';
 const isRailway = !!process.env.RAILWAY_PROJECT_ID;
 
-// Configuración específica para Railway
+// Imprimir información sobre el entorno de ejecución
+console.log('Entorno de ejecución:');
+console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'no definido'}`);
+console.log(`- ¿Es producción?: ${isProduction}`);
+console.log(`- ¿Es Railway?: ${isRailway}`);
+console.log(`- Sistema operativo: ${process.platform}`);
+console.log(`- Arquitectura: ${process.arch}`);
+console.log(`- Directorio de trabajo: ${process.cwd()}`);
+
+// Configuración específica para Railway (usando spawn ya inicializado)
 if (isRailway) {
   console.log('[RAILWAY] Detectado entorno Railway, configurando opciones específicas...');
   
@@ -16,30 +27,42 @@ if (isRailway) {
     console.error('[RAILWAY] ADVERTENCIA: Variables SUPABASE_URL o SUPABASE_KEY no configuradas');
   }
   
-  // Verificar Python
+  // Verificar Python de forma segura
   console.log('[RAILWAY] Verificando disponibilidad de Python...');
-  
-  // Intentar verificar Python para que esté listo
-  spawn('python3', ['--version'])
-    .on('error', (error) => {
+  try {
+    const pythonProcess = spawn('python3', ['--version']);
+    
+    pythonProcess.on('error', (error) => {
       console.error('[RAILWAY] Error al verificar Python3:', error.message);
       console.log('[RAILWAY] Intentando con python alternativo...');
       
-      spawn('python', ['--version'])
-        .on('error', (err) => {
+      try {
+        const pythonAltProcess = spawn('python', ['--version']);
+        
+        pythonAltProcess.on('error', (err) => {
           console.error('[RAILWAY] Error al verificar Python:', err.message);
           console.error('[RAILWAY] ADVERTENCIA: Python no parece estar disponible en este entorno');
         });
-    })
-    .on('close', (code) => {
-      if (code === 0) {
-        console.log('[RAILWAY] Python está disponible en este entorno');
+        
+        pythonAltProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log('[RAILWAY] Python está disponible en este entorno');
+          }
+        });
+      } catch (innerError) {
+        console.error('[RAILWAY] Error al intentar verificar Python:', innerError.message);
       }
     });
+    
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('[RAILWAY] Python3 está disponible en este entorno');
+      }
+    });
+  } catch (outerError) {
+    console.error('[RAILWAY] Error crítico al verificar Python:', outerError.message);
+  }
 }
-
-// Importar child_process al inicio para asegurar disponibilidad de spawn
-const { spawn } = require('child_process');
 
 // Imprimir información sobre el entorno de ejecución
 console.log('Entorno de ejecución:');
