@@ -174,11 +174,24 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-  origin: ['https://directoryofsites.github.io', 'http://localhost:3000'],
+  origin: '*', // Permitir todas las solicitudes durante la etapa de depuración
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS', 'PUT', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 86400 // Cache preflight por 24 horas
 }));
+
+// Middleware adicional para solucionar problemas CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 app.use(express.json());
 
@@ -5611,7 +5624,7 @@ app.get('/api/admin/backup-direct', async (req, res) => {
     console.log(`[BACKUP] Backup completado para ${bucketName} con ${fileList.length} archivos`);
   } catch (error) {
     console.error('[BACKUP] Error al generar copia de seguridad directa:', error);
-    
+     
     // Si aún no hemos enviado encabezados, enviar respuesta de error
     if (!res.headersSent) {
       res.status(500).json({
