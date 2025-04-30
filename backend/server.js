@@ -7,6 +7,37 @@ console.log(Object.keys(process.env));
 const isProduction = process.env.NODE_ENV === 'production';
 const isRailway = !!process.env.RAILWAY_PROJECT_ID;
 
+// Configuración específica para Railway
+if (isRailway) {
+  console.log('[RAILWAY] Detectado entorno Railway, configurando opciones específicas...');
+  
+  // Verificar variables de entorno críticas
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+    console.error('[RAILWAY] ADVERTENCIA: Variables SUPABASE_URL o SUPABASE_KEY no configuradas');
+  }
+  
+  // Verificar Python
+  console.log('[RAILWAY] Verificando disponibilidad de Python...');
+  
+  // Intentar verificar Python para que esté listo
+  spawn('python3', ['--version'])
+    .on('error', (error) => {
+      console.error('[RAILWAY] Error al verificar Python3:', error.message);
+      console.log('[RAILWAY] Intentando con python alternativo...');
+      
+      spawn('python', ['--version'])
+        .on('error', (err) => {
+          console.error('[RAILWAY] Error al verificar Python:', err.message);
+          console.error('[RAILWAY] ADVERTENCIA: Python no parece estar disponible en este entorno');
+        });
+    })
+    .on('close', (code) => {
+      if (code === 0) {
+        console.log('[RAILWAY] Python está disponible en este entorno');
+      }
+    });
+}
+
 // Importar child_process al inicio para asegurar disponibilidad de spawn
 const { spawn } = require('child_process');
 
@@ -21,12 +52,22 @@ console.log(`- Directorio de trabajo: ${process.cwd()}`);
 
 
 // Mejora del código existente, busca esta función y añade estas mejoras
+
 async function checkPythonAvailability() {
   return new Promise((resolve) => {
     console.log('[PYTHON] Verificando disponibilidad de Python...');
     
-    // Lista de comandos a probar, en orden de preferencia
-    const pythonCommands = ['python3', 'python', 'python3.9', 'python3.8'];
+    // Lista de comandos a probar, en orden de preferencia, con rutas específicas para Railway
+    const pythonCommands = [
+      'python3',
+      'python',
+      'python3.9',
+      '/usr/bin/python3',
+      '/usr/bin/python3.9',
+      '/nix/store/*/bin/python3',
+      '/nix/store/*/bin/python3.9'
+    ];
+    
     let currentIndex = 0;
     
     function tryNextCommand() {
@@ -39,28 +80,34 @@ async function checkPythonAvailability() {
       const command = pythonCommands[currentIndex];
       console.log(`[PYTHON] Probando comando: ${command}`);
       
-      const pythonProcess = spawn(command, ['--version']);
-      
-      pythonProcess.on('error', (err) => {
-        console.log(`[PYTHON] Error al ejecutar ${command}: ${err.message}`);
-        currentIndex++;
-        tryNextCommand();
-      });
-      
-      pythonProcess.stdout.on('data', (data) => {
-        console.log(`[PYTHON] Versión detectada: ${data.toString().trim()}`);
-      });
-      
-      pythonProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log(`[PYTHON] ${command} está disponible`);
-          resolve(command);
-        } else {
-          console.log(`[PYTHON] ${command} no está disponible, código: ${code}`);
+      try {
+        const pythonProcess = spawn(command, ['--version']);
+        
+        pythonProcess.on('error', (err) => {
+          console.log(`[PYTHON] Error al ejecutar ${command}: ${err.message}`);
           currentIndex++;
           tryNextCommand();
-        }
-      });
+        });
+        
+        pythonProcess.stdout.on('data', (data) => {
+          console.log(`[PYTHON] Versión detectada: ${data.toString().trim()}`);
+        });
+        
+        pythonProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log(`[PYTHON] ${command} está disponible`);
+            resolve(command);
+          } else {
+            console.log(`[PYTHON] ${command} no está disponible, código: ${code}`);
+            currentIndex++;
+            tryNextCommand();
+          }
+        });
+      } catch (error) {
+        console.error(`[PYTHON] Error crítico al intentar ejecutar ${command}:`, error);
+        currentIndex++;
+        tryNextCommand();
+      }
     }
     
     tryNextCommand();
@@ -8006,48 +8053,65 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
     let transcriptionFilePath = null;
     let transcriptionPath = null;
     
-    // Probar cada comando de Python hasta que uno funcione
-    for (const cmd of pythonCommands) {
-      console.log(`[TRANSCRIBE] Intentando transcripción con comando: ${cmd}`);
+   // Probar cada comando de Python hasta que uno funcione
+for (const cmd of pythonCommands) {
+  console.log(`[TRANSCRIBE] Intentando transcripción con comando: ${cmd}`);
+  
+  try {
+    const result = await new Promise((resolve, reject) => {
+      let pythonProcess;
       
       try {
-        const result = await new Promise((resolve, reject) => {
-          const pythonProcess = spawn(cmd, [scriptPath, tempMP3Path]);
-          
-          let outputData = '';
-          let errorData = '';
-          
-          // Capturar la salida del script
-          pythonProcess.stdout.on('data', (data) => {
-            const output = data.toString();
-            console.log(`[PYTHON] ${output}`);
-            outputData += output;
-          });
-          
-          // Capturar errores del script
-          pythonProcess.stderr.on('data', (data) => {
-            const error = data.toString();
-            console.error(`[PYTHON ERROR] ${error}`);
-            errorData += error;
-          });
-          
-          // Manejar finalización del script
-          pythonProcess.on('close', (code) => {
-            console.log(`[TRANSCRIBE] Proceso Python con ${cmd} terminado con código: ${code}`);
-            
-            if (code !== 0) {
-              reject(new Error(`Proceso terminó con código ${code}: ${errorData}`));
-            } else {
-              resolve(outputData);
-            }
-          });
-          
-          // Manejar errores del proceso
-          pythonProcess.on('error', (error) => {
-            console.error(`[TRANSCRIBE] Error al iniciar proceso Python con ${cmd}:`, error);
-            reject(error);
-          });
-        });
+        pythonProcess = spawn(cmd, [scriptPath, tempMP3Path]);
+      } catch (spawnError) {
+        console.error(`[TRANSCRIBE] Error crítico al iniciar proceso con ${cmd}:`, spawnError);
+        reject(spawnError);
+        return;
+      }
+      
+      // Verificar si el proceso se creó correctamente
+      if (!pythonProcess || !pythonProcess.pid) {
+        console.error(`[TRANSCRIBE] El proceso no se inició correctamente con ${cmd}`);
+        reject(new Error(`No se pudo iniciar el proceso con ${cmd}`));
+        return;
+      }
+      
+      let outputData = '';
+      let errorData = '';
+      
+      // Capturar la salida del script
+      pythonProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        console.log(`[PYTHON] ${output}`);
+        outputData += output;
+      });
+      
+      // Capturar errores del script
+      pythonProcess.stderr.on('data', (data) => {
+        const error = data.toString();
+        console.error(`[PYTHON ERROR] ${error}`);
+        errorData += error;
+      });
+      
+      // Manejar finalización del script
+      pythonProcess.on('close', (code) => {
+        console.log(`[TRANSCRIBE] Proceso Python con ${cmd} terminado con código: ${code}`);
+        
+        if (code !== 0) {
+          reject(new Error(`Proceso terminó con código ${code}: ${errorData}`));
+        } else {
+          resolve(outputData);
+        }
+      });
+      
+      // Manejar errores del proceso
+      pythonProcess.on('error', (error) => {
+        console.error(`[TRANSCRIBE] Error al iniciar proceso Python con ${cmd}:`, error);
+        reject(error);
+      });
+    });
+    
+    // ... resto del código (continuar con el procesamiento si fue exitoso)
         
         // Si llegamos aquí, la transcripción fue exitosa
         transcriptionSuccessful = true;
