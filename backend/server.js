@@ -8181,10 +8181,75 @@ for (const cmd of pythonCommands) {
       }
     }
     
-    // Si ningún comando de Python funcionó
-    if (!transcriptionSuccessful) {
-      throw new Error('No se pudo ejecutar ningún comando de Python para la transcripción');
+    // Si ningún comando de Python funcionó, intentar con el fallback de JavaScript
+if (!transcriptionSuccessful) {
+  console.error('[TRANSCRIBE] No se pudo ejecutar ningún comando de Python para la transcripción');
+  console.log('[TRANSCRIBE] Intentando con sistema de respaldo de JavaScript');
+  
+  try {
+    // Crear la ruta del script de fallback
+    const fallbackScriptPath = path.join(__dirname, 'scripts', 'js_transcribe_fallback.js');
+    console.log(`[TRANSCRIBE] Ejecutando script de respaldo: ${fallbackScriptPath}`);
+    
+    // Ejecutar el script de Node.js para el fallback
+    const nodeProcess = spawn('node', [fallbackScriptPath, tempMP3Path]);
+    
+    await new Promise((resolve, reject) => {
+      nodeProcess.on('close', (code) => {
+        if (code === 0) {
+          console.log('[TRANSCRIBE] Sistema de respaldo ejecutado correctamente');
+          resolve();
+        } else {
+          reject(new Error(`El sistema de respaldo terminó con código ${code}`));
+        }
+      });
+      
+      nodeProcess.on('error', (error) => {
+        reject(error);
+      });
+    });
+    
+    // Verificar si el archivo de transcripción fallback fue generado
+    const baseFileName = path.basename(normalizedPath, '.mp3');
+    const transcriptionFileName = `${baseFileName}_transcripcion.txt`;
+    transcriptionFilePath = path.join(tempDir, transcriptionFileName);
+    
+    if (!fs.existsSync(transcriptionFilePath)) {
+      throw new Error('El archivo de transcripción fallback no fue generado');
     }
+    
+    // Continuar como si hubiera sido una transcripción exitosa
+    transcriptionSuccessful = true;
+    
+    // Leer el contenido del archivo de transcripción
+    const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
+    
+    // Subir el archivo de transcripción a Supabase con reintentos
+    const folderPath = path.dirname(normalizedPath);
+    transcriptionPath = folderPath === '.' 
+      ? transcriptionFileName 
+      : `${folderPath}/${transcriptionFileName}`;
+    
+    console.log(`[TRANSCRIBE] Subiendo transcripción fallback a: ${transcriptionPath}`);
+    
+    const { error: uploadError } = await retryOperation(async () => {
+      return await supabase.storage
+        .from(bucketToUse)
+        .upload(transcriptionPath, transcriptionContent, {
+          contentType: 'text/plain',
+          upsert: true
+        });
+    }, 5, 2000);
+    
+    if (uploadError) {
+      throw uploadError;
+    }
+    
+  } catch (fallbackError) {
+    console.error('[TRANSCRIBE] Error en sistema de fallback:', fallbackError);
+    throw new Error('No se pudo transcribir el audio, ni siquiera con el sistema de respaldo');
+  }
+}
     
     // Si se solicitó eliminar el archivo original
     if (deleteOriginal) {
