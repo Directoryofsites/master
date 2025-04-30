@@ -1,6 +1,7 @@
 // Importar módulos requeridos al inicio
 require('dotenv').config();
 const { spawn } = require('child_process');
+const fallbackTranscribe = require('./fallback_transcribe');
 
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
@@ -80,17 +81,8 @@ async function checkPythonAvailability() {
   return new Promise((resolve) => {
     console.log('[PYTHON] Verificando disponibilidad de Python...');
     
-    // Lista de comandos a probar, en orden de preferencia, con rutas específicas para Railway
-    const pythonCommands = [
-      'python3',
-      'python',
-      'python3.9',
-      '/usr/bin/python3',
-      '/usr/bin/python3.9',
-      '/nix/store/*/bin/python3',
-      '/nix/store/*/bin/python3.9'
-    ];
-    
+    // Lista de comandos a probar, en orden de preferencia
+    const pythonCommands = ['python3', 'python', 'python3.9', 'python3.8'];
     let currentIndex = 0;
     
     function tryNextCommand() {
@@ -103,13 +95,16 @@ async function checkPythonAvailability() {
       const command = pythonCommands[currentIndex];
       console.log(`[PYTHON] Probando comando: ${command}`);
       
+      let pythonProcess;
+      
       try {
-        const pythonProcess = spawn(command, ['--version']);
+        pythonProcess = spawn(command, ['--version']);
         
         pythonProcess.on('error', (err) => {
           console.log(`[PYTHON] Error al ejecutar ${command}: ${err.message}`);
           currentIndex++;
-          tryNextCommand();
+          // Asíncrono para evitar desbordamiento de pila
+          setTimeout(tryNextCommand, 0);
         });
         
         pythonProcess.stdout.on('data', (data) => {
@@ -123,20 +118,21 @@ async function checkPythonAvailability() {
           } else {
             console.log(`[PYTHON] ${command} no está disponible, código: ${code}`);
             currentIndex++;
-            tryNextCommand();
+            // Asíncrono para evitar desbordamiento de pila
+            setTimeout(tryNextCommand, 0);
           }
         });
       } catch (error) {
         console.error(`[PYTHON] Error crítico al intentar ejecutar ${command}:`, error);
         currentIndex++;
-        tryNextCommand();
+        // Asíncrono para evitar desbordamiento de pila
+        setTimeout(tryNextCommand, 0);
       }
     }
     
     tryNextCommand();
   });
 }
-
 // Variable global para almacenar el comando de python
 let pythonCommand = process.platform === 'win32' ? 'python' : 'python3';
 
@@ -8077,6 +8073,8 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
     let transcriptionPath = null;
     
    // Probar cada comando de Python hasta que uno funcione
+
+   // Modificar la parte donde pruebas cada comando de Python
 for (const cmd of pythonCommands) {
   console.log(`[TRANSCRIBE] Intentando transcripción con comando: ${cmd}`);
   
@@ -8087,14 +8085,14 @@ for (const cmd of pythonCommands) {
       try {
         pythonProcess = spawn(cmd, [scriptPath, tempMP3Path]);
       } catch (spawnError) {
-        console.error(`[TRANSCRIBE] Error crítico al iniciar proceso con ${cmd}:`, spawnError);
+        console.error(`[TRANSCRIBE] Error al iniciar proceso con ${cmd}:`, spawnError);
         reject(spawnError);
         return;
       }
       
-      // Verificar si el proceso se creó correctamente
+      // Si no se pudo iniciar el proceso
       if (!pythonProcess || !pythonProcess.pid) {
-        console.error(`[TRANSCRIBE] El proceso no se inició correctamente con ${cmd}`);
+        console.log(`[TRANSCRIBE] El proceso no se inició correctamente con ${cmd}`);
         reject(new Error(`No se pudo iniciar el proceso con ${cmd}`));
         return;
       }
@@ -8102,24 +8100,20 @@ for (const cmd of pythonCommands) {
       let outputData = '';
       let errorData = '';
       
-      // Capturar la salida del script
       pythonProcess.stdout.on('data', (data) => {
         const output = data.toString();
         console.log(`[PYTHON] ${output}`);
         outputData += output;
       });
       
-      // Capturar errores del script
       pythonProcess.stderr.on('data', (data) => {
         const error = data.toString();
         console.error(`[PYTHON ERROR] ${error}`);
         errorData += error;
       });
       
-      // Manejar finalización del script
       pythonProcess.on('close', (code) => {
         console.log(`[TRANSCRIBE] Proceso Python con ${cmd} terminado con código: ${code}`);
-        
         if (code !== 0) {
           reject(new Error(`Proceso terminó con código ${code}: ${errorData}`));
         } else {
@@ -8127,14 +8121,60 @@ for (const cmd of pythonCommands) {
         }
       });
       
-      // Manejar errores del proceso
+      // Manejar errores que podrían bloquear el proceso
       pythonProcess.on('error', (error) => {
-        console.error(`[TRANSCRIBE] Error al iniciar proceso Python con ${cmd}:`, error);
+        console.error(`[TRANSCRIBE] Error al ejecutar proceso con ${cmd}:`, error);
         reject(error);
       });
     });
     
     // ... resto del código (continuar con el procesamiento si fue exitoso)
+
+        // Si ningún comando de Python funcionó
+if (!transcriptionSuccessful) {
+  console.log('[TRANSCRIBE] No se pudo ejecutar ningún comando de Python para la transcripción');
+  console.log('[TRANSCRIBE] Usando sistema de transcripción de respaldo (JavaScript)');
+  
+  try {
+    // Usar el sistema de fallback
+    const transcriptionFileName = await fallbackTranscribe.generateFallbackTranscription(
+      tempMP3Path, 
+      tempDir
+    );
+    
+    // Actualizar variables para seguir el flujo normal
+    transcriptionFilePath = path.join(tempDir, transcriptionFileName);
+    const folderPath = path.dirname(normalizedPath);
+    transcriptionPath = folderPath === '.' 
+      ? transcriptionFileName 
+      : `${folderPath}/${transcriptionFileName}`;
+    
+    // Leer contenido y subirlo a Supabase
+    const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
+    
+    // Subir el archivo de transcripción a Supabase con reintentos
+    console.log(`[TRANSCRIBE-FALLBACK] Subiendo transcripción a: ${transcriptionPath}`);
+    
+    const { error: uploadError } = await retryOperation(async () => {
+      return await supabase.storage
+        .from(bucketToUse)
+        .upload(transcriptionPath, transcriptionContent, {
+          contentType: 'text/plain',
+          upsert: true
+        });
+    }, 5, 2000);
+    
+    if (uploadError) {
+      throw uploadError;
+    }
+    
+    // Marcar como exitoso para seguir el flujo normal
+    transcriptionSuccessful = true;
+  } catch (fallbackError) {
+    console.error('[TRANSCRIBE-FALLBACK] Error en sistema de respaldo:', fallbackError);
+    throw new Error('No se pudo transcribir el audio ni siquiera con el sistema de respaldo');
+  }
+}
         
         // Si llegamos aquí, la transcripción fue exitosa
         transcriptionSuccessful = true;
