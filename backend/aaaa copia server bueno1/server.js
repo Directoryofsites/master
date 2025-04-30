@@ -16,52 +16,32 @@ console.log(`- Sistema operativo: ${process.platform}`);
 console.log(`- Arquitectura: ${process.arch}`);
 console.log(`- Directorio de trabajo: ${process.cwd()}`);
 
-const { spawn } = require('child_process');
-
-// Mejora del código existente, busca esta función y añade estas mejoras
+// Función para verificar la disponibilidad de Python
 async function checkPythonAvailability() {
   return new Promise((resolve) => {
-    console.log('[PYTHON] Verificando disponibilidad de Python...');
+    // Intentar primero con python3 (común en Linux/Railway)
+    const pythonProcess = spawn('python3', ['--version']);
     
-    // Lista de comandos a probar, en orden de preferencia
-    const pythonCommands = ['python3', 'python', 'python3.9', 'python3.8'];
-    let currentIndex = 0;
-    
-    function tryNextCommand() {
-      if (currentIndex >= pythonCommands.length) {
-        console.error('[PYTHON] No se encontró ninguna versión de Python');
-        resolve(null);
-        return;
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('[PYTHON] python3 está disponible');
+        resolve('python3');
+      } else {
+        // Si falla, intentar con python (común en Windows)
+        const fallbackProcess = spawn('python', ['--version']);
+        
+        fallbackProcess.on('close', (fallbackCode) => {
+          if (fallbackCode === 0) {
+            console.log('[PYTHON] python está disponible');
+            resolve('python');
+          } else {
+            console.error('[PYTHON] No se encontró ninguna versión de Python');
+            // En Railway, necesitaremos instalar Python en el container
+            resolve(null);
+          }
+        });
       }
-      
-      const command = pythonCommands[currentIndex];
-      console.log(`[PYTHON] Probando comando: ${command}`);
-      
-      const pythonProcess = spawn(command, ['--version']);
-      
-      pythonProcess.on('error', (err) => {
-        console.log(`[PYTHON] Error al ejecutar ${command}: ${err.message}`);
-        currentIndex++;
-        tryNextCommand();
-      });
-      
-      pythonProcess.stdout.on('data', (data) => {
-        console.log(`[PYTHON] Versión detectada: ${data.toString().trim()}`);
-      });
-      
-      pythonProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log(`[PYTHON] ${command} está disponible`);
-          resolve(command);
-        } else {
-          console.log(`[PYTHON] ${command} no está disponible, código: ${code}`);
-          currentIndex++;
-          tryNextCommand();
-        }
-      });
-    }
-    
-    tryNextCommand();
+    });
   });
 }
 
@@ -86,7 +66,7 @@ const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-
+const { spawn } = require('child_process');
 const os = require('os');
 
 // Asegurarse de que existe el directorio de almacenamiento local
@@ -7847,6 +7827,8 @@ app.post('/api/admin/folder-permissions', isAdmin, express.json(), async (req, r
   }
 });
 
+const { spawn } = require('child_process');
+const os = require('os');
 
 // Función auxiliar para realizar reintentos con backoff exponencial
 async function retryOperation(operation, maxRetries = 3, initialDelay = 1000, fallbackFn = null) {
@@ -7948,37 +7930,37 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
       throw downloadError;
     }
     
-   // Definir directorio temporal según el entorno
+    // Definir directorio temporal según el entorno
 let tempDir;
 if (isRailway) {
   // En Railway, utilizar un directorio dentro de /tmp que siempre debe ser accesible
   tempDir = path.join('/tmp', 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal para Railway: ${tempDir}`);
 } else {
   // En desarrollo local, usar el directorio temporal del sistema
   tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal local: ${tempDir}`);
 }
 
-// Asegurar que el directorio existe con manejo de errores mejorado
+// Asegurar que el directorio existe
 try {
   fs.mkdirSync(tempDir, { recursive: true });
-  console.log(`[TRANSCRIBE] Directorio temporal creado/verificado: ${tempDir}`);
+  console.log(`[TRANSCRIBE] Directorio temporal creado en: ${tempDir}`);
 } catch (dirError) {
   console.error(`[TRANSCRIBE] Error al crear directorio temporal: ${dirError.message}`);
   
   // Plan B: Intentar usar el directorio actual si hay problemas
   if (isRailway) {
     tempDir = path.join(process.cwd(), 'tmp');
-    console.log(`[TRANSCRIBE] Intentando directorio alternativo: ${tempDir}`);
+    console.log(`[TRANSCRIBE] Utilizando directorio alternativo: ${tempDir}`);
     try {
       fs.mkdirSync(tempDir, { recursive: true });
-      console.log(`[TRANSCRIBE] Directorio alternativo creado: ${tempDir}`);
     } catch (fallbackError) {
       console.error(`[TRANSCRIBE] Error también con directorio alternativo: ${fallbackError.message}`);
     }
   }
-} 
+}
+
+
+    
     const tempMP3Path = path.join(tempDir, path.basename(normalizedPath));
     
     // Guardar el archivo descargado al sistema de archivos temporal
@@ -9012,59 +8994,6 @@ app.post('/api/tags/categories', express.json(), hasAdminPermission('manage_tags
     return res.status(500).json({
       success: false,
       message: 'Error interno al crear categoría de etiquetas',
-      error: error.message
-    });
-  }
-});
-
-// Endpoint de diagnóstico para verificar el entorno de Python
-app.get('/api/diagnose-python', async (req, res) => {
-  try {
-    console.log('[DIAGNOSE] Ejecutando diagnóstico de Python...');
-    
-    const scriptPath = path.join(__dirname, 'scripts', 'check_python_env.py');
-    console.log(`[DIAGNOSE] Ruta del script: ${scriptPath}`);
-    
-    // Usar el comando de Python detectado globalmente
-    const pythonCmd = pythonCommand || 'python3';
-    console.log(`[DIAGNOSE] Usando comando Python: ${pythonCmd}`);
-    
-    const diagnosticProcess = spawn(pythonCmd, [scriptPath]);
-    
-    let outputData = '';
-    let errorData = '';
-    
-    diagnosticProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log(`[DIAGNOSE] ${output}`);
-      outputData += output;
-    });
-    
-    diagnosticProcess.stderr.on('data', (data) => {
-      const error = data.toString();
-      console.error(`[DIAGNOSE ERROR] ${error}`);
-      errorData += error;
-    });
-    
-    // Esperar a que termine el proceso
-    await new Promise((resolve) => {
-      diagnosticProcess.on('close', (code) => {
-        console.log(`[DIAGNOSE] Proceso terminado con código: ${code}`);
-        resolve();
-      });
-    });
-    
-    res.status(200).json({
-      success: true,
-      message: 'Diagnóstico de Python completado',
-      output: outputData,
-      error: errorData || null
-    });
-  } catch (error) {
-    console.error('[DIAGNOSE] Error general:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al ejecutar diagnóstico de Python',
       error: error.message
     });
   }

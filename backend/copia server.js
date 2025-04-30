@@ -3,82 +3,9 @@ require('dotenv').config();
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
 
-// Configuración para detectar el entorno
-const isProduction = process.env.NODE_ENV === 'production';
-const isRailway = !!process.env.RAILWAY_PROJECT_ID;
-
-// Imprimir información sobre el entorno de ejecución
-console.log('Entorno de ejecución:');
-console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'no definido'}`);
-console.log(`- ¿Es producción?: ${isProduction}`);
-console.log(`- ¿Es Railway?: ${isRailway}`);
-console.log(`- Sistema operativo: ${process.platform}`);
-console.log(`- Arquitectura: ${process.arch}`);
-console.log(`- Directorio de trabajo: ${process.cwd()}`);
-
-const { spawn } = require('child_process');
-
-// Mejora del código existente, busca esta función y añade estas mejoras
-async function checkPythonAvailability() {
-  return new Promise((resolve) => {
-    console.log('[PYTHON] Verificando disponibilidad de Python...');
-    
-    // Lista de comandos a probar, en orden de preferencia
-    const pythonCommands = ['python3', 'python', 'python3.9', 'python3.8'];
-    let currentIndex = 0;
-    
-    function tryNextCommand() {
-      if (currentIndex >= pythonCommands.length) {
-        console.error('[PYTHON] No se encontró ninguna versión de Python');
-        resolve(null);
-        return;
-      }
-      
-      const command = pythonCommands[currentIndex];
-      console.log(`[PYTHON] Probando comando: ${command}`);
-      
-      const pythonProcess = spawn(command, ['--version']);
-      
-      pythonProcess.on('error', (err) => {
-        console.log(`[PYTHON] Error al ejecutar ${command}: ${err.message}`);
-        currentIndex++;
-        tryNextCommand();
-      });
-      
-      pythonProcess.stdout.on('data', (data) => {
-        console.log(`[PYTHON] Versión detectada: ${data.toString().trim()}`);
-      });
-      
-      pythonProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log(`[PYTHON] ${command} está disponible`);
-          resolve(command);
-        } else {
-          console.log(`[PYTHON] ${command} no está disponible, código: ${code}`);
-          currentIndex++;
-          tryNextCommand();
-        }
-      });
-    }
-    
-    tryNextCommand();
-  });
-}
-
-// Variable global para almacenar el comando de python
-let pythonCommand = process.platform === 'win32' ? 'python' : 'python3';
-
-// Verificar Python durante el inicio
-checkPythonAvailability().then(command => {
-  if (command) {
-    pythonCommand = command;
-    console.log(`[PYTHON] Se usará el comando: ${pythonCommand}`);
-  } else if (isRailway) {
-    console.error('[PYTHON] ADVERTENCIA: Python no está disponible en Railway, necesitas agregarlo al container');
-  }
-});
 
 const bcrypt = require('bcrypt');
+
 
 const express = require('express');
 const cors = require('cors');
@@ -86,8 +13,6 @@ const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-
-const os = require('os');
 
 // Asegurarse de que existe el directorio de almacenamiento local
 const localStorageDir = path.join(__dirname, 'local_storage');
@@ -7847,6 +7772,8 @@ app.post('/api/admin/folder-permissions', isAdmin, express.json(), async (req, r
   }
 });
 
+const { spawn } = require('child_process');
+const os = require('os');
 
 // Función auxiliar para realizar reintentos con backoff exponencial
 async function retryOperation(operation, maxRetries = 3, initialDelay = 1000, fallbackFn = null) {
@@ -7948,37 +7875,12 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
       throw downloadError;
     }
     
-   // Definir directorio temporal según el entorno
-let tempDir;
-if (isRailway) {
-  // En Railway, utilizar un directorio dentro de /tmp que siempre debe ser accesible
-  tempDir = path.join('/tmp', 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal para Railway: ${tempDir}`);
-} else {
-  // En desarrollo local, usar el directorio temporal del sistema
-  tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal local: ${tempDir}`);
-}
-
-// Asegurar que el directorio existe con manejo de errores mejorado
-try {
-  fs.mkdirSync(tempDir, { recursive: true });
-  console.log(`[TRANSCRIBE] Directorio temporal creado/verificado: ${tempDir}`);
-} catch (dirError) {
-  console.error(`[TRANSCRIBE] Error al crear directorio temporal: ${dirError.message}`);
-  
-  // Plan B: Intentar usar el directorio actual si hay problemas
-  if (isRailway) {
-    tempDir = path.join(process.cwd(), 'tmp');
-    console.log(`[TRANSCRIBE] Intentando directorio alternativo: ${tempDir}`);
-    try {
+    // Crear un archivo temporal para el MP3
+    const tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
+    if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
-      console.log(`[TRANSCRIBE] Directorio alternativo creado: ${tempDir}`);
-    } catch (fallbackError) {
-      console.error(`[TRANSCRIBE] Error también con directorio alternativo: ${fallbackError.message}`);
     }
-  }
-} 
+    
     const tempMP3Path = path.join(tempDir, path.basename(normalizedPath));
     
     // Guardar el archivo descargado al sistema de archivos temporal
@@ -8082,10 +7984,8 @@ try {
             throw uploadError;
           }
 
-         // Procesar con Perplexity si se solicitó
+          // Procesar con Perplexity si se solicitó
 let processedFilePath = transcriptionPath;
-let processedDocxPath = null; // Declara esta variable aquí para que esté en el ámbito correcto
-
 if (processWithGPT) {
   try {
     console.log('[IA] Procesando transcripción con Perplexity');
@@ -8106,186 +8006,180 @@ if (processWithGPT) {
       console.warn('[IA] No se encontró API Key de Perplexity en las variables de entorno');
     }
               
-    // Construir la ruta del archivo procesado
-    const baseFileName = path.basename(normalizedPath, '.mp3');
-    const processedFileName = `${baseFileName}_acta_formatada.txt`;
-    const processedLocalPath = path.join(tempDir, processedFileName);
+              // Construir la ruta del archivo procesado
+              const baseFileName = path.basename(normalizedPath, '.mp3');
+              const processedFileName = `${baseFileName}_acta_formatada.txt`;
+              const processedLocalPath = path.join(tempDir, processedFileName);
+                            
+            // Procesar con Perplexity usando prompt personalizado si está disponible
+const perplexityArgs = [
+  perplexityScriptPath,
+  transcriptionFilePath,
+  '--api_key', perplexityApiKey,
+  '--output', processedLocalPath
+];
 
-    // Preparar argumentos para el script Python
-    const perplexityArgs = [
-      perplexityScriptPath,
-      transcriptionFilePath,
-      '--api_key', perplexityApiKey,
-      '--output', processedLocalPath
-    ];
+// Añadir el prompt personalizado si existe
+if (req.body.customPrompt) {
+  perplexityArgs.push('--prompt', req.body.customPrompt);
+}
 
-    // Añadir el prompt personalizado si existe
-    if (req.body.customPrompt) {
-      perplexityArgs.push('--prompt', req.body.customPrompt);
-    }
-
-    // Ejecutar el script Python con los argumentos preparados
-    console.log(`[IA] Ejecutando script Python con: ${pythonExecutable}`);
-    console.log(`[IA] Ruta del script: ${perplexityScriptPath}`);
-    console.log(`[IA] Archivo de transcripción: ${transcriptionFilePath}`);
-    console.log(`[IA] Ruta de salida: ${processedLocalPath}`);
-    console.log(`[IA] Prompt personalizado: ${req.body.customPrompt ? 'Sí' : 'No'}`);
-
-    const perplexityProcess = spawn(pythonExecutable, perplexityArgs);
+const perplexityProcess = spawn('python', perplexityArgs);
               
-    // Esperar a que termine el proceso
-    await new Promise((resolvePerplexity, rejectPerplexity) => {
-      let perplexityOutput = '';
-      let perplexityError = '';
-      
-      perplexityProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        console.log(`[IA] ${output}`);
-        perplexityOutput += output;
-      });
-      
-      perplexityProcess.stderr.on('data', (data) => {
-        const error = data.toString();
-        console.error(`[IA ERROR] ${error}`);
-        perplexityError += error;
-      });
-      
-      perplexityProcess.on('close', (code) => {
-        console.log(`[IA] Proceso terminado con código: ${code}`);
-        
-        if (code !== 0) {
-          rejectPerplexity(new Error(`Error al procesar con Perplexity: ${perplexityError}`));
-        } else {
-          resolvePerplexity();
-        }
-      });
-      
-      perplexityProcess.on('error', (error) => {
-        rejectPerplexity(error);
-      });
-    });
+              // Esperar a que termine el proceso
+              await new Promise((resolvePerplexity, rejectPerplexity) => {
+                let perplexityOutput = '';
+                let perplexityError = '';
+                
+                perplexityProcess.stdout.on('data', (data) => {
+                  const output = data.toString();
+                  console.log(`[IA] ${output}`);
+                  perplexityOutput += output;
+                });
+                
+                perplexityProcess.stderr.on('data', (data) => {
+                  const error = data.toString();
+                  console.error(`[IA ERROR] ${error}`);
+                  perplexityError += error;
+                });
+                
+                perplexityProcess.on('close', (code) => {
+                  console.log(`[IA] Proceso terminado con código: ${code}`);
+                  
+                  if (code !== 0) {
+                    rejectPerplexity(new Error(`Error al procesar con Perplexity: ${perplexityError}`));
+                  } else {
+                    resolvePerplexity();
+                  }
+                });
+                
+                perplexityProcess.on('error', (error) => {
+                  rejectPerplexity(error);
+                });
+              });
               
-    // Verificar que el archivo procesado existe
-    if (fs.existsSync(processedLocalPath)) {
-      // Subir el archivo procesado a Supabase con reintentos
-      const folderPath = path.dirname(normalizedPath);
-      const processedPath = folderPath === '.' 
-        ? processedFileName 
-        : `${folderPath}/${processedFileName}`;
+              // Verificar que el archivo procesado existe
+              if (fs.existsSync(processedLocalPath)) {
 
-      console.log(`[IA] Subiendo transcripción procesada a: ${processedPath}`);
+                // Subir el archivo procesado a Supabase con reintentos
+const folderPath = path.dirname(normalizedPath);
+const processedPath = folderPath === '.' 
+  ? processedFileName 
+  : `${folderPath}/${processedFileName}`;
 
-      const processedContent = fs.readFileSync(processedLocalPath, 'utf8');
+console.log(`[IA] Subiendo transcripción procesada a: ${processedPath}`);
 
+const processedContent = fs.readFileSync(processedLocalPath, 'utf8');
+
+try {
+  const { error: uploadError } = await retryOperation(async () => {
+    return await supabase.storage
+      .from(bucketToUse)
+      .upload(processedPath, processedContent, {
+        contentType: 'text/plain',
+        upsert: true
+      });
+  }, 5, 2000); // 5 reintentos, empezando con 2 segundos
+  
+  if (uploadError) {
+    console.error('[IA] Error al subir archivo procesado TXT:', uploadError);
+  } else {
+    // Actualizar la ruta para responder con ambos archivos
+    processedFilePath = processedPath;
+    
+    // Verificar si existe la versión Word del documento
+    const docxLocalPath = processedLocalPath.replace('.txt', '.docx');
+    if (fs.existsSync(docxLocalPath)) {
+      // Si existe, intentar subirlo también
+      const docxFileName = processedFileName.replace('.txt', '.docx');
+      const docxRemotePath = folderPath === '.' 
+        ? docxFileName 
+        : `${folderPath}/${docxFileName}`;
+      
+      console.log(`[IA] Se encontró versión Word del acta, subiendo a: ${docxRemotePath}`);
+      
       try {
-        const { error: uploadError } = await retryOperation(async () => {
+        // Leer el archivo binario
+        const docxContent = fs.readFileSync(docxLocalPath);
+        
+        // Subir el archivo Word a Supabase
+        const { error: docxUploadError } = await retryOperation(async () => {
           return await supabase.storage
             .from(bucketToUse)
-            .upload(processedPath, processedContent, {
-              contentType: 'text/plain',
+            .upload(docxRemotePath, docxContent, {
+              contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
               upsert: true
             });
-        }, 5, 2000); // 5 reintentos, empezando con 2 segundos
+        }, 5, 2000);
         
-        if (uploadError) {
-          console.error('[IA] Error al subir archivo procesado TXT:', uploadError);
+        if (docxUploadError) {
+          console.error('[IA] Error al subir archivo Word:', docxUploadError);
         } else {
-          // Actualizar la ruta para responder con ambos archivos
-          processedFilePath = processedPath;
-          
-          // Verificar si existe la versión Word del documento
-          const docxLocalPath = processedLocalPath.replace('.txt', '.docx');
-          if (fs.existsSync(docxLocalPath)) {
-            // Si existe, intentar subirlo también
-            const docxFileName = processedFileName.replace('.txt', '.docx');
-            const docxRemotePath = folderPath === '.' 
-              ? docxFileName 
-              : `${folderPath}/${docxFileName}`;
-            
-            console.log(`[IA] Se encontró versión Word del acta, subiendo a: ${docxRemotePath}`);
-            
-            try {
-              // Leer el archivo binario
-              const docxContent = fs.readFileSync(docxLocalPath);
-              
-              // Subir el archivo Word a Supabase
-              const { error: docxUploadError } = await retryOperation(async () => {
-                return await supabase.storage
-                  .from(bucketToUse)
-                  .upload(docxRemotePath, docxContent, {
-                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    upsert: true
-                  });
-              }, 5, 2000);
-              
-              if (docxUploadError) {
-                console.error('[IA] Error al subir archivo Word:', docxUploadError);
-              } else {
-                console.log(`[IA] Archivo Word subido correctamente a: ${docxRemotePath}`);
-                // Guardar la ruta del archivo docx para incluirla en la respuesta
-                processedDocxPath = docxRemotePath;
-                // Limpiar archivo temporal
-                fs.unlinkSync(docxLocalPath);
-              }
-            } catch (docxError) {
-              console.error('[IA] Error al procesar archivo Word:', docxError);
-            }
-          } else {
-            console.log('[IA] No se encontró versión Word del acta');
-          }
-          
-          // Limpiar archivo temporal del procesamiento
-          fs.unlinkSync(processedLocalPath);
+          console.log(`[IA] Archivo Word subido correctamente a: ${docxRemotePath}`);
+          // Guardar la ruta del archivo docx para incluirla en la respuesta
+          processedDocxPath = docxRemotePath;
+          // Limpiar archivo temporal
+          fs.unlinkSync(docxLocalPath);
         }
-      } catch (uploadError) {
-        console.error('[IA] Error al subir archivo procesado después de reintentos:', uploadError);
-        // Continuar con la respuesta normal aunque falle la subida del procesamiento
+      } catch (docxError) {
+        console.error('[IA] Error al procesar archivo Word:', docxError);
       }
     } else {
-      // Intentar con el nombre generado automáticamente por el script
-      const autoProcessedFileName = `${baseFileName}_acta_formatada.txt`;
-      const autoProcessedPath = path.join(tempDir, autoProcessedFileName);
-      
-      if (fs.existsSync(autoProcessedPath)) {
-        // Usar este archivo en su lugar
-        const folderPath = path.dirname(normalizedPath);
-        const processedPath = folderPath === '.' 
-          ? autoProcessedFileName 
-          : `${folderPath}/${autoProcessedFileName}`;
-        
-        console.log(`[IA] Usando archivo alternativo: ${autoProcessedPath}`);
-        console.log(`[IA] Subiendo a: ${processedPath}`);
-        
-        const processedContent = fs.readFileSync(autoProcessedPath, 'utf8');
-        
-        try {
-          const { error: uploadError } = await retryOperation(async () => {
-            return await supabase.storage
-              .from(bucketToUse)
-              .upload(processedPath, processedContent, {
-                contentType: 'text/plain',
-                upsert: true
-              });
-          }, 5, 2000);
-          
-          if (uploadError) {
-            console.error('[IA] Error al subir archivo alternativo:', uploadError);
-          } else {
-            processedFilePath = processedPath;
-            fs.unlinkSync(autoProcessedPath);
-          }
-        } catch (uploadError) {
-          console.error('[IA] Error al subir archivo alternativo después de reintentos:', uploadError);
-        }
-      } else {
-        console.error('[IA] El archivo procesado no fue generado');
-      }
+      console.log('[IA] No se encontró versión Word del acta');
     }
-  } catch (perplexityError) {
-    console.error('[IA] Error al procesar con Perplexity:', perplexityError);
-    // Continuar con la respuesta normal aunque falle el procesamiento
+    
+    // Limpiar archivo temporal del procesamiento
+    fs.unlinkSync(processedLocalPath);
   }
-}
+                } catch (uploadError) {
+                  console.error('[IA] Error al subir archivo procesado después de reintentos:', uploadError);
+                  // Continuar con la respuesta normal aunque falle la subida del procesamiento
+                }
+              } else {
+                // Intentar con el nombre generado automáticamente por el script
+                const autoProcessedFileName = `${baseFileName}_acta_formatada.txt`;
+                const autoProcessedPath = path.join(tempDir, autoProcessedFileName);
+                
+                if (fs.existsSync(autoProcessedPath)) {
+                  // Usar este archivo en su lugar
+                  const folderPath = path.dirname(normalizedPath);
+                  const processedPath = folderPath === '.' 
+                    ? autoProcessedFileName 
+                    : `${folderPath}/${autoProcessedFileName}`;
+                  
+                  console.log(`[IA] Usando archivo alternativo: ${autoProcessedPath}`);
+                  console.log(`[IA] Subiendo a: ${processedPath}`);
+                  
+                  const processedContent = fs.readFileSync(autoProcessedPath, 'utf8');
+                  
+                  try {
+                    const { error: uploadError } = await retryOperation(async () => {
+                      return await supabase.storage
+                        .from(bucketToUse)
+                        .upload(processedPath, processedContent, {
+                          contentType: 'text/plain',
+                          upsert: true
+                        });
+                    }, 5, 2000);
+                    
+                    if (uploadError) {
+                      console.error('[IA] Error al subir archivo alternativo:', uploadError);
+                    } else {
+                      processedFilePath = processedPath;
+                      fs.unlinkSync(autoProcessedPath);
+                    }
+                  } catch (uploadError) {
+                    console.error('[IA] Error al subir archivo alternativo después de reintentos:', uploadError);
+                  }
+                } else {
+                  console.error('[IA] El archivo procesado no fue generado');
+                }
+              }
+            } catch (perplexityError) {
+              console.error('[IA] Error al procesar con Perplexity:', perplexityError);
+              // Continuar con la respuesta normal aunque falle el procesamiento
+            }
+          }
           
           // Limpiar archivos temporales
           fs.unlinkSync(tempMP3Path);
@@ -9012,59 +8906,6 @@ app.post('/api/tags/categories', express.json(), hasAdminPermission('manage_tags
     return res.status(500).json({
       success: false,
       message: 'Error interno al crear categoría de etiquetas',
-      error: error.message
-    });
-  }
-});
-
-// Endpoint de diagnóstico para verificar el entorno de Python
-app.get('/api/diagnose-python', async (req, res) => {
-  try {
-    console.log('[DIAGNOSE] Ejecutando diagnóstico de Python...');
-    
-    const scriptPath = path.join(__dirname, 'scripts', 'check_python_env.py');
-    console.log(`[DIAGNOSE] Ruta del script: ${scriptPath}`);
-    
-    // Usar el comando de Python detectado globalmente
-    const pythonCmd = pythonCommand || 'python3';
-    console.log(`[DIAGNOSE] Usando comando Python: ${pythonCmd}`);
-    
-    const diagnosticProcess = spawn(pythonCmd, [scriptPath]);
-    
-    let outputData = '';
-    let errorData = '';
-    
-    diagnosticProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log(`[DIAGNOSE] ${output}`);
-      outputData += output;
-    });
-    
-    diagnosticProcess.stderr.on('data', (data) => {
-      const error = data.toString();
-      console.error(`[DIAGNOSE ERROR] ${error}`);
-      errorData += error;
-    });
-    
-    // Esperar a que termine el proceso
-    await new Promise((resolve) => {
-      diagnosticProcess.on('close', (code) => {
-        console.log(`[DIAGNOSE] Proceso terminado con código: ${code}`);
-        resolve();
-      });
-    });
-    
-    res.status(200).json({
-      success: true,
-      message: 'Diagnóstico de Python completado',
-      output: outputData,
-      error: errorData || null
-    });
-  } catch (error) {
-    console.error('[DIAGNOSE] Error general:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al ejecutar diagnóstico de Python',
       error: error.message
     });
   }
