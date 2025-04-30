@@ -7,6 +7,9 @@ console.log(Object.keys(process.env));
 const isProduction = process.env.NODE_ENV === 'production';
 const isRailway = !!process.env.RAILWAY_PROJECT_ID;
 
+// Importar child_process al inicio para asegurar disponibilidad de spawn
+const { spawn } = require('child_process');
+
 // Imprimir información sobre el entorno de ejecución
 console.log('Entorno de ejecución:');
 console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'no definido'}`);
@@ -16,7 +19,6 @@ console.log(`- Sistema operativo: ${process.platform}`);
 console.log(`- Arquitectura: ${process.arch}`);
 console.log(`- Directorio de trabajo: ${process.cwd()}`);
 
-const { spawn } = require('child_process');
 
 // Mejora del código existente, busca esta función y añade estas mejoras
 async function checkPythonAvailability() {
@@ -7948,37 +7950,35 @@ app.post('/api/transcribe-audio', express.json(), async (req, res) => {
       throw downloadError;
     }
     
-   // Definir directorio temporal según el entorno
-let tempDir;
-if (isRailway) {
-  // En Railway, utilizar un directorio dentro de /tmp que siempre debe ser accesible
-  tempDir = path.join('/tmp', 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal para Railway: ${tempDir}`);
-} else {
-  // En desarrollo local, usar el directorio temporal del sistema
-  tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
-  console.log(`[TRANSCRIBE] Usando directorio temporal local: ${tempDir}`);
-}
+    // Definir directorio temporal según el entorno
+    let tempDir;
+    if (isRailway) {
+      // En Railway, utilizar un directorio dentro de /tmp que siempre debe ser accesible
+      tempDir = path.join('/tmp', 'docubox-transcribe');
+    } else {
+      // En desarrollo local, usar el directorio temporal del sistema
+      tempDir = path.join(os.tmpdir(), 'docubox-transcribe');
+    }
 
-// Asegurar que el directorio existe con manejo de errores mejorado
-try {
-  fs.mkdirSync(tempDir, { recursive: true });
-  console.log(`[TRANSCRIBE] Directorio temporal creado/verificado: ${tempDir}`);
-} catch (dirError) {
-  console.error(`[TRANSCRIBE] Error al crear directorio temporal: ${dirError.message}`);
-  
-  // Plan B: Intentar usar el directorio actual si hay problemas
-  if (isRailway) {
-    tempDir = path.join(process.cwd(), 'tmp');
-    console.log(`[TRANSCRIBE] Intentando directorio alternativo: ${tempDir}`);
+    // Asegurar que el directorio existe
     try {
       fs.mkdirSync(tempDir, { recursive: true });
-      console.log(`[TRANSCRIBE] Directorio alternativo creado: ${tempDir}`);
-    } catch (fallbackError) {
-      console.error(`[TRANSCRIBE] Error también con directorio alternativo: ${fallbackError.message}`);
+      console.log(`[TRANSCRIBE] Directorio temporal creado en: ${tempDir}`);
+    } catch (dirError) {
+      console.error(`[TRANSCRIBE] Error al crear directorio temporal: ${dirError.message}`);
+      
+      // Plan B: Intentar usar el directorio actual si hay problemas
+      if (isRailway) {
+        tempDir = path.join(process.cwd(), 'tmp');
+        console.log(`[TRANSCRIBE] Utilizando directorio alternativo: ${tempDir}`);
+        try {
+          fs.mkdirSync(tempDir, { recursive: true });
+        } catch (fallbackError) {
+          console.error(`[TRANSCRIBE] Error también con directorio alternativo: ${fallbackError.message}`);
+        }
+      }
     }
-  }
-} 
+    
     const tempMP3Path = path.join(tempDir, path.basename(normalizedPath));
     
     // Guardar el archivo descargado al sistema de archivos temporal
@@ -7991,342 +7991,381 @@ try {
     console.log(`[TRANSCRIBE] Ejecutando script Python: ${scriptPath}`);
     console.log(`[TRANSCRIBE] Argumentos: ${tempMP3Path}`);
     
-    return new Promise((resolve, reject) => {
-      const pythonProcess = spawn('python', [scriptPath, tempMP3Path]);
-      
-      let outputData = '';
-      let errorData = '';
-      
-      // Capturar la salida del script
-      pythonProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        console.log(`[PYTHON] ${output}`);
-        outputData += output;
-      });
-      
-      // Capturar errores del script
-      pythonProcess.stderr.on('data', (data) => {
-        const error = data.toString();
-        console.error(`[PYTHON ERROR] ${error}`);
-        errorData += error;
-      });
-      
-      // Manejar finalización del script
-      pythonProcess.on('close', async (code) => {
-        console.log(`[TRANSCRIBE] Proceso Python terminado con código: ${code}`);
-        
-        if (code !== 0) {
-          // Si el proceso terminó con error
-          const error = new Error(`Falló la transcripción: ${errorData}`);
-          fs.unlinkSync(tempMP3Path); // Limpiar archivo temporal
-          return reject(error);
-        }
-        
-        try {
-          // Obtener el archivo de transcripción generado
-          const baseFileName = path.basename(normalizedPath, '.mp3');
-          const transcriptionFileName = `${baseFileName}_transcripcion.txt`;
-          const transcriptionFilePath = path.join(tempDir, transcriptionFileName);
-          
-          if (!fs.existsSync(transcriptionFilePath)) {
-            throw new Error('El archivo de transcripción no fue generado');
-          }
-          
-          // Leer el contenido del archivo de transcripción
-          const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
-          
-          // Subir el archivo de transcripción a Supabase con reintentos
-          const folderPath = path.dirname(normalizedPath);
-          const transcriptionPath = folderPath === '.' 
-            ? transcriptionFileName 
-            : `${folderPath}/${transcriptionFileName}`;
-          
-          console.log(`[TRANSCRIBE] Subiendo transcripción a: ${transcriptionPath}`);
-          
-          try {
-            const { error: uploadError } = await retryOperation(async () => {
-              return await supabase.storage
-                .from(bucketToUse)
-                .upload(transcriptionPath, transcriptionContent, {
-                  contentType: 'text/plain',
-                  upsert: true
-                });
-            }, 5, 2000); // 5 reintentos, empezando con 2 segundos
-            
-            if (uploadError) {
-              throw uploadError;
-            }
-            
-            // Si se solicitó eliminar el archivo original
-            if (deleteOriginal) {
-              console.log(`[TRANSCRIBE] Eliminando archivo MP3 original: ${normalizedPath}`);
-              
-              try {
-                const { error: deleteError } = await retryOperation(async () => {
-                  return await supabase.storage
-                    .from(bucketToUse)
-                    .remove([normalizedPath]);
-                }, 3, 1000); // 3 reintentos, empezando con 1 segundo
-                
-                if (deleteError) {
-                  console.error(`Error al eliminar archivo original ${normalizedPath}:`, deleteError);
-                  // No fallar la operación si no se puede eliminar el original
-                }
-              } catch (deleteError) {
-                console.error(`Error al eliminar archivo original después de reintentos: ${normalizedPath}`, deleteError);
-                // No fallar la operación si no se puede eliminar el original
-              }
-            }
-          } catch (uploadError) {
-            console.error('[TRANSCRIBE] Error al subir archivo a Supabase después de reintentos:', uploadError);
-            throw uploadError;
-          }
-
-         // Procesar con Perplexity si se solicitó
-let processedFilePath = transcriptionPath;
-let processedDocxPath = null; // Declara esta variable aquí para que esté en el ámbito correcto
-
-if (processWithGPT) {
-  try {
-    console.log('[IA] Procesando transcripción con Perplexity');
-    
-    // Detectar el sistema operativo para usar el comando correcto de Python
-    const pythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
-    
-    // Ruta al script Python
-    const perplexityScriptPath = path.join(__dirname, 'scripts', 'process_transcript_perplexity.py');
-    
-    // Obtener API Key de las variables de entorno
-    const perplexityApiKey = process.env.PERPLEXITY_API_KEY || '';
-    
-    // Registrar si se encontró la clave API (sin mostrar la clave real)
-    console.log('[IA] PERPLEXITY_API_KEY disponible:', !!perplexityApiKey);
-    
-    if (!perplexityApiKey) {
-      console.warn('[IA] No se encontró API Key de Perplexity en las variables de entorno');
-    }
-              
-    // Construir la ruta del archivo procesado
-    const baseFileName = path.basename(normalizedPath, '.mp3');
-    const processedFileName = `${baseFileName}_acta_formatada.txt`;
-    const processedLocalPath = path.join(tempDir, processedFileName);
-
-    // Preparar argumentos para el script Python
-    const perplexityArgs = [
-      perplexityScriptPath,
-      transcriptionFilePath,
-      '--api_key', perplexityApiKey,
-      '--output', processedLocalPath
+    // Lista de comandos de Python a probar en orden
+    const pythonCommands = [
+      pythonCommand, // Usar el comando detectado globalmente primero
+      'python3',
+      'python',
+      '/usr/bin/python3',
+      '/usr/local/bin/python3',
+      'python3.10',
+      'python3.9'
     ];
-
-    // Añadir el prompt personalizado si existe
-    if (req.body.customPrompt) {
-      perplexityArgs.push('--prompt', req.body.customPrompt);
-    }
-
-    // Ejecutar el script Python con los argumentos preparados
-    console.log(`[IA] Ejecutando script Python con: ${pythonExecutable}`);
-    console.log(`[IA] Ruta del script: ${perplexityScriptPath}`);
-    console.log(`[IA] Archivo de transcripción: ${transcriptionFilePath}`);
-    console.log(`[IA] Ruta de salida: ${processedLocalPath}`);
-    console.log(`[IA] Prompt personalizado: ${req.body.customPrompt ? 'Sí' : 'No'}`);
-
-    const perplexityProcess = spawn(pythonExecutable, perplexityArgs);
-              
-    // Esperar a que termine el proceso
-    await new Promise((resolvePerplexity, rejectPerplexity) => {
-      let perplexityOutput = '';
-      let perplexityError = '';
+    
+    let transcriptionSuccessful = false;
+    let transcriptionFilePath = null;
+    let transcriptionPath = null;
+    
+    // Probar cada comando de Python hasta que uno funcione
+    for (const cmd of pythonCommands) {
+      console.log(`[TRANSCRIBE] Intentando transcripción con comando: ${cmd}`);
       
-      perplexityProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        console.log(`[IA] ${output}`);
-        perplexityOutput += output;
-      });
-      
-      perplexityProcess.stderr.on('data', (data) => {
-        const error = data.toString();
-        console.error(`[IA ERROR] ${error}`);
-        perplexityError += error;
-      });
-      
-      perplexityProcess.on('close', (code) => {
-        console.log(`[IA] Proceso terminado con código: ${code}`);
-        
-        if (code !== 0) {
-          rejectPerplexity(new Error(`Error al procesar con Perplexity: ${perplexityError}`));
-        } else {
-          resolvePerplexity();
-        }
-      });
-      
-      perplexityProcess.on('error', (error) => {
-        rejectPerplexity(error);
-      });
-    });
-              
-    // Verificar que el archivo procesado existe
-    if (fs.existsSync(processedLocalPath)) {
-      // Subir el archivo procesado a Supabase con reintentos
-      const folderPath = path.dirname(normalizedPath);
-      const processedPath = folderPath === '.' 
-        ? processedFileName 
-        : `${folderPath}/${processedFileName}`;
-
-      console.log(`[IA] Subiendo transcripción procesada a: ${processedPath}`);
-
-      const processedContent = fs.readFileSync(processedLocalPath, 'utf8');
-
       try {
+        const result = await new Promise((resolve, reject) => {
+          const pythonProcess = spawn(cmd, [scriptPath, tempMP3Path]);
+          
+          let outputData = '';
+          let errorData = '';
+          
+          // Capturar la salida del script
+          pythonProcess.stdout.on('data', (data) => {
+            const output = data.toString();
+            console.log(`[PYTHON] ${output}`);
+            outputData += output;
+          });
+          
+          // Capturar errores del script
+          pythonProcess.stderr.on('data', (data) => {
+            const error = data.toString();
+            console.error(`[PYTHON ERROR] ${error}`);
+            errorData += error;
+          });
+          
+          // Manejar finalización del script
+          pythonProcess.on('close', (code) => {
+            console.log(`[TRANSCRIBE] Proceso Python con ${cmd} terminado con código: ${code}`);
+            
+            if (code !== 0) {
+              reject(new Error(`Proceso terminó con código ${code}: ${errorData}`));
+            } else {
+              resolve(outputData);
+            }
+          });
+          
+          // Manejar errores del proceso
+          pythonProcess.on('error', (error) => {
+            console.error(`[TRANSCRIBE] Error al iniciar proceso Python con ${cmd}:`, error);
+            reject(error);
+          });
+        });
+        
+        // Si llegamos aquí, la transcripción fue exitosa
+        transcriptionSuccessful = true;
+        
+        // Obtener el archivo de transcripción generado
+        const baseFileName = path.basename(normalizedPath, '.mp3');
+        const transcriptionFileName = `${baseFileName}_transcripcion.txt`;
+        transcriptionFilePath = path.join(tempDir, transcriptionFileName);
+        
+        if (!fs.existsSync(transcriptionFilePath)) {
+          throw new Error('El archivo de transcripción no fue generado');
+        }
+        
+        // Leer el contenido del archivo de transcripción
+        const transcriptionContent = fs.readFileSync(transcriptionFilePath, 'utf8');
+        
+        // Subir el archivo de transcripción a Supabase con reintentos
+        const folderPath = path.dirname(normalizedPath);
+        transcriptionPath = folderPath === '.' 
+          ? transcriptionFileName 
+          : `${folderPath}/${transcriptionFileName}`;
+        
+        console.log(`[TRANSCRIBE] Subiendo transcripción a: ${transcriptionPath}`);
+        
         const { error: uploadError } = await retryOperation(async () => {
           return await supabase.storage
             .from(bucketToUse)
-            .upload(processedPath, processedContent, {
+            .upload(transcriptionPath, transcriptionContent, {
               contentType: 'text/plain',
               upsert: true
             });
         }, 5, 2000); // 5 reintentos, empezando con 2 segundos
         
         if (uploadError) {
-          console.error('[IA] Error al subir archivo procesado TXT:', uploadError);
-        } else {
-          // Actualizar la ruta para responder con ambos archivos
-          processedFilePath = processedPath;
-          
-          // Verificar si existe la versión Word del documento
-          const docxLocalPath = processedLocalPath.replace('.txt', '.docx');
-          if (fs.existsSync(docxLocalPath)) {
-            // Si existe, intentar subirlo también
-            const docxFileName = processedFileName.replace('.txt', '.docx');
-            const docxRemotePath = folderPath === '.' 
-              ? docxFileName 
-              : `${folderPath}/${docxFileName}`;
-            
-            console.log(`[IA] Se encontró versión Word del acta, subiendo a: ${docxRemotePath}`);
-            
-            try {
-              // Leer el archivo binario
-              const docxContent = fs.readFileSync(docxLocalPath);
-              
-              // Subir el archivo Word a Supabase
-              const { error: docxUploadError } = await retryOperation(async () => {
-                return await supabase.storage
-                  .from(bucketToUse)
-                  .upload(docxRemotePath, docxContent, {
-                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    upsert: true
-                  });
-              }, 5, 2000);
-              
-              if (docxUploadError) {
-                console.error('[IA] Error al subir archivo Word:', docxUploadError);
-              } else {
-                console.log(`[IA] Archivo Word subido correctamente a: ${docxRemotePath}`);
-                // Guardar la ruta del archivo docx para incluirla en la respuesta
-                processedDocxPath = docxRemotePath;
-                // Limpiar archivo temporal
-                fs.unlinkSync(docxLocalPath);
-              }
-            } catch (docxError) {
-              console.error('[IA] Error al procesar archivo Word:', docxError);
-            }
-          } else {
-            console.log('[IA] No se encontró versión Word del acta');
-          }
-          
-          // Limpiar archivo temporal del procesamiento
-          fs.unlinkSync(processedLocalPath);
+          throw uploadError;
         }
-      } catch (uploadError) {
-        console.error('[IA] Error al subir archivo procesado después de reintentos:', uploadError);
-        // Continuar con la respuesta normal aunque falle la subida del procesamiento
-      }
-    } else {
-      // Intentar con el nombre generado automáticamente por el script
-      const autoProcessedFileName = `${baseFileName}_acta_formatada.txt`;
-      const autoProcessedPath = path.join(tempDir, autoProcessedFileName);
-      
-      if (fs.existsSync(autoProcessedPath)) {
-        // Usar este archivo en su lugar
-        const folderPath = path.dirname(normalizedPath);
-        const processedPath = folderPath === '.' 
-          ? autoProcessedFileName 
-          : `${folderPath}/${autoProcessedFileName}`;
         
-        console.log(`[IA] Usando archivo alternativo: ${autoProcessedPath}`);
-        console.log(`[IA] Subiendo a: ${processedPath}`);
+        // Terminar el bucle ya que un comando funcionó
+        break;
         
-        const processedContent = fs.readFileSync(autoProcessedPath, 'utf8');
-        
-        try {
-          const { error: uploadError } = await retryOperation(async () => {
-            return await supabase.storage
-              .from(bucketToUse)
-              .upload(processedPath, processedContent, {
-                contentType: 'text/plain',
-                upsert: true
-              });
-          }, 5, 2000);
-          
-          if (uploadError) {
-            console.error('[IA] Error al subir archivo alternativo:', uploadError);
-          } else {
-            processedFilePath = processedPath;
-            fs.unlinkSync(autoProcessedPath);
-          }
-        } catch (uploadError) {
-          console.error('[IA] Error al subir archivo alternativo después de reintentos:', uploadError);
-        }
-      } else {
-        console.error('[IA] El archivo procesado no fue generado');
+      } catch (cmdError) {
+        console.error(`[TRANSCRIBE] Error con comando ${cmd}:`, cmdError);
+        // Continuar con el siguiente comando
       }
     }
-  } catch (perplexityError) {
-    console.error('[IA] Error al procesar con Perplexity:', perplexityError);
-    // Continuar con la respuesta normal aunque falle el procesamiento
-  }
-}
-          
-          // Limpiar archivos temporales
-          fs.unlinkSync(tempMP3Path);
-          fs.unlinkSync(transcriptionFilePath);
-          
-          // Responder con éxito y la ruta del archivo de transcripción
-resolve(res.status(200).json({
-  success: true,
-  message: processWithGPT ? 'Transcripción y procesamiento con IA completados' : 'Transcripción completada correctamente',
-  transcriptionPath: `/${transcriptionPath}`,
-  processedPath: processWithGPT ? `/${processedFilePath}` : null,
-  processedDocxPath: processWithGPT && processedDocxPath ? `/${processedDocxPath}` : null,
-  originalDeleted: deleteOriginal,
-  processedWithGPT: processWithGPT
-}));          
-        } catch (error) {
-          console.error('Error al procesar resultado de transcripción:', error);
-          // Limpiar archivos temporales en caso de error
-          if (fs.existsSync(tempMP3Path)) {
-            fs.unlinkSync(tempMP3Path);
-          }
-          reject(error);
-        }
-      });
+    
+    // Si ningún comando de Python funcionó
+    if (!transcriptionSuccessful) {
+      throw new Error('No se pudo ejecutar ningún comando de Python para la transcripción');
+    }
+    
+    // Si se solicitó eliminar el archivo original
+    if (deleteOriginal) {
+      console.log(`[TRANSCRIBE] Eliminando archivo MP3 original: ${normalizedPath}`);
       
-      // Manejar errores del proceso
-      pythonProcess.on('error', (error) => {
-        console.error('Error al iniciar proceso Python:', error);
-        // Limpiar archivos temporales
-        if (fs.existsSync(tempMP3Path)) {
-          fs.unlinkSync(tempMP3Path);
+      try {
+        const { error: deleteError } = await retryOperation(async () => {
+          return await supabase.storage
+            .from(bucketToUse)
+            .remove([normalizedPath]);
+        }, 3, 1000); // 3 reintentos, empezando con 1 segundo
+        
+        if (deleteError) {
+          console.error(`Error al eliminar archivo original ${normalizedPath}:`, deleteError);
+          // No fallar la operación si no se puede eliminar el original
         }
-        reject(error);
-      });
-    }).catch(error => {
-      console.error('Error en proceso de transcripción:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Error en el proceso de transcripción',
-        error: error.message
-      });
+      } catch (deleteError) {
+        console.error(`Error al eliminar archivo original después de reintentos: ${normalizedPath}`, deleteError);
+        // No fallar la operación si no se puede eliminar el original
+      }
+    }
+    
+    // Procesar con Perplexity si se solicitó
+    let processedFilePath = transcriptionPath;
+    let processedDocxPath = null;
+    
+    if (processWithGPT) {
+      try {
+        console.log('[IA] Procesando transcripción con Perplexity');
+        
+        // Detectar el sistema operativo para usar el comando correcto de Python
+        const pythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
+        
+        // Ruta al script Python
+        const perplexityScriptPath = path.join(__dirname, 'scripts', 'process_transcript_perplexity.py');
+        
+        // Obtener API Key de las variables de entorno
+        const perplexityApiKey = process.env.PERPLEXITY_API_KEY || '';
+        
+        // Registrar si se encontró la clave API (sin mostrar la clave real)
+        console.log('[IA] PERPLEXITY_API_KEY disponible:', !!perplexityApiKey);
+        
+        if (!perplexityApiKey) {
+          console.warn('[IA] No se encontró API Key de Perplexity en las variables de entorno');
+        }
+              
+        // Construir la ruta del archivo procesado
+        const baseFileName = path.basename(normalizedPath, '.mp3');
+        const processedFileName = `${baseFileName}_acta_formatada.txt`;
+        const processedLocalPath = path.join(tempDir, processedFileName);
+
+        // Probar diferentes comandos de Python para Perplexity
+        let perplexitySuccess = false;
+        for (const cmd of pythonCommands) {
+          console.log(`[IA] Intentando procesar con comando: ${cmd}`);
+          
+          try {
+            // Preparar argumentos para el script Python
+            const perplexityArgs = [
+              perplexityScriptPath,
+              transcriptionFilePath,
+              '--api_key', perplexityApiKey,
+              '--output', processedLocalPath
+            ];
+
+            // Añadir el prompt personalizado si existe
+            if (req.body.customPrompt) {
+              perplexityArgs.push('--prompt', req.body.customPrompt);
+            }
+
+            // Ejecutar el script Python con los argumentos preparados
+            console.log(`[IA] Ejecutando script Python con: ${cmd}`);
+            console.log(`[IA] Ruta del script: ${perplexityScriptPath}`);
+            console.log(`[IA] Archivo de transcripción: ${transcriptionFilePath}`);
+            console.log(`[IA] Ruta de salida: ${processedLocalPath}`);
+            console.log(`[IA] Prompt personalizado: ${req.body.customPrompt ? 'Sí' : 'No'}`);
+
+            await new Promise((resolve, reject) => {
+              const perplexityProcess = spawn(cmd, perplexityArgs);
+              
+              let perplexityOutput = '';
+              let perplexityError = '';
+              
+              perplexityProcess.stdout.on('data', (data) => {
+                const output = data.toString();
+                console.log(`[IA] ${output}`);
+                perplexityOutput += output;
+              });
+              
+              perplexityProcess.stderr.on('data', (data) => {
+                const error = data.toString();
+                console.error(`[IA ERROR] ${error}`);
+                perplexityError += error;
+              });
+              
+              perplexityProcess.on('close', (code) => {
+                console.log(`[IA] Proceso terminado con código: ${code}`);
+                
+                if (code !== 0) {
+                  reject(new Error(`Error al procesar con Perplexity: ${perplexityError}`));
+                } else {
+                  resolve();
+                }
+              });
+              
+              perplexityProcess.on('error', (error) => {
+                reject(error);
+              });
+            });
+            
+            // Si llegamos aquí, el procesamiento fue exitoso
+            perplexitySuccess = true;
+            break;
+            
+          } catch (cmdError) {
+            console.error(`[IA] Error con comando ${cmd}:`, cmdError);
+            // Continuar con el siguiente comando
+          }
+        }
+        
+        // Si ningún comando funcionó para Perplexity
+        if (!perplexitySuccess) {
+          console.error('[IA] No se pudo procesar con Perplexity usando ningún comando de Python');
+        } else {
+          // Verificar que el archivo procesado existe
+          if (fs.existsSync(processedLocalPath)) {
+            // Subir el archivo procesado a Supabase con reintentos
+            const folderPath = path.dirname(normalizedPath);
+            const processedPath = folderPath === '.' 
+              ? processedFileName 
+              : `${folderPath}/${processedFileName}`;
+
+            console.log(`[IA] Subiendo transcripción procesada a: ${processedPath}`);
+
+            const processedContent = fs.readFileSync(processedLocalPath, 'utf8');
+
+            try {
+              const { error: uploadError } = await retryOperation(async () => {
+                return await supabase.storage
+                  .from(bucketToUse)
+                  .upload(processedPath, processedContent, {
+                    contentType: 'text/plain',
+                    upsert: true
+                  });
+              }, 5, 2000); // 5 reintentos, empezando con 2 segundos
+              
+              if (uploadError) {
+                console.error('[IA] Error al subir archivo procesado TXT:', uploadError);
+              } else {
+                // Actualizar la ruta para responder con ambos archivos
+                processedFilePath = processedPath;
+                
+                // Verificar si existe la versión Word del documento
+                const docxLocalPath = processedLocalPath.replace('.txt', '.docx');
+                if (fs.existsSync(docxLocalPath)) {
+                  // Si existe, intentar subirlo también
+                  const docxFileName = processedFileName.replace('.txt', '.docx');
+                  const docxRemotePath = folderPath === '.' 
+                    ? docxFileName 
+                    : `${folderPath}/${docxFileName}`;
+                  
+                  console.log(`[IA] Se encontró versión Word del acta, subiendo a: ${docxRemotePath}`);
+                  
+                  try {
+                    // Leer el archivo binario
+                    const docxContent = fs.readFileSync(docxLocalPath);
+                    
+                    // Subir el archivo Word a Supabase
+                    const { error: docxUploadError } = await retryOperation(async () => {
+                      return await supabase.storage
+                        .from(bucketToUse)
+                        .upload(docxRemotePath, docxContent, {
+                          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                          upsert: true
+                        });
+                    }, 5, 2000);
+                    
+                    if (docxUploadError) {
+                      console.error('[IA] Error al subir archivo Word:', docxUploadError);
+                    } else {
+                      console.log(`[IA] Archivo Word subido correctamente a: ${docxRemotePath}`);
+                      // Guardar la ruta del archivo docx para incluirla en la respuesta
+                      processedDocxPath = docxRemotePath;
+                      // Limpiar archivo temporal
+                      fs.unlinkSync(docxLocalPath);
+                    }
+                  } catch (docxError) {
+                    console.error('[IA] Error al procesar archivo Word:', docxError);
+                  }
+                } else {
+                  console.log('[IA] No se encontró versión Word del acta');
+                }
+                
+                // Limpiar archivo temporal del procesamiento
+                fs.unlinkSync(processedLocalPath);
+              }
+            } catch (uploadError) {
+              console.error('[IA] Error al subir archivo procesado después de reintentos:', uploadError);
+              // Continuar con la respuesta normal aunque falle la subida del procesamiento
+            }
+          } else {
+            // Intentar con el nombre generado automáticamente por el script
+            const autoProcessedFileName = `${baseFileName}_acta_formatada.txt`;
+            const autoProcessedPath = path.join(tempDir, autoProcessedFileName);
+            
+            if (fs.existsSync(autoProcessedPath)) {
+              // Usar este archivo en su lugar
+              const folderPath = path.dirname(normalizedPath);
+              const processedPath = folderPath === '.' 
+                ? autoProcessedFileName 
+                : `${folderPath}/${autoProcessedFileName}`;
+              
+              console.log(`[IA] Usando archivo alternativo: ${autoProcessedPath}`);
+              console.log(`[IA] Subiendo a: ${processedPath}`);
+              
+              const processedContent = fs.readFileSync(autoProcessedPath, 'utf8');
+              
+              try {
+                const { error: uploadError } = await retryOperation(async () => {
+                  return await supabase.storage
+                    .from(bucketToUse)
+                    .upload(processedPath, processedContent, {
+                      contentType: 'text/plain',
+                      upsert: true
+                    });
+                }, 5, 2000);
+                
+                if (uploadError) {
+                  console.error('[IA] Error al subir archivo alternativo:', uploadError);
+                } else {
+                  processedFilePath = processedPath;
+                  fs.unlinkSync(autoProcessedPath);
+                }
+              } catch (uploadError) {
+                console.error('[IA] Error al subir archivo alternativo después de reintentos:', uploadError);
+              }
+            } else {
+              console.error('[IA] El archivo procesado no fue generado');
+            }
+          }
+        }
+      } catch (perplexityError) {
+        console.error('[IA] Error al procesar con Perplexity:', perplexityError);
+        // Continuar con la respuesta normal aunque falle el procesamiento
+      }
+    }
+    
+    // Limpiar archivos temporales
+    try {
+      if (fs.existsSync(tempMP3Path)) {
+        fs.unlinkSync(tempMP3Path);
+      }
+      if (transcriptionFilePath && fs.existsSync(transcriptionFilePath)) {
+        fs.unlinkSync(transcriptionFilePath);
+      }
+    } catch (cleanupError) {
+      console.error('[TRANSCRIBE] Error al limpiar archivos temporales:', cleanupError);
+    }
+    
+    // Responder con éxito y la ruta del archivo de transcripción
+    return res.status(200).json({
+      success: true,
+      message: processWithGPT ? 'Transcripción y procesamiento con IA completados' : 'Transcripción completada correctamente',
+      transcriptionPath: `/${transcriptionPath}`,
+      processedPath: processWithGPT ? `/${processedFilePath}` : null,
+      processedDocxPath: processWithGPT && processedDocxPath ? `/${processedDocxPath}` : null,
+      originalDeleted: deleteOriginal,
+      processedWithGPT: processWithGPT
     });
   } catch (error) {
     console.error('Error general en transcripción de audio:', error);
