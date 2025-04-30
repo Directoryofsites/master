@@ -5456,8 +5456,8 @@ app.get('/api/admin/download-backup/:filename', async (req, res) => {
   }
 });
 
-// Endpoint para generar una copia de seguridad directa
-app.get('/api/admin/backup-direct', hasAdminPermission('manage_backup'), async (req, res) => {
+// Endpoint para generar una copia de seguridad directa - versión mejorada
+app.get('/api/admin/backup-direct', async (req, res) => {
   try {
     console.log('[BACKUP_DIRECT] Endpoint llamado');
     console.log('[BACKUP_DIRECT] Query params:', req.query);
@@ -5472,20 +5472,6 @@ app.get('/api/admin/backup-direct', hasAdminPermission('manage_backup'), async (
       return res.status(400).json({
         success: false,
         message: 'Se requiere especificar un bucket para la copia de seguridad'
-      });
-    }
-    
-    console.log(`[BACKUP] Iniciando generación de copia de seguridad directa para bucket: ${bucketName}`);
-    
-    // Verificar que el bucket exista
-    const { data: bucketData, error: bucketError } = await supabase.storage
-      .getBucket(bucketName);
-      
-    if (bucketError || !bucketData) {
-      console.error(`[BACKUP] Error al verificar bucket ${bucketName}:`, bucketError);
-      return res.status(404).json({
-        success: false,
-        message: `El bucket ${bucketName} no existe o no es accesible`
       });
     }
     
@@ -5504,110 +5490,125 @@ app.get('/api/admin/backup-direct', hasAdminPermission('manage_backup'), async (
     // Configurar el stream de salida directo a la respuesta HTTP
     archive.pipe(res);
     
-    // Manejar eventos del archivador
+    // Manejar errores del archivador
     archive.on('error', (err) => {
       console.error('[BACKUP] Error al crear archivo ZIP:', err);
       // No podemos enviar error aquí porque ya enviamos cabeceras
       archive.abort();
     });
     
-    // Función recursiva para listar todos los archivos en el bucket
-    async function listAllFiles(bucket, prefix = '') {
-      console.log(`[BACKUP] Listando archivos en ${bucket}${prefix ? '/' + prefix : ''}`);
-      
-      const { data: items, error } = await supabase.storage
-        .from(bucket)
-        .list(prefix);
+    // Función simplificada para listar archivos recursivamente
+    async function listFiles(prefix = '') {
+      try {
+        console.log(`[BACKUP] Listando archivos en ${bucketName}/${prefix || 'raíz'}`);
         
-      if (error) {
-        console.error(`[BACKUP] Error al listar ${prefix || 'raíz'}:`, error);
-        return [];
-      }
-      
-      if (!items || items.length === 0) {
-        console.log(`[BACKUP] No se encontraron elementos en ${prefix || 'raíz'}`);
-        return [];
-      }
-      
-      console.log(`[BACKUP] Encontrados ${items.length} elementos en ${prefix || 'raíz'}`);
-      
-      let allFiles = [];
-      
-      // Procesar todos los elementos
-      for (const item of items) {
-        const fullPath = prefix ? `${prefix}/${item.name}` : item.name;
+        const { data: items, error } = await supabase.storage
+          .from(bucketName)
+          .list(prefix);
         
-        if (!item.metadata || item.metadata.mimetype === 'application/x-directory') { 
-          // Es una carpeta
-          console.log(`[BACKUP] Encontrada subcarpeta: ${fullPath}`);
-          // Recursivamente listar archivos en esta subcarpeta
-          const subFiles = await listAllFiles(bucket, fullPath);
-          allFiles = [...allFiles, ...subFiles];
-        } else { 
-          // Es un archivo
-          console.log(`[BACKUP] Encontrado archivo: ${fullPath}`);
-          // Omitir archivos de metadatos especiales
-          if (!fullPath.endsWith('.youtube.metadata') && 
-              !fullPath.endsWith('.audio.metadata') && 
-              !fullPath.endsWith('.image.metadata') &&
-              !fullPath.endsWith('.access.metadata') &&
-              fullPath !== '.folder') {
-            allFiles.push({
-              name: fullPath,
-              id: item.id,
-              size: item.metadata?.size || 0
-            });
+        if (error) {
+          console.error(`[BACKUP] Error al listar ${prefix || 'raíz'}:`, error);
+          return [];
+        }
+        
+        if (!items || items.length === 0) {
+          return [];
+        }
+        
+        let results = [];
+        
+        for (const item of items) {
+          const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+          
+          // Ignorar archivos especiales
+          if (item.name === '.folder' || 
+              itemPath.endsWith('.youtube.metadata') || 
+              itemPath.endsWith('.audio.metadata') || 
+              itemPath.endsWith('.image.metadata') || 
+              itemPath.endsWith('.access.metadata')) {
+            continue;
+          }
+          
+          if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+            // Es una carpeta, obtener sus archivos recursivamente
+            const subFiles = await listFiles(itemPath);
+            results = [...results, ...subFiles];
+          } else {
+            // Es un archivo
+            results.push(itemPath);
           }
         }
+        
+        return results;
+      } catch (listError) {
+        console.error(`[BACKUP] Error al listar archivos en ${prefix}:`, listError);
+        return [];
       }
-      
-      return allFiles;
     }
     
-    // Obtener lista completa de archivos incluyendo subcarpetas
+    // Obtener lista de archivos
     console.log(`[BACKUP] Iniciando listado recursivo de archivos en bucket ${bucketName}`);
-    const fileList = await listAllFiles(bucketName);
-    console.log(`[BACKUP] Total: Se encontraron ${fileList.length} archivos en el bucket ${bucketName}`);
+    const fileList = await listFiles();
+    
+    console.log(`[BACKUP] Se encontraron ${fileList.length} archivos para incluir en el backup`);
     
     if (fileList.length === 0) {
-      console.log(`[BACKUP] No hay archivos para incluir en la copia de seguridad`);
-      // Añadir un archivo README al ZIP para evitar que esté vacío
+      // Si no hay archivos, añadir un README
       archive.append('Este bucket no contiene archivos.', { name: 'README.txt' });
-    }
-    
-    // Procesar archivos de forma secuencial para evitar problemas
-    for (const file of fileList) {
-      try {
-        console.log(`[BACKUP] Procesando archivo: ${file.name}`);
-        
-        // Obtener el contenido del archivo
-        const { data, error: fileError } = await supabase.storage
-          .from(bucketName)
-          .download(file.name);
+      console.log('[BACKUP] Bucket vacío, se añade README.txt');
+    } else {
+      // Procesar cada archivo
+      for (const filePath of fileList) {
+        try {
+          // Descargar el archivo con reintentos
+          let fileData = null;
+          let downloadError = null;
           
-        if (fileError) {
-          console.warn(`[BACKUP] Error al descargar archivo ${file.name}:`, fileError);
-          continue; // Continuar con el siguiente archivo
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              console.log(`[BACKUP] Descargando ${filePath} (intento ${attempt + 1}/3)`);
+              const result = await supabase.storage
+                .from(bucketName)
+                .download(filePath);
+              
+              if (!result.error) {
+                fileData = result.data;
+                break;
+              } else {
+                downloadError = result.error;
+                if (attempt < 2) {
+                  // Esperar entre intentos (1s, 2s)
+                  await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                }
+              }
+            } catch (err) {
+              downloadError = err;
+              if (attempt < 2) {
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+              }
+            }
+          }
+          
+          if (!fileData) {
+            console.error(`[BACKUP] No se pudo descargar ${filePath} después de 3 intentos:`, downloadError);
+            continue;
+          }
+          
+          // Convertir a buffer y añadir al ZIP
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          archive.append(buffer, { name: filePath });
+          console.log(`[BACKUP] Archivo añadido al ZIP: ${filePath}`);
+        } catch (fileError) {
+          console.error(`[BACKUP] Error al procesar archivo ${filePath}:`, fileError);
         }
-        
-        // Convertir los datos a un buffer
-        const arrayBuffer = await data.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        
-        // Añadir archivo al ZIP usando el buffer
-        archive.append(buffer, { name: file.name });
-        console.log(`[BACKUP] Archivo añadido al ZIP: ${file.name}`);
-      } catch (fileErr) {
-        console.error(`[BACKUP] Error procesando archivo ${file.name}:`, fileErr);
-        // Continuar con el siguiente archivo
       }
     }
     
-    // Finalizar el archivo ZIP
+    // Finalizar el ZIP
     console.log(`[BACKUP] Finalizando archivo ZIP...`);
     await archive.finalize();
     
-    console.log(`[BACKUP] Copia de seguridad directa para bucket ${bucketName} completada`);
+    console.log(`[BACKUP] Backup completado para ${bucketName} con ${fileList.length} archivos`);
   } catch (error) {
     console.error('[BACKUP] Error al generar copia de seguridad directa:', error);
     
