@@ -12,41 +12,43 @@ const BackupButton = () => {
   /**
    * Inicia el proceso de backup
    */
-  const handleBackup = async () => {
-    try {
-      // Cambiar estado a verificando
-      setStatus('checking');
-      setMessage('Verificando disponibilidad del sistema...');
+  // En el archivo BackupButton.js, reemplaza la función handleBackup actual con esta:
 
-      // Verificar estado del sistema de backup
-      const statusResponse = await checkBackupStatus();
-      
-      if (!statusResponse.success) {
-        throw new Error('El sistema de backup no está disponible en este momento');
-      }
-      
-      // Todo ok, iniciar descarga
-      setStatus('downloading');
-      setMessage('Iniciando descarga...');
-      
-      // Generar backup (esto abrirá la descarga)
-      generateBackup();
-      
-      // Mostrar mensaje de éxito
-      setMessage('Descarga iniciada. Por favor, espere mientras se genera el archivo.');
-      
-      // Volver a estado normal después de unos segundos
-      setTimeout(() => {
-        setStatus('idle');
-        setMessage('');
-      }, 5000);
-      
-    } catch (error) {
-      console.error('Error en proceso de backup:', error);
-      setStatus('error');
-      setMessage(`Error: ${error.message}`);
-    }
-  };
+const handleBackup = async () => {
+  try {
+    // Cambiar estado a verificando
+    setStatus('checking');
+    setMessage('Preparando descarga...');
+    
+    // Importar auth para obtener el token
+    const auth = await import('../services/auth');
+    const token = auth.getAuthToken();
+    
+    // URL completa al endpoint de backup en Railway
+    const backendUrl = "https://master-production-5386.up.railway.app"; // URL de tu backend
+    const backupUrl = `${backendUrl}/api/admin/backup`;
+    
+    // Construir URL con token
+    const urlWithToken = `${backupUrl}?token=${encodeURIComponent(token)}`;
+    
+    // Abrir en nueva ventana directamente
+    setMessage('Iniciando descarga...');
+    window.open(urlWithToken, '_blank');
+    
+    // Mostrar mensaje de éxito
+    setMessage('Descarga iniciada. Por favor, espere mientras se genera el archivo.');
+    
+    // Volver a estado normal después de unos segundos
+    setTimeout(() => {
+      setStatus('idle');
+      setMessage('');
+    }, 5000);
+  } catch (error) {
+    console.error('Error en proceso de backup:', error);
+    setStatus('error');
+    setMessage(`Error: ${error.message}`);
+  }
+};
 
   return (
     <div className="backup-container">
