@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import BackupButton from './BackupButton'; // Ajusta la ruta si es necesario
 
 const SiteSettings = ({ onClose, onSave }) => {
   const [title, setTitle] = useState('');
@@ -184,9 +185,16 @@ useEffect(() => {
       <p>No se pudieron cargar las estadísticas de almacenamiento.</p>
     )}
   </div>
+
 )}
 
-
+{isAdmin && (
+  <div className="form-group backup-section">
+    <h3>Copia de Seguridad</h3>
+    <p>Genere una copia de seguridad de todos los archivos del sistema.</p>
+    <BackupButton />
+  </div>
+)}
         </div>
         
         <div className="settings-actions">

@@ -1,4 +1,8 @@
-// Funciones para manejar copias de seguridad
+// Añadir a src/services/api.js o crear un nuevo archivo
+
+/**
+ * Funciones para manejar copias de seguridad
+ */
 
 /**
  * Obtiene el token de autenticación actual
@@ -22,22 +26,22 @@ const getAuthToken = () => {
 
 /**
  * Genera una copia de seguridad de forma directa
+ * @param {string} bucketName Nombre del bucket (opcional)
  */
 export const generateBackup = () => {
   try {
     // Obtener token
     const token = getAuthToken();
     
-    // ⚠️ IMPORTANTE: CAMBIA ESTA URL por la de tu backend en Railway ⚠️
-    // Debería verse como: https://tu-app.railway.app
-    const backendUrl = 'https://master-production-5386.up.railway.app';
-    
+    // Crear URL para el endpoint de backup
+    // IMPORTANTE: Cambiar la URL a la de tu backend en Railway
+    const backendUrl = 'https://tu-app.railway.app'; // ¡ACTUALIZA ESTA URL!
     const backupUrl = `${backendUrl}/api/admin/backup`;
     
     // Crear un elemento <a> temporal para la descarga
     const downloadLink = document.createElement('a');
     
-    // Configurar la URL con el token de autenticación como parámetro
+    // Configurar la URL con el token de autenticación como header (enviado como parámetro GET)
     downloadLink.href = `${backupUrl}?token=${encodeURIComponent(token)}`;
     
     // Configurar para descarga
@@ -64,10 +68,8 @@ export const checkBackupStatus = async () => {
   try {
     const token = getAuthToken();
     
-    // ⚠️ IMPORTANTE: CAMBIA ESTA URL por la de tu backend en Railway ⚠️
-    // Debe ser la misma URL que arriba
-    const backendUrl = 'https://master-production-5386.up.railway.app'; // ¡MODIFICA ESTA LÍNEA!
-    
+    // IMPORTANTE: Cambiar la URL a la de tu backend en Railway
+    const backendUrl = 'https://tu-app.railway.app'; // ¡ACTUALIZA ESTA URL!
     const statusUrl = `${backendUrl}/api/admin/backup-status`;
     
     const response = await fetch(statusUrl, {

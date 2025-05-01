@@ -1,89 +1,85 @@
-// Este código debe ir en frontend/src/components/BackupButton.js
-
 import React, { useState } from 'react';
-import { generateBackupDirect, checkBackupSystemStatus } from '../services/backup';
+import { generateBackup, checkBackupStatus } from '../services/backup'; // Asegúrate que la ruta coincida
 
 /**
  * Componente de botón para generar copias de seguridad
- * Este componente está diseñado para funcionar con un backend hosteado en Railway
+ * Optimizado para funcionar con backend en Railway
  */
-const BackupButton = ({ bucketName }) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [statusMessage, setStatusMessage] = useState('');
+const BackupButton = () => {
+  const [status, setStatus] = useState('idle'); // idle, checking, downloading, error
+  const [message, setMessage] = useState('');
 
   /**
-   * Verifica el sistema de backup antes de iniciar la descarga
+   * Inicia el proceso de backup
    */
   const handleBackup = async () => {
     try {
-      setLoading(true);
-      setError(null);
-      setStatusMessage('Verificando sistema...');
+      // Cambiar estado a verificando
+      setStatus('checking');
+      setMessage('Verificando disponibilidad del sistema...');
 
-      // Verificar que el sistema de backup está listo
-      const statusCheck = await checkBackupSystemStatus();
+      // Verificar estado del sistema de backup
+      const statusResponse = await checkBackupStatus();
       
-      if (!statusCheck.success || !statusCheck.status.supabaseConfigured || !statusCheck.status.bucketPermissions) {
-        setError('El sistema de backup no está disponible en este momento. Verifica la configuración del servidor.');
-        console.error('Estado del sistema:', statusCheck);
-        return;
+      if (!statusResponse.success) {
+        throw new Error('El sistema de backup no está disponible en este momento');
       }
       
-      setStatusMessage('Generando copia de seguridad...');
+      // Todo ok, iniciar descarga
+      setStatus('downloading');
+      setMessage('Iniciando descarga...');
       
-      // Iniciar la descarga de la copia
-      generateBackupDirect(bucketName);
+      // Generar backup (esto abrirá la descarga)
+      generateBackup();
       
-      setStatusMessage('Descarga iniciada. El archivo se guardará en su carpeta de descargas.');
+      // Mostrar mensaje de éxito
+      setMessage('Descarga iniciada. Por favor, espere mientras se genera el archivo.');
       
-      // Limpiar el mensaje después de unos segundos
+      // Volver a estado normal después de unos segundos
       setTimeout(() => {
-        setStatusMessage('');
+        setStatus('idle');
+        setMessage('');
       }, 5000);
-    } catch (err) {
-      console.error('Error al generar backup:', err);
-      setError(`Error al generar la copia de seguridad: ${err.message}`);
-    } finally {
-      setLoading(false);
+      
+    } catch (error) {
+      console.error('Error en proceso de backup:', error);
+      setStatus('error');
+      setMessage(`Error: ${error.message}`);
     }
   };
 
   return (
-    <div className="backup-button-container">
+    <div className="backup-container">
       <button 
-        className="backup-button"
+        className={`backup-button ${status}`}
         onClick={handleBackup}
-        disabled={loading}
+        disabled={status === 'checking' || status === 'downloading'}
       >
-        {loading ? 'Procesando...' : 'Generar Copia de Seguridad'}
+        {status === 'checking' ? 'Verificando...' : 
+         status === 'downloading' ? 'Generando backup...' : 
+         'Generar Copia de Seguridad'}
       </button>
-
-      {statusMessage && (
-        <div className="status-message">
-          {statusMessage}
+      
+      {message && (
+        <div className={`message ${status}`}>
+          {message}
         </div>
       )}
-
-      {error && (
-        <div className="error-message">
-          {error}
-        </div>
-      )}
-
+      
       <style jsx>{`
-        .backup-button-container {
-          margin: 20px 0;
+        .backup-container {
+          margin: 15px 0;
+          padding: 10px;
         }
         
         .backup-button {
           background-color: #4CAF50;
           color: white;
-          padding: 10px 20px;
+          padding: 10px 15px;
           border: none;
           border-radius: 4px;
+          font-size: 14px;
           cursor: pointer;
-          font-size: 16px;
           transition: background-color 0.3s;
         }
         
@@ -96,17 +92,37 @@ const BackupButton = ({ bucketName }) => {
           cursor: not-allowed;
         }
         
-        .status-message {
-          margin-top: 10px;
-          color: #3498db;
+        .backup-button.checking {
+          background-color: #2196F3;
         }
         
-        .error-message {
+        .backup-button.downloading {
+          background-color: #FF9800;
+        }
+        
+        .backup-button.error {
+          background-color: #f44336;
+        }
+        
+        .message {
           margin-top: 10px;
-          color: #e74c3c;
-          background-color: #fadbd8;
-          padding: 10px;
+          padding: 8px;
           border-radius: 4px;
+        }
+        
+        .message.checking {
+          color: #0D47A1;
+          background-color: #E3F2FD;
+        }
+        
+        .message.downloading {
+          color: #E65100;
+          background-color: #FFF3E0;
+        }
+        
+        .message.error {
+          color: #B71C1C;
+          background-color: #FFEBEE;
         }
       `}</style>
     </div>
