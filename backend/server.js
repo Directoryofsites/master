@@ -5199,7 +5199,38 @@ app.get('/api/admin/backup', async (req, res) => {
       });
     }
 
-    if (req.userRole !== 'admin') {
+    // Verificar token en la URL
+    let userRole = req.userRole || 'guest';
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[BACKUP] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          // Para usuarios estáticos
+          userRole = userRoleMap[tokenData.username] || 'user';
+          bucketToUse = userBucketMap[tokenData.username];
+          console.log(`[BACKUP] Usuario estático ${tokenData.username} con rol ${userRole} y bucket ${bucketToUse}`);
+        } else if (tokenData.role) {
+          // Si el token tiene rol explícito, usarlo
+          userRole = tokenData.role;
+          console.log(`[BACKUP] Usando rol desde token: ${userRole}`);
+          
+          // Si tiene bucket explícito, usarlo también
+          if (tokenData.bucket) {
+            bucketToUse = tokenData.bucket;
+            console.log(`[BACKUP] Usando bucket desde token: ${bucketToUse}`);
+          }
+        }
+      } catch (tokenError) {
+        console.error('[BACKUP] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+
+    if (userRole !== 'admin') {
       return res.status(403).json({ 
         success: false, 
         message: 'Solo administradores pueden generar copias de seguridad.' 
@@ -5207,7 +5238,7 @@ app.get('/api/admin/backup', async (req, res) => {
     }
 
     // 2. Configuración
-    const bucketName = req.bucketName || defaultBucketName;
+    const bucketName = bucketToUse;
     const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
     const filename = `backup_${bucketName}_${dateStr}.zip`;
 
@@ -5399,6 +5430,10 @@ app.get('/api/admin/backup', async (req, res) => {
     console.log('[BACKUP] Finalizando archivo ZIP...');
     await archive.finalize();
     
+    console.log(`[BACKUP] Resumen de la operación:`);
+console.log(`[BACKUP] Usuario con rol: ${userRole}`);
+console.log(`[BACKUP] Bucket utilizado: ${bucketName}`);
+console.log(`[BACKUP] Token presente en URL: ${!!req.query.token}`);
     console.log(`[BACKUP] Proceso completado exitosamente`);
   } catch (err) {
     console.error('[BACKUP] Error general:', err);
