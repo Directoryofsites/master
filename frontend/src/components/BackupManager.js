@@ -21,8 +21,69 @@ const BackupManager = () => {
     }
   };
 
-  // Función para iniciar el proceso de copia de seguridad directa
+  // Obtener el bucket actual del token en localStorage
+  const getCurrentBucket = () => {
+    try {
+      // Intentar primero obtener desde user_session (nuevo formato)
+      const userSession = localStorage.getItem('user_session');
+      if (userSession) {
+        try {
+          const userData = JSON.parse(userSession);
+          if (userData.bucket) {
+            console.log('Obteniendo bucket desde user_session:', userData.bucket);
+            return userData.bucket;
+          }
+        } catch (err) {
+          console.error('Error al parsear user_session:', err);
+        }
+      }
 
+      // Si no funciona, intentar desde authToken (formato usado en otros componentes)
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try {
+          // Intentar decodificar como base64
+          const decodedToken = atob(token);
+          try {
+            const tokenData = JSON.parse(decodedToken);
+            if (tokenData.bucket) {
+              console.log('Obteniendo bucket desde authToken (decodificado):', tokenData.bucket);
+              return tokenData.bucket;
+            }
+          } catch (jsonError) {
+            console.error('Error al parsear JSON del token:', jsonError);
+          }
+        } catch (b64Error) {
+          console.warn('El token no está en formato base64, probando como JSON directo');
+          // Intentar como JSON directo
+          try {
+            const tokenData = JSON.parse(token);
+            if (tokenData.bucket) {
+              console.log('Obteniendo bucket desde authToken (JSON directo):', tokenData.bucket);
+              return tokenData.bucket;
+            }
+          } catch (jsonError) {
+            console.error('Error al parsear authToken como JSON:', jsonError);
+          }
+        }
+      }
+
+      // Último recurso: revisar localStorage directamente
+      const bucketFromStorage = localStorage.getItem('currentBucket');
+      if (bucketFromStorage) {
+        console.log('Obteniendo bucket desde localStorage directamente:', bucketFromStorage);
+        return bucketFromStorage;
+      }
+
+      console.error('No se pudo obtener el bucket de ninguna fuente');
+      return null;
+    } catch (error) {
+      console.error('Error general al obtener el bucket:', error);
+      return null;
+    }
+  };
+
+  // Función para iniciar el proceso de copia de seguridad directa
   const handleBackup = async () => {
     if (!isAdmin()) {
       setError('Solo los administradores pueden realizar copias de seguridad');
@@ -46,8 +107,12 @@ const BackupManager = () => {
       
       console.log(`Generando copia de seguridad para bucket: ${currentBucket}`);
       
+      // Usar la URL absoluta del backend en Railway en lugar de una ruta relativa
+      const backendUrl = 'https://master-production-5386.up.railway.app';
+      console.log(`Usando URL de backend: ${backendUrl}`);
+
       // Llamar al endpoint con los headers correctos
-      const response = await fetch(`/api/admin/backup-direct?bucket=${encodeURIComponent(currentBucket)}`, {
+      const response = await fetch(`${backendUrl}/api/admin/backup?bucket=${encodeURIComponent(currentBucket)}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -57,17 +122,29 @@ const BackupManager = () => {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Error en la respuesta del servidor:', errorText);
-        throw new Error(`Error ${response.status}: ${errorText}`);
+        throw new Error(`Error ${response.status}: ${response.statusText}`);
       }
       
       console.log('Respuesta del servidor recibida, creando blob...');
       
+      // Comprobar el tipo de contenido
+      const contentType = response.headers.get('content-type');
+      console.log('Tipo de contenido recibido:', contentType);
+
       // Crear un blob a partir de la respuesta
       const blob = await response.blob();
       console.log('Tamaño del blob:', blob.size);
       
       if (blob.size === 0) {
-        throw new Error('El archivo generado está vacío. Verifica los logs del servidor.');
+        console.warn('El archivo generado está vacío. Intentando método directo...');
+        
+        // Método alternativo: abrir la URL directamente en una nueva pestaña
+        const directUrl = `${backendUrl}/api/admin/backup?bucket=${encodeURIComponent(currentBucket)}&token=${encodeURIComponent(token)}`;
+        console.log('Iniciando descarga directa desde:', directUrl);
+        
+        window.open(directUrl, '_blank');
+        setMessage('Se ha abierto una nueva pestaña para la descarga directa. Si no ves el archivo, verifica el bloqueador de popups.');
+        return;
       }
       
       // Crear una URL para el blob
@@ -99,39 +176,6 @@ const BackupManager = () => {
     }
   };
 
-  // Obtener el bucket actual del token en localStorage
-  const getCurrentBucket = () => {
-    try {
-      // Intentar primero obtener desde user_session (nuevo formato)
-      const userSession = localStorage.getItem('user_session');
-      if (userSession) {
-        const userData = JSON.parse(userSession);
-        if (userData.bucket) {
-          console.log('Obteniendo bucket desde user_session:', userData.bucket);
-          return userData.bucket;
-        }
-      }
-
-      // Si no funciona, intentar desde authToken (formato usado en otros componentes)
-      const token = localStorage.getItem('authToken');
-      if (token) {
-        try {
-          const tokenData = JSON.parse(atob(token));
-          if (tokenData.bucket) {
-            console.log('Obteniendo bucket desde authToken:', tokenData.bucket);
-            return tokenData.bucket;
-          }
-        } catch (tokenError) {
-          console.error('Error al decodificar authToken:', tokenError);
-        }
-      }
-    } catch (error) {
-      console.error('Error al obtener bucket del almacenamiento:', error);
-    }
-
-    return null;
-  };
-
   // Si el usuario no es administrador, no mostrar el componente
   if (!isAdmin()) {
     return null;
@@ -150,6 +194,25 @@ const BackupManager = () => {
         >
           {isLoading ? 'Generando copia...' : 'Generar copia de seguridad'}
         </button>
+        
+        <button
+          onClick={() => {
+            const token = localStorage.getItem('authToken');
+            const currentBucket = getCurrentBucket();
+            if (currentBucket) {
+              const directUrl = `https://master-production-5386.up.railway.app/api/admin/backup?bucket=${encodeURIComponent(currentBucket)}&token=${encodeURIComponent(token)}`;
+              console.log('Iniciando descarga directa desde:', directUrl);
+              window.open(directUrl, '_blank');
+            } else {
+              setError('No se pudo determinar el bucket actual');
+            }
+          }}
+          disabled={isLoading}
+          className="backup-button direct-button"
+          style={{ marginLeft: '10px', background: '#4a6da7' }}
+        >
+          Descarga directa (alternativa)
+        </button>
       </div>
       
       {message && <div className="success-message">{message}</div>}
@@ -162,6 +225,8 @@ const BackupManager = () => {
           <li>El proceso puede tardar varios minutos dependiendo del tamaño de sus datos.</li>
           <li>El archivo se generará en formato ZIP.</li>
           <li>Se abrirá el diálogo de su navegador para que elija dónde guardar el archivo.</li>
+          <li>Si el método principal no funciona, usa el botón "Descarga directa (alternativa)".</li>
+          <li>El botón alternativo abrirá una nueva pestaña para la descarga directa desde el servidor.</li>
           <li>Esta funcionalidad está disponible solo para administradores.</li>
         </ul>
       </div>
