@@ -17,6 +17,8 @@ const SearchForm = ({ onSearch, isLoading }) => {
   const [isTextAndTagSearch, setIsTextAndTagSearch] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [isContentSearch, setIsContentSearch] = useState(false);
+  const [isSizeSearch, setIsSizeSearch] = useState(false);
+  
   // Estados para búsqueda de etiquetas
   const [availableTags, setAvailableTags] = useState([]);
   const [loadingTags, setLoadingTags] = useState(false);
@@ -51,6 +53,50 @@ const SearchForm = ({ onSearch, isLoading }) => {
   const [textAndTagSearchText, setTextAndTagSearchText] = useState('');
   const [textAndTagSelectedTags, setTextAndTagSelectedTags] = useState([]);
   const [textAndTagSelectedTagObjects, setTextAndTagSelectedTagObjects] = useState([]);
+
+  // Estados para búsqueda por tamaño de archivo
+  const [minSize, setMinSize] = useState('');
+  const [maxSize, setMaxSize] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Verificar si el usuario es administrador al cargar el componente
+  useEffect(() => {
+    checkAdminStatus();
+  }, []);
+
+  // Función para verificar si el usuario es administrador
+  const checkAdminStatus = () => {
+    try {
+      const userSession = localStorage.getItem('user_session');
+      if (userSession) {
+        const userData = JSON.parse(userSession);
+        if (userData.role === 'admin') {
+          setIsAdmin(true);
+          return;
+        }
+      }
+      
+      // Alternativa: verificar en authToken
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try {
+          const tokenData = JSON.parse(atob(token.split('.')[1])); // Decodificar JWT
+          if (tokenData.role === 'admin') {
+            setIsAdmin(true);
+            return;
+          }
+        } catch (tokenError) {
+          console.error('Error al decodificar authToken:', tokenError);
+        }
+      }
+      
+      setIsAdmin(false);
+    } catch (error) {
+      console.error('Error al verificar estado de administrador:', error);
+      setIsAdmin(false);
+    }
+  };
 
   // Obtener el bucket actual del token en localStorage
   const getCurrentBucket = () => {
@@ -189,6 +235,10 @@ const SearchForm = ({ onSearch, isLoading }) => {
     setIsCategorizedTagSearch(false);
     setIsTextAndTagSearch(false);
     setIsContentSearch(false);
+    setIsSizeSearch(false);
+    
+    // Limpiar selección de archivos cuando se cambia el tipo de búsqueda
+    setSelectedFiles([]);
     
     // Activar solo el tipo seleccionado
     switch (type) {
@@ -227,6 +277,10 @@ const SearchForm = ({ onSearch, isLoading }) => {
       case 'content':
         setIsContentSearch(true);
         setSearchTerm('');
+        break;
+      case 'size':
+        setIsSizeSearch(true);
+        updateSizeSearchTerm();
         break;
       default: // texto simple
         // Ya se resetean todos los estados arriba
@@ -404,6 +458,75 @@ const SearchForm = ({ onSearch, isLoading }) => {
     setSearchTerm(term);
   };
 
+  // Función para actualizar el término de búsqueda por tamaño
+  const updateSizeSearchTerm = () => {
+    let term = 'Tamaño: ';
+    
+    if (minSize && maxSize) {
+      term += `${minSize} KB - ${maxSize} KB`;
+    } else if (minSize) {
+      term += `desde ${minSize} KB`;
+    } else if (maxSize) {
+      term += `hasta ${maxSize} KB`;
+    } else {
+      term = 'Búsqueda por tamaño de archivo';
+    }
+    
+    console.log('Término de búsqueda por tamaño actualizado:', term);
+    setSearchTerm(term);
+  };
+
+  // Manejar selección de archivos
+  const handleFileSelection = (fileId, isSelected) => {
+    if (isSelected) {
+      setSelectedFiles(prev => [...prev, fileId]);
+    } else {
+      setSelectedFiles(prev => prev.filter(id => id !== fileId));
+    }
+  };
+
+  // Manejar acciones sobre archivos seleccionados
+  const handleFileAction = async (action) => {
+    if (selectedFiles.length === 0) {
+      alert('Por favor, seleccione al menos un archivo');
+      return;
+    }
+
+    try {
+      switch (action) {
+        case 'delete':
+          if (window.confirm(`¿Está seguro de que desea eliminar ${selectedFiles.length} archivo(s)?`)) {
+            await api.deleteFiles(selectedFiles);
+            alert('Archivos eliminados exitosamente');
+            // Refrescar la búsqueda
+            handleSubmit(new Event('submit'));
+          }
+          break;
+        case 'duplicate':
+          await api.duplicateFiles(selectedFiles);
+          alert('Archivos duplicados exitosamente');
+          // Refrescar la búsqueda
+          handleSubmit(new Event('submit'));
+          break;
+        case 'download':
+          // Para descarga, se maneja individualmente o en lote según la API
+          if (selectedFiles.length === 1) {
+            window.open(`/api/files/download/${selectedFiles[0]}`, '_blank');
+          } else {
+            // Solicitar descarga en lote (ZIP)
+            const downloadUrl = await api.requestBatchDownload(selectedFiles);
+            window.open(downloadUrl, '_blank');
+          }
+          break;
+        default:
+          console.error('Acción no reconocida:', action);
+      }
+    } catch (error) {
+      console.error(`Error al realizar la acción ${action}:`, error);
+      alert(`Error: ${error.message || 'No se pudo completar la acción'}`);
+    }
+  };
+
   // Efectos para actualizar los términos de búsqueda cuando cambian los campos
   useEffect(() => {
     if (isDateSearch) updateDateSearchTerm();
@@ -429,6 +552,10 @@ const SearchForm = ({ onSearch, isLoading }) => {
     if (isTextAndTagSearch) updateTextAndTagSearchTerm();
   }, [textAndTagSearchText, textAndTagSelectedTagObjects, isTextAndTagSearch]);
 
+  useEffect(() => {
+    if (isSizeSearch) updateSizeSearchTerm();
+  }, [minSize, maxSize, isSizeSearch]);
+
   // Función para manejar el envío del formulario
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -442,6 +569,27 @@ const SearchForm = ({ onSearch, isLoading }) => {
     if (!searchTerm.trim()) return;
       
     try {
+
+      // Para búsqueda por tamaño
+if (isSizeSearch) {
+  console.log('Realizando búsqueda por tamaño de archivo');
+  
+  try {
+    const min = minSize ? parseInt(minSize) : null;
+    const max = maxSize ? parseInt(maxSize) : null;
+    
+    console.log(`Buscando archivos con tamaño entre ${min || 0} KB y ${max || 'sin límite'} KB`);
+    
+    const results = await api.searchFilesBySize(min, max);
+    
+    console.log(`Búsqueda por tamaño exitosa: ${results.length} resultados`);
+    // Pasar indicador de que es búsqueda por tamaño para mostrar opciones de selección y acciones
+    onSearch(results, false, false, null, true, true, false, true);
+    return;
+  } catch (error) {
+    console.error('Error al realizar búsqueda por tamaño:', error);
+  }
+}
 
       // Para búsqueda por contenido
       if (isContentSearch) {
@@ -607,7 +755,7 @@ const SearchForm = ({ onSearch, isLoading }) => {
                 <input
                   type="radio"
                   name="searchType"
-                  checked={!isTagSearch && !isDateSearch && !isCombinedSearch && !isMultipleTagsSearch && !isMultipleTagsWithDateSearch && !isTextAndDateSearch && !isCategorizedTagSearch && !isTextAndTagSearch && !isContentSearch}
+                  checked={!isTagSearch && !isDateSearch && !isCombinedSearch && !isMultipleTagsSearch && !isMultipleTagsWithDateSearch && !isTextAndDateSearch && !isCategorizedTagSearch && !isTextAndTagSearch && !isContentSearch && !isSizeSearch}
                   onChange={() => handleSearchTypeChange('text')}
                   disabled={isLoading}
                 />
@@ -635,6 +783,16 @@ const SearchForm = ({ onSearch, isLoading }) => {
                   disabled={isLoading}
                 />
                 Fecha
+              </label>
+              <label className="search-option highlight-new-option">
+                <input
+                  type="radio"
+                  name="searchType"
+                  checked={isSizeSearch}
+                  onChange={() => handleSearchTypeChange('size')}
+                  disabled={isLoading}
+                />
+                Tamaño
               </label>
               <button 
                 type="button" 
@@ -698,6 +856,82 @@ const SearchForm = ({ onSearch, isLoading }) => {
           
           {/* Opciones Específicas para cada tipo de Búsqueda */}
           <div className="search-type-options">
+            {/* Búsqueda por Tamaño */}
+            {isSizeSearch && (
+              <div className="size-search-options">
+                <h4>Búsqueda por tamaño de archivo</h4>
+                
+                <div className="size-range-container">
+                  <div className="size-input-group">
+                    <label>Tamaño mínimo (KB):</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={minSize}
+                      onChange={(e) => {
+                        setMinSize(e.target.value);
+                        updateSizeSearchTerm();
+                      }}
+                      placeholder="Mínimo"
+                      className="size-input"
+                      disabled={isLoading}
+                    />
+                  </div>
+                  
+                  <div className="size-input-group">
+                    <label>Tamaño máximo (KB):</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={maxSize}
+                      onChange={(e) => {
+                        setMaxSize(e.target.value);
+                        updateSizeSearchTerm();
+                      }}
+                      placeholder="Máximo"
+                      className="size-input"
+                      disabled={isLoading}
+                    />
+                  </div>
+                </div>
+                
+                <div className="size-search-info">
+                  <small>
+                    Nota: Dejar en blanco un campo significa "sin límite" en ese extremo.
+                  </small>
+                </div>
+
+                {selectedFiles.length > 0 && isAdmin && (
+                  <div className="file-actions-container">
+                    <h5>Acciones para {selectedFiles.length} archivo(s) seleccionado(s):</h5>
+                    <div className="file-action-buttons">
+                      <button 
+                        type="button"
+                        onClick={() => handleFileAction('delete')}
+                        className="file-action-button delete-button"
+                      >
+                        Eliminar
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => handleFileAction('duplicate')}
+                        className="file-action-button duplicate-button"
+                      >
+                        Duplicar
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => handleFileAction('download')}
+                        className="file-action-button download-button"
+                      >
+                        Descargar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {/* Búsqueda por Etiqueta */}
             {isTagSearch && (
               <div className="tag-search-options">
@@ -1296,6 +1530,10 @@ const SearchForm = ({ onSearch, isLoading }) => {
                    placeholder="Buscar en nombres de archivos..."
                    className="search-input"
                    disabled={isLoading}
+
+                   placeholder="Buscar en nombres de archivos..."
+                   className="search-input"
+                   disabled={isLoading}
                  />
                </div>
                
@@ -1370,15 +1608,17 @@ const SearchForm = ({ onSearch, isLoading }) => {
                          ? "Texto + Fecha"
                          : isTextAndTagSearch
                            ? "Texto + Etiqueta"
-                           : "Buscar archivos o carpetas..."
+                           : isSizeSearch
+                             ? "Tamaño en KB"
+                             : "Buscar archivos o carpetas..."
                  }
-                 disabled={isLoading || (isDateSearch && dateSearchType !== 'text') || isCategorizedTagSearch}
+                 disabled={isLoading || (isDateSearch && dateSearchType !== 'text') || isCategorizedTagSearch || isSizeSearch}
                  className="search-input"
-                 readOnly={isDateSearch && dateSearchType !== 'text'}
+                 readOnly={isDateSearch && dateSearchType !== 'text' || isSizeSearch}
                />
                <button 
                  type="submit" 
-                 disabled={isLoading || !searchTerm.trim() || (isDateSearch && !searchTerm) || isCategorizedTagSearch} 
+                 disabled={isLoading || (!searchTerm.trim() && !isSizeSearch) || (isDateSearch && !searchTerm) || isCategorizedTagSearch} 
                  className="search-button"
                >
                  {isLoading ? 'Buscando...' : 'Buscar'}
@@ -1398,7 +1638,8 @@ const SearchForm = ({ onSearch, isLoading }) => {
          margin-top: 5px;
        }
        
-       .text-tag-search-options {
+       .text-tag-search-options,
+       .size-search-options {
          margin-top: 15px;
          padding: 15px;
          background-color: #f5f5f5;
@@ -1406,15 +1647,74 @@ const SearchForm = ({ onSearch, isLoading }) => {
        }
        
        .text-tag-text-section,
-       .text-tag-tags-section {
+       .text-tag-tags-section,
+       .size-input-group {
          margin-bottom: 15px;
        }
        
        .text-tag-text-section label,
-       .text-tag-tags-section label {
+       .text-tag-tags-section label,
+       .size-input-group label {
          display: block;
          margin-bottom: 5px;
          font-weight: bold;
+       }
+       
+       .size-range-container {
+         display: flex;
+         justify-content: space-between;
+         gap: 20px;
+       }
+       
+       .size-input-group {
+         flex: 1;
+       }
+       
+       .size-input {
+         width: 100%;
+         padding: 8px;
+         border: 1px solid #ddd;
+         border-radius: 4px;
+       }
+       
+       .size-search-info {
+         margin-top: 10px;
+         color: #666;
+       }
+       
+       .file-actions-container {
+         margin-top: 20px;
+         padding-top: 15px;
+         border-top: 1px solid #ddd;
+       }
+       
+       .file-action-buttons {
+         display: flex;
+         gap: 10px;
+         margin-top: 10px;
+       }
+       
+       .file-action-button {
+         padding: 6px 12px;
+         border: none;
+         border-radius: 4px;
+         cursor: pointer;
+         font-weight: bold;
+       }
+       
+       .delete-button {
+         background-color: #f44336;
+         color: white;
+       }
+       
+       .duplicate-button {
+         background-color: #2196F3;
+         color: white;
+       }
+       
+       .download-button {
+         background-color: #4CAF50;
+         color: white;
        }
      `}</style>
    </div>

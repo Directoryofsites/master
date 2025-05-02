@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as api from '../services/api';  // Importar todo el módulo api
+import { hasAdminPermission } from '../services/auth';  // Importar función de verificación de permisos
 import FileMetadataEditor from './FileMetadataEditor'; // Importar el componente de editor de metadatos
 
 const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, isSearchResults = false }) => {
@@ -22,10 +23,20 @@ const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, 
   // Estado para renombrar archivos
   const [renamingFile, setRenamingFile] = useState(null);
   const [newFileName, setNewFileName] = useState('');
+
   // Estado para controlar el modo selección múltiple
-  const [multiSelectMode, setMultiSelectMode] = useState(false);
-  // Estado para controlar el menú de acciones
-  const [activeActionsMenu, setActiveActionsMenu] = useState(null);
+const [multiSelectMode, setMultiSelectMode] = useState(false);
+
+// Estado para controlar el menú de acciones
+const [activeActionsMenu, setActiveActionsMenu] = useState(null);
+
+
+
+// Estado para el filtro de tamaño de archivos
+const [minSize, setMinSize] = useState('');
+const [maxSize, setMaxSize] = useState('');
+const [sizeFilterActive, setSizeFilterActive] = useState(false);
+const [filteredFiles, setFilteredFiles] = useState([]);
 
 // Referencia para los menús desplegables
 const dropdownRefs = useRef(new Map());
@@ -144,87 +155,130 @@ useEffect(() => {
   };
 }, [activeActionsMenu]);
 
-  // Efecto para cargar las URLs cuando cambian los archivos o la ruta
-  useEffect(() => {
-    async function loadAllUrls() {
-      if (!files || files.length === 0 || loadingUrls) return;
-      
-      setLoadingUrls(true);
-      console.log('Cargando URLs para todos los archivos...');
-      
-      const newYoutubeUrls = {};
-      const newAudioUrls = {};
-      const newImageUrls = {};
-      const newFileMetadata = {};
-      
-      const promises = files.map(async (file) => {
-        // Solo procesar archivos (no carpetas)
-        if (!file.isFolder) {
-          // Determinar la ruta correcta del archivo
-          let filePath;
-          if (isSearchResults) {
-            filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
-          } else {
-            filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+// Efecto para cargar las URLs cuando cambian los archivos o la ruta
+useEffect(() => {
+  async function loadAllUrls() {
+    if (!files || files.length === 0 || loadingUrls) return;
+    
+    setLoadingUrls(true);
+    console.log('Cargando URLs para todos los archivos...');
+    
+    const newYoutubeUrls = {};
+    const newAudioUrls = {};
+    const newImageUrls = {};
+    const newFileMetadata = {};
+    
+    const promises = files.map(async (file) => {
+      // Solo procesar archivos (no carpetas)
+      if (!file.isFolder) {
+        // Determinar la ruta correcta del archivo
+        let filePath;
+        if (isSearchResults) {
+          filePath = file.path.startsWith('/') ? file.path.substring(1) : file.path;
+        } else {
+          filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+        }
+        
+        try {
+          // Cargar URL de YouTube
+          const youtubeUrl = await api.getYoutubeUrl(filePath);
+          if (youtubeUrl) {
+            newYoutubeUrls[filePath] = youtubeUrl;
           }
           
-          try {
-            // Cargar URL de YouTube
-            const youtubeUrl = await api.getYoutubeUrl(filePath);
-            if (youtubeUrl) {
-              newYoutubeUrls[filePath] = youtubeUrl;
-            }
-            
-            // Cargar URL de audio
-            const audioUrl = await api.getAudioUrl(filePath);
-            if (audioUrl) {
-              newAudioUrls[filePath] = audioUrl;
-            }
-            
-            // Cargar URL de imagen
-            const imageUrl = await api.getImageUrl(filePath);
-            if (imageUrl) {
-              newImageUrls[filePath] = imageUrl;
-            }
-
-            // Cargar metadatos (incluyendo etiquetas)
-            try {
-              const metadata = await api.getFileMetadata(filePath);
-              if (metadata) {
-                newFileMetadata[filePath] = metadata;
-              }
-            } catch (metadataError) {
-              console.error(`Error al cargar metadatos para ${filePath}:`, metadataError);
-            }
-
-          } catch (error) {
-            console.error(`Error al cargar URLs para ${filePath}:`, error);
+          // Cargar URL de audio
+          const audioUrl = await api.getAudioUrl(filePath);
+          if (audioUrl) {
+            newAudioUrls[filePath] = audioUrl;
           }
-        }
-      });
-      
-      await Promise.all(promises);
-      
-      setYoutubeUrls(newYoutubeUrls);
-      setAudioUrls(newAudioUrls);
-      setImageUrls(newImageUrls);
-      
-      console.log('URLs de YouTube cargadas:', newYoutubeUrls);
-      console.log('URLs de audio cargadas:', newAudioUrls);
-      console.log('URLs de imagen cargadas:', newImageUrls);
+          
+          // Cargar URL de imagen
+          const imageUrl = await api.getImageUrl(filePath);
+          if (imageUrl) {
+            newImageUrls[filePath] = imageUrl;
+          }
 
-      setFileMetadata(newFileMetadata);
-      console.log('Metadatos cargados:', newFileMetadata);
-      
-      setLoadingUrls(false);
-    }
+          // Cargar metadatos (incluyendo etiquetas)
+          try {
+            const metadata = await api.getFileMetadata(filePath);
+            if (metadata) {
+              newFileMetadata[filePath] = metadata;
+            }
+          } catch (metadataError) {
+            console.error(`Error al cargar metadatos para ${filePath}:`, metadataError);
+          }
+
+        } catch (error) {
+          console.error(`Error al cargar URLs para ${filePath}:`, error);
+        }
+      }
+    });
     
-    loadAllUrls();
+    await Promise.all(promises);
     
-    // Limpiar selecciones al cambiar de carpeta
-    setSelectedItems([]);
-    setMultiSelectMode(false);
-  }, [files, currentPath, isSearchResults]);
+    setYoutubeUrls(newYoutubeUrls);
+    setAudioUrls(newAudioUrls);
+    setImageUrls(newImageUrls);
+    
+    console.log('URLs de YouTube cargadas:', newYoutubeUrls);
+    console.log('URLs de audio cargadas:', newAudioUrls);
+    console.log('URLs de imagen cargadas:', newImageUrls);
+
+    setFileMetadata(newFileMetadata);
+    console.log('Metadatos cargados:', newFileMetadata);
+    
+    setLoadingUrls(false);
+  }
+  
+  loadAllUrls();
+  
+  // Limpiar selecciones al cambiar de carpeta
+  setSelectedItems([]);
+  setMultiSelectMode(false);
+  // Restablecer filtro de tamaño al cambiar carpeta
+  setSizeFilterActive(false);
+  setFilteredFiles([]);
+}, [files, currentPath, isSearchResults]);
+
+// Función para aplicar el filtro de tamaño
+const applyFileSizeFilter = () => {
+  const min = parseInt(minSize, 10) || 0;
+  const max = maxSize ? parseInt(maxSize, 10) : Infinity;
+  
+  // Validar que el valor máximo sea mayor que el mínimo
+  if (max < min) {
+    alert('El tamaño máximo debe ser mayor que el mínimo');
+    return;
+  }
+  
+  // Convertir KB a bytes para comparar con el tamaño de los archivos
+  const minBytes = min * 1024;
+  const maxBytes = max === Infinity ? max : max * 1024;
+  
+  // Filtrar los archivos por tamaño (solo aplicable a archivos, no a carpetas)
+  const filtered = files.filter(file => {
+    // No filtrar carpetas
+    if (file.isFolder) return true;
+    
+    const size = file.size || 0;
+    return size >= minBytes && size <= maxBytes;
+  });
+  
+  setFilteredFiles(filtered);
+  setSizeFilterActive(true);
+  
+  if (filtered.length === 0) {
+    alert('No se encontraron archivos en ese rango de tamaño');
+  }
+};
+
+// Función para quitar el filtro
+const clearFileSizeFilter = () => {
+  setSizeFilterActive(false);
+  setFilteredFiles([]);
+  setMinSize('');
+  setMaxSize('');
+};
 
   // Función para obtener la ruta completa de un archivo
   const getFilePath = (file) => {
@@ -1106,6 +1160,7 @@ document.body.appendChild(audioOptions);
 
   // Función para mostrar el campo de entrada de URL de YouTube
   const handleEditYoutubeUrl = async (file, e) => {
+    
     e.stopPropagation(); // Evitar que se propague el clic al elemento padre
     
     // Cerrar el menú de acciones
@@ -1653,21 +1708,24 @@ const formatDate = (dateString) => {
               )}
             </div>
           </div>
+          
         )}
-        
-        {/* Barra de herramientas para selección múltiple */}
-        {userRole === 'admin' && (
-          <div className="multi-select-toolbar" style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '15px',
-            padding: '10px',
-            backgroundColor: multiSelectMode ? '#e9f5ff' : 'transparent',
-            borderRadius: '4px',
-            border: multiSelectMode ? '1px solid #bee1ff' : '1px solid transparent',
-            transition: 'all 0.3s ease'
-          }}>
+        {/* Barra de herramientas para selección múltiple - visible para admins y usuarios con permisos */}
+{(userRole === 'admin' || 
+  hasAdminPermission('delete_files') || 
+  hasAdminPermission('delete_folders') || 
+  hasAdminPermission('duplicate_files')) && (
+  <div className="multi-select-toolbar" style={{
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '15px',
+    padding: '10px',
+    backgroundColor: multiSelectMode ? '#e9f5ff' : 'transparent',
+    borderRadius: '4px',
+    border: multiSelectMode ? '1px solid #bee1ff' : '1px solid transparent',
+    transition: 'all 0.3s ease'
+  }}>
             <div>
               <button
                 onClick={toggleMultiSelectMode}
@@ -1746,7 +1804,9 @@ const formatDate = (dateString) => {
         )}
         
         {(!files || files.length === 0) ? (
+          
           <p className="empty-folder" style={{
+            
             textAlign: 'center',
             padding: '30px',
             backgroundColor: '#f8f9fa',
@@ -1763,9 +1823,23 @@ const formatDate = (dateString) => {
             gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
             gap: '20px'
           }}>
-            {files.map((file) => {
-              // Determinar la ruta del archivo
-              const filePath = getFilePath(file);
+            {files.filter(file => {
+  // Si el filtro está activo, filtrar por tamaño
+  if (sizeFilterActive) {
+    if (file.isFolder) return true; // No filtrar carpetas
+    
+    const size = file.size || 0;
+    const minBytes = (parseInt(minSize, 10) || 0) * 1024;
+    const maxBytes = maxSize ? parseInt(maxSize, 10) * 1024 : Infinity;
+    
+    return size >= minBytes && size <= maxBytes;
+  }
+  
+  // Si no hay filtro activo, mostrar todos
+  return true;
+}).map((file) => {
+  // Determinar la ruta del archivo
+  const filePath = getFilePath(file);
               
               // Obtener los metadatos del archivo
               const metadata = fileMetadata[filePath] || {};
@@ -2065,9 +2139,12 @@ return (
   justifyContent: 'flex-start',
   position: 'relative'  // Añadimos position relative para posicionar los elementos absolutos dentro
 }}>
-                  {/* Solo administradores pueden ver el botón de acciones */}
-                  {userRole === 'admin' && !multiSelectMode && (
-                    <div className="dropdown" style={{ position: 'relative', display: 'inline-block' }}>
+                 {/* Botón de acciones - visible para admins y usuarios con permisos necesarios */}
+{(userRole === 'admin' || 
+  hasAdminPermission('delete_files') || 
+  hasAdminPermission('rename_files') || 
+  hasAdminPermission('duplicate_files')) && !multiSelectMode && (
+  <div className="dropdown" style={{ position: 'relative', display: 'inline-block' }}>
                     <button
                       className="action-button"
                       onClick={(e) => toggleActionsMenu(filePath, e)}
@@ -2162,22 +2239,24 @@ style={{
                                 Añadir URL de Imagen
                               </button>
                               
-                              <button
-                                onClick={(e) => handleOpenMetadataEditor(file, e)}
-                                className="dropdown-item"
-                                style={{
-                                  display: 'block',
-                                  width: '100%',
-                                  padding: '8px 12px',
-                                  textAlign: 'left',
-                                  backgroundColor: 'transparent',
-                                  border: 'none',
-                                  borderBottom: '1px solid #f0f0f0',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                Editar Metadatos
-                              </button>
+                              {(userRole === 'admin' || hasAdminPermission('upload_files')) && (
+  <button
+    onClick={(e) => handleOpenMetadataEditor(file, e)}
+    className="dropdown-item"
+    style={{
+      display: 'block',
+      width: '100%',
+      padding: '8px 12px',
+      textAlign: 'left',
+      backgroundColor: 'transparent',
+      border: 'none',
+      borderBottom: '1px solid #f0f0f0',
+      cursor: 'pointer'
+    }}
+  >
+    Editar Metadatos
+  </button>
+)}
                             </>
                           )}
                           

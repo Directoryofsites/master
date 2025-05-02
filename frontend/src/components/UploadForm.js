@@ -124,23 +124,44 @@ const UploadForm = ({ currentPath, onUploadComplete }) => {
             setUploadProgress(Math.min(99, Math.round(overallProgress)));
           }, 300);
           
-          // Realizar la carga utilizando el servicio API
-          const result = await api.uploadFile(file, currentPath);
-          
-          clearInterval(progressInterval);
-          
-          // Registrar resultado
-          if (result && result.success) {
-            results.success.push({
-              name: file.name,
-              result: result
-            });
-          } else {
-            results.errors.push({
-              name: file.name,
-              error: result && result.message ? result.message : 'Error desconocido'
-            });
-          }
+         // Realizar la carga utilizando el servicio API
+const result = await api.uploadFile(file, currentPath);
+
+clearInterval(progressInterval);
+
+// Registrar resultado
+if (result && result.success) {
+  // Asegurarse que los metadatos estén correctamente configurados
+  if (result.filePath) {
+    try {
+      // Crear metadatos con la fecha actual
+      const currentDate = new Date().toISOString().split('T')[0];
+      const fileMetadata = {
+        uploadDate: currentDate,
+        fileDate: currentDate,
+        uploadedBy: 'admin1', // O usar la información del usuario actual
+        tags: [],
+        lastModified: currentDate
+      };
+      
+      // Actualizar los metadatos del archivo recién subido
+      await api.updateFileMetadata(result.filePath, fileMetadata);
+      console.log(`Metadatos actualizados para ${file.name} con fecha ${currentDate}`);
+    } catch (metadataError) {
+      console.error(`Error al actualizar los metadatos de ${file.name}:`, metadataError);
+    }
+  }
+  
+  results.success.push({
+    name: file.name,
+    result: result
+  });
+} else {
+  results.errors.push({
+    name: file.name,
+    error: result && result.message ? result.message : 'Error desconocido'
+  });
+}
         } catch (fileError) {
           console.error(`Error al subir archivo ${file.name}:`, fileError);
           results.errors.push({

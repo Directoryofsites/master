@@ -155,28 +155,40 @@ const loadMetadata = async () => {
   try {
     setLoading(true);
     setError(null);
+    
+    // Obtener la fecha actual formateada
+    const currentDate = new Date().toISOString().split('T')[0];
+    
+    // Valores por defecto actualizados con la fecha actual
+    const defaultMetadata = {
+      uploadDate: currentDate,
+      fileDate: currentDate,
+      uploadedBy: 'admin1',
+      tags: [],
+      lastModified: currentDate
+    };
+    
+    console.log('Valores por defecto con fecha actual:', defaultMetadata);
+    
+    try {
+      const metadataResponse = await api.getFileMetadata(filePath);
+      console.log('Respuesta de metadatos:', metadataResponse);
       
-      // Valores por defecto
-      const defaultMetadata = {
-        uploadDate: new Date().toISOString().split('T')[0],
-        fileDate: new Date().toISOString().split('T')[0],
-        uploadedBy: 'admin1',
-        tags: [],
-        lastModified: new Date().toISOString().split('T')[0]
-      };
-      
-      try {
-        const metadataResponse = await api.getFileMetadata(filePath);
-        if (metadataResponse) {
-          setMetadata(metadataResponse);
-          
-          // Formatear fecha para el input type="date"
-          if (metadataResponse.fileDate) {
-            setFileDate(metadataResponse.fileDate);
-          } else {
-            setFileDate(defaultMetadata.fileDate);
-          }
-          
+      if (metadataResponse && Object.keys(metadataResponse).length > 0) {
+        // Asegurarse de que todos los campos existan
+        const completeMetadata = {
+          ...defaultMetadata,
+          ...metadataResponse
+        };
+        
+        setMetadata(completeMetadata);
+        
+        // Formatear fecha para el input type="date"
+        if (completeMetadata.fileDate) {
+          setFileDate(completeMetadata.fileDate);
+        } else {
+          setFileDate(defaultMetadata.fileDate);
+        }          
           // Cargar etiquetas
           if (Array.isArray(metadataResponse.tags)) {
             setTags(metadataResponse.tags);
@@ -205,50 +217,72 @@ const loadMetadata = async () => {
 // Función para guardar los cambios
 const handleSave = () => {
   try {
+    // Agregar logs de depuración
+    console.log("[META-DEBUG] Iniciando guardado de metadatos");
+    
+    // Obtener la fecha actual formateada
+    const currentDate = new Date().toISOString().split('T')[0];
+    
+    // Asegurarse de que la fecha de subida esté establecida
+    const uploadDate = metadata.uploadDate || currentDate;
+    
     // Crear objeto con los metadatos actualizados
     const updatedMetadata = {
       ...metadata,
+      uploadDate: uploadDate, // Mantener la fecha de subida original o usar la fecha actual
       fileDate: fileDate,
       tags: tags,
-      lastModified: new Date().toISOString().split('T')[0]
+      lastModified: currentDate // Siempre actualizar la fecha de última modificación
     };
     
-    // Ya no guardamos nuevas etiquetas aquí, solo se añaden etiquetas existentes
-console.log('Guardando archivo con etiquetas:', tags);
+    console.log('[META-DEBUG] Metadatos a guardar:', updatedMetadata);
+    console.log('[META-DEBUG] Ruta del archivo:', filePath);
     
-    console.log('Metadatos actualizados localmente:', updatedMetadata);
-    
-    // Intentar guardar en el servidor, pero no esperar la respuesta
+    // Intentar guardar en el servidor con gestión de errores mejorada
     try {
-      api.updateFileMetadata(filePath, updatedMetadata)
-        .then(() => console.log('Metadatos guardados en el servidor'))
-        .catch(err => console.error('Error al guardar en el servidor:', err));
+      console.log('[META-DEBUG] Enviando solicitud al servidor...');
+      
+      // Añadir pequeña demora para asegurar que se procese correctamente
+      setTimeout(() => {
+        api.updateFileMetadata(filePath, updatedMetadata)
+          .then((response) => {
+            console.log('[META-DEBUG] Respuesta del servidor:', response);
+            
+            // Mostrar mensaje al usuario
+            alert("Metadatos guardados correctamente");
+            
+            // Notificar al componente padre y cerrar
+            if (onSave) {
+              console.log('[META-DEBUG] Notificando al componente padre sobre guardado exitoso');
+              onSave(updatedMetadata);
+            }
+            
+            // Cerrar el editor
+            if (onClose) {
+              onClose();
+            }
+          })
+          .catch(err => {
+            console.error('[META-DEBUG] Error al guardar en el servidor:', err);
+            console.error('[META-DEBUG] Detalles del error:', JSON.stringify(err, null, 2));
+            alert("Error al guardar los metadatos: " + (err.message || "Error desconocido"));
+          });
+      }, 300); // Pequeña demora para asegurar que la API esté lista
     } catch (e) {
-      console.error('Error al intentar guardar:', e);
-    }
-    
-    // Mostrar mensaje al usuario
-alert("Metadatos guardados correctamente");
-
-    // Notificar al componente padre y cerrar
-    if (onSave) {
-      onSave(updatedMetadata);
-    }
-    
-    // Cerrar el editor
-    if (onClose) {
-      onClose();
+      console.error('[META-DEBUG] Error crítico al intentar guardar:', e);
+      console.error('[META-DEBUG] Stack trace:', e.stack);
+      alert("Error al guardar los metadatos: " + (e.message || "Error desconocido"));
     }
   } catch (error) {
-    console.error('Error en handleSave:', error);
+    console.error('[META-DEBUG] Error general en handleSave:', error);
+    console.error('[META-DEBUG] Stack trace:', error.stack);
+    alert("Error al procesar los metadatos: " + (error.message || "Error desconocido"));
     // Asegurar que el diálogo se cierre incluso si hay error
     if (onClose) {
       onClose();
     }
   }
 };
-
-
   // Función para eliminar una etiqueta
   const handleRemoveTag = (tagToRemove) => {
     setTags(tags.filter(tag => tag !== tagToRemove));

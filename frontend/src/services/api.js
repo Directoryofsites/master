@@ -153,7 +153,12 @@ export const uploadFile = async (file, path = '') => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('path', path);
-
+  
+  // Añadir la fecha del sistema como metadato
+  const currentDate = new Date().toISOString().split('T')[0];
+  formData.append('uploadDate', currentDate);
+  formData.append('fileDate', currentDate);
+  
   // Obtener el token de autorización
   const token = getAuthToken();
   const headers = {};
@@ -161,7 +166,7 @@ export const uploadFile = async (file, path = '') => {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-
+  
   try {
     const response = await fetch(`${BASE_URL}/upload`, {
       method: 'POST',
@@ -172,12 +177,35 @@ export const uploadFile = async (file, path = '') => {
     if (!response.ok) {
       throw new Error('No se pudo subir el archivo');
     }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error en uploadFile:', error);
-    throw error;
-  }
+    
+    const responseData = await response.json();
+    
+    // Si la subida fue exitosa, inmediatamente actualizar metadatos con la fecha
+    if (responseData && responseData.success && responseData.filePath) {
+      try {
+        // Crear metadatos con la fecha actual
+        const currentDate = new Date().toISOString().split('T')[0];
+        const fileMetadata = {
+          uploadDate: currentDate,
+          fileDate: currentDate,
+          uploadedBy: 'admin1', // O usar la información del usuario actual
+          tags: [],
+          lastModified: currentDate
+        };
+        
+        // Actualizar los metadatos del archivo recién subido
+        const metadataResponse = await updateFileMetadata(responseData.filePath, fileMetadata);
+        console.log('Metadatos iniciales establecidos automáticamente:', metadataResponse);
+      } catch (metadataError) {
+        console.warn('Error al establecer metadatos iniciales:', metadataError);
+      }
+    }
+    
+    return responseData;
+    } catch (error) {
+      console.error('Error en uploadFile:', error);
+      throw error;
+    }
 };
 
 /**
@@ -863,6 +891,190 @@ export const searchByContent = async (searchText) => {
     return data;
   } catch (error) {
     console.error('Error en searchByContent:', error);
+    throw error;
+  }
+};
+
+/**
+ * Busca archivos por tamaño en KB
+ * @param {number|null} minSize - Tamaño mínimo en KB (null para no establecer mínimo)
+ * @param {number|null} maxSize - Tamaño máximo en KB (null para no establecer máximo)
+ * @returns {Promise<Array>} - Lista de archivos que coinciden con el rango de tamaño
+ */
+export const searchFilesBySize = async (minSize, maxSize) => {
+  try {
+    console.log(`INICIANDO búsqueda por tamaño: mínimo=${minSize || 'sin límite'} KB, máximo=${maxSize || 'sin límite'} KB`);
+    
+    // Obtener el token de autenticación
+    const token = getAuthToken();
+    
+    // Construir la URL con los parámetros de búsqueda
+    let url = `${BASE_URL}/search-by-size`;
+    
+    // Añadir parámetros de tamaño a la URL
+    const params = new URLSearchParams();
+    if (minSize !== null && minSize !== undefined) {
+      params.append('minSize', minSize);
+    }
+    if (maxSize !== null && maxSize !== undefined) {
+      params.append('maxSize', maxSize);
+    }
+    
+    // Añadir el token como parámetro de query para asegurar que se use el bucket correcto
+    if (token) {
+      params.append('token', token);
+    }
+    
+    // Agregar los parámetros a la URL
+    if (params.toString()) {
+      url += `?${params.toString()}`;
+    }
+    
+    console.log('URL exacta de búsqueda por tamaño:', url);
+    console.log('Enviando solicitud al endpoint de búsqueda por tamaño...');
+    const startTime = new Date().getTime();
+    
+    // Realizar la solicitud
+    const response = await fetch(url);
+    
+    const endTime = new Date().getTime();
+    console.log(`La solicitud tardó ${endTime - startTime} ms en completarse`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`Se encontraron ${data.length} resultados desde el servidor para la búsqueda por tamaño`);
+    
+    return data;
+  } catch (error) {
+    console.error('Error en searchFilesBySize:', error);
+    throw error;
+  }
+};
+
+/**
+ * Elimina múltiples archivos de una vez
+ * @param {Array<string>} fileIds - Array con los IDs de los archivos a eliminar
+ * @returns {Promise<Object>} - Resultado de la operación
+ */
+export const deleteFiles = async (fileIds) => {
+  try {
+    if (!fileIds || !fileIds.length) {
+      throw new Error('Se requiere al menos un ID de archivo para eliminar');
+    }
+    
+    console.log(`Eliminando ${fileIds.length} archivos:`, fileIds);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(`${BASE_URL}/delete-multiple`, {
+      method: 'DELETE',
+      headers: headers,
+      body: JSON.stringify({ fileIds })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en deleteFiles:', error);
+    throw error;
+  }
+};
+
+/**
+ * Duplica múltiples archivos de una vez
+ * @param {Array<string>} fileIds - Array con los IDs de los archivos a duplicar
+ * @returns {Promise<Object>} - Resultado de la operación
+ */
+export const duplicateFiles = async (fileIds) => {
+  try {
+    if (!fileIds || !fileIds.length) {
+      throw new Error('Se requiere al menos un ID de archivo para duplicar');
+    }
+    
+    console.log(`Duplicando ${fileIds.length} archivos:`, fileIds);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(`${BASE_URL}/duplicate-multiple`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ fileIds })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error en duplicateFiles:', error);
+    throw error;
+  }
+};
+
+/**
+ * Solicita descarga en lote de múltiples archivos (como ZIP)
+ * @param {Array<string>} fileIds - Array con los IDs de los archivos a descargar
+ * @returns {Promise<string>} - URL de descarga del archivo ZIP
+ */
+export const requestBatchDownload = async (fileIds) => {
+  try {
+    if (!fileIds || !fileIds.length) {
+      throw new Error('Se requiere al menos un ID de archivo para descargar');
+    }
+    
+    console.log(`Solicitando descarga en lote de ${fileIds.length} archivos`);
+    
+    // Obtener el token de autorización
+    const token = getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(`${BASE_URL}/batch-download`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ fileIds })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Error ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.downloadUrl;
+  } catch (error) {
+    console.error('Error en requestBatchDownload:', error);
     throw error;
   }
 };

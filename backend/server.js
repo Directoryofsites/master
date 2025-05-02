@@ -3301,6 +3301,152 @@ app.get('/api/search-by-content', async (req, res) => {
   }
 });
 
+// Endpoint para buscar archivos por tamaño
+app.get('/api/search-by-size', async (req, res) => {
+  try {
+    console.log('Recibida solicitud de búsqueda por tamaño');
+    
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Obtener parámetros de tamaño
+    const minSize = req.query.minSize ? parseInt(req.query.minSize) : null;
+    const maxSize = req.query.maxSize ? parseInt(req.query.maxSize) : null;
+    
+    console.log(`Parámetros de búsqueda: minSize=${minSize || 'sin límite'}, maxSize=${maxSize || 'sin límite'}`);
+    
+    // Verificar que al menos uno de los parámetros esté definido
+    if (minSize === null && maxSize === null) {
+      return res.status(400).json({ message: 'Se requiere al menos un parámetro de tamaño (minSize o maxSize)' });
+    }
+    
+    // Obtener el bucket del usuario desde el middleware
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[SEARCH_BY_SIZE] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.type === 'dynamic' && tokenData.bucket) {
+          // Usuario dinámico
+          console.log(`[SEARCH_BY_SIZE] Usuario dinámico ${tokenData.username} usando bucket ${tokenData.bucket} desde token`);
+          bucketToUse = tokenData.bucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = 'user';
+          req.userType = 'dynamic';
+          req.userFolders = tokenData.folders || [];
+        }
+        else if (tokenData.username && userBucketMap[tokenData.username]) {
+          // Para usuarios estáticos
+          const tokenBucket = userBucketMap[tokenData.username];
+          console.log(`[SEARCH_BY_SIZE] Usuario estático ${tokenData.username} usando bucket ${tokenBucket} desde token en parámetros`);
+          bucketToUse = tokenBucket;
+          
+          // Actualizar también req.username y req.userRole para las validaciones posteriores
+          req.username = tokenData.username;
+          req.userRole = userRoleMap[tokenData.username] || 'user';
+        }
+      } catch (tokenError) {
+        console.error('[SEARCH_BY_SIZE] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+    
+    console.log(`Buscando en el bucket: ${bucketToUse}`);
+    
+    // Función para obtener todos los archivos recursivamente
+    const processedPaths = new Set();
+    const filesToCheck = [];
+    
+    // Función auxiliar para obtener archivos en una carpeta
+    async function getFilesInFolder(prefix = '') {
+      const { data, error } = await supabase.storage
+        .from(bucketToUse)
+        .list(prefix, {
+          sortBy: { column: 'name', order: 'asc' }
+        });
+      
+      if (error) {
+        console.error(`Error al listar ${prefix}:`, error);
+        return;
+      }
+      
+      const folders = [];
+      
+      for (const item of data) {
+        // Ignorar archivos especiales .folder y archivos de metadatos
+        if (item.name === '.folder' || 
+            item.name.endsWith('.metadata') ||
+            item.name.endsWith('.youtube.metadata') || 
+            item.name.endsWith('.audio.metadata') || 
+            item.name.endsWith('.image.metadata')) {
+          continue;
+        }
+        
+        const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+        
+        // Si es una carpeta, procesarla después
+        if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+          const folderPath = itemPath;
+          if (!processedPaths.has(folderPath)) {
+            processedPaths.add(folderPath);
+            folders.push(folderPath);
+          }
+        } else {
+          // Si es un archivo, añadirlo directamente a la lista
+          const fileSize = (item.metadata && item.metadata.size) || 0;
+          // Convertir bytes a KB
+          const fileSizeKB = Math.ceil(fileSize / 1024);
+          
+          // Filtrar por tamaño en KB
+          const passesMinSize = minSize === null || fileSizeKB >= minSize;
+          const passesMaxSize = maxSize === null || fileSizeKB <= maxSize;
+          
+          if (passesMinSize && passesMaxSize) {
+            filesToCheck.push({
+              name: item.name,
+              path: `/${itemPath}`,
+              size: fileSize,
+              sizeKB: fileSizeKB,
+              contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+              updated: item.updated_at,
+              isFolder: false
+            });
+          }
+        }
+      }
+      
+      // Procesar subcarpetas
+      for (const folder of folders) {
+        await getFilesInFolder(folder);
+      }
+    }
+    
+    // Iniciar búsqueda desde la raíz
+    await getFilesInFolder('');
+    
+    console.log(`Archivos que cumplen con el criterio de tamaño: ${filesToCheck.length}`);
+    
+    // Devolver resultados
+    res.json(filesToCheck);
+  } catch (error) {
+    console.error('Error en búsqueda por tamaño:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error al buscar archivos por tamaño', 
+      error: error.message 
+    });
+  }
+});
+
 // Endpoint para búsqueda combinada de contenido y etiquetas
 app.get('/api/search-content-with-tags', async (req, res) => {
   const startTime = new Date().getTime();

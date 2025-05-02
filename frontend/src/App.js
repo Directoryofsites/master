@@ -5,6 +5,10 @@ import SiteSettings from './components/SiteSettings';
 import UserManagement from './components/UserManagement';
 import TagManager from './components/TagManager';
 import BackupManager from './components/BackupManager';
+import ConfigMenu from './components/ConfigMenu';
+import Dashboard from './components/Dashboard';
+
+
 import { hasAdminPermission } from './services/auth';
 import './App.css';
 
@@ -16,12 +20,14 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
   const [showTagManager, setShowTagManager] = useState(false);
+  
   const [showBackupManager, setShowBackupManager] = useState(false);
-  const [siteSettings, setSiteSettings] = useState({
-    title: 'Contenedor de Documentos',
-    subtitle: 'Sistema Integral de Gestion',
-    logo: ''
-  });
+const [showDashboard, setShowDashboard] = useState(false);
+const [siteSettings, setSiteSettings] = useState({
+  title: 'Contenedor de Documentos',
+  subtitle: 'Sistema Integral de Gestion',
+  logo: ''
+});
 
   // Cargar datos de sesión y configuración del sitio
   useEffect(() => {
@@ -122,9 +128,21 @@ function App() {
       setShowSettings(false);
       setShowUserManagement(false);
       setShowTagManager(false);
+      setShowDashboard(false);
     }
   };
-
+  
+  const toggleDashboard = () => {
+    setShowDashboard(!showDashboard);
+    // Cerrar otros paneles si están abiertos
+    if (!showDashboard) {
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowTagManager(false);
+      setShowBackupManager(false);
+    }
+  };
+  
   const handleSaveSettings = (newSettings) => {
     setSiteSettings(newSettings);
     setShowSettings(false);
@@ -156,21 +174,19 @@ function App() {
             <span>Bienvenido, {username}</span>
             <span className="user-role">{userRole === 'admin' ? 'Administrador' : 'Usuario'}</span>
             <span className="user-bucket">Bucket: {localStorage.getItem('user_session') ? JSON.parse(localStorage.getItem('user_session')).bucket || 'No definido' : 'No definido'}</span>
+            
             {userRole === 'admin' && (
-              <>
-                <button onClick={toggleSettings} className="settings-btn">
-                  ⚙️ Configuración
-                </button>
-                <button onClick={toggleUserManagement} className="users-btn">
-                  👥 Gestión Usuarios
-                </button>
-                <button onClick={toggleBackupManager} className="backup-btn">
-                  💾 Copia Seguridad
-                </button>
-              </>
-            )}
+  <ConfigMenu 
+    onToggleSettings={toggleSettings}
+    onToggleUserManagement={toggleUserManagement}
+    onToggleTagManager={toggleTagManager}
+    onToggleBackupManager={toggleBackupManager}
+    onToggleDashboard={toggleDashboard}
+  />
+)}
 
-{(userRole === 'admin' || hasAdminPermission('manage_tags')) && (
+{/* Mantener acceso a gestión de etiquetas para usuarios con permiso específico */}
+{!userRole === 'admin' && hasAdminPermission('manage_tags') && (
   <button onClick={toggleTagManager} className="tags-btn">
     🏷️ Gestión Etiquetas
   </button>
@@ -225,6 +241,14 @@ function App() {
           </div>
         </div>
       )}
+      {showDashboard && userRole === 'admin' && (
+  <div className="modal-overlay dashboard-modal">
+    <div className="modal-content dashboard-modal-content">
+      <button onClick={toggleDashboard} className="close-modal">×</button>
+      <Dashboard onClose={toggleDashboard} />
+    </div>
+  </div>
+)}
     </div>
   );
 }

@@ -14,7 +14,9 @@ const FileExplorer = ({ userRole, username }) => {
   const [isSearchMode, setIsSearchMode] = useState(false);  // Nuevo estado para modo de búsqueda
   const [searchResults, setSearchResults] = useState([]);   // Estado para resultados de búsqueda
   const [searchTerm, setSearchTerm] = useState('');         // Almacenar el término de búsqueda actual
+  
   const [selectedFile, setSelectedFile] = useState(null);
+  const [isSizeSearch, setIsSizeSearch] = useState(false);  // Estado para búsqueda por tamaño
 
   const fetchFiles = async (path) => {
     if (isSearchMode) return; // No cargar archivos si estamos en modo búsqueda
@@ -61,125 +63,140 @@ const FileExplorer = ({ userRole, username }) => {
     fetchFiles(currentPath);
   };
 
-  // Función mejorada para manejar la búsqueda (normal, por etiquetas y por fecha)
-
-  const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false, filterMetadata = true, isContentSearch = false) => {
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      let results;
-      
-      // Verificar si ya recibimos resultados directos (para búsqueda combinada)
-      if (isDirectResults) {
-        console.log('Recibidos resultados directos de búsqueda combinada:', term.length);
-        results = term; // En este caso, term contiene directamente los resultados
-        setSearchTerm('Búsqueda combinada');
-      }
-      else if (isTagSearch) {
-        console.log('Iniciando búsqueda por etiqueta:', term);
-        setSearchTerm(term);
-        
-        // Indicar al usuario que la búsqueda puede tardar
-        setError('Buscando archivos con la etiqueta. Esto puede tardar un momento...');
-        
-        // NUEVO: Usar la función optimizada del API
-        results = await api.searchFilesByTag(term);
-        console.log('Resultados finales de búsqueda por etiqueta:', results);
-      }
-
-      else if (isDateSearch) {
-        console.log('Iniciando búsqueda por fecha:', term);
-        setSearchTerm(term);
-        
-        // Indicar al usuario que la búsqueda puede tardar
-        setError('Buscando archivos por fecha. Esto puede tardar un momento...');
-        
-        // Procesar parámetros de búsqueda por fecha
-        let searchDate;
-        let searchType;
-        
-        if (term.startsWith('date:')) {
-          searchType = 'specific';
-          searchDate = term.substring(5); // Eliminar 'date:' del inicio
-        } else if (term.startsWith('month:')) {
-          searchType = 'month';
-          searchDate = term.substring(6); // Eliminar 'month:' del inicio
-        } else if (term.startsWith('year:')) {
-          searchType = 'year';
-          searchDate = term.substring(5); // Eliminar 'year:' del inicio
-        } else {
-          throw new Error('Formato de fecha inválido');
-        }
-        
-        console.log('Parámetros de búsqueda por fecha:', { searchType, searchDate });
-        
-        // NUEVO: Usar la función optimizada del API
-        results = await api.searchFilesByDate(searchDate, searchType);
-        console.log('Resultados finales de búsqueda por fecha:', results);
-      }
-
-      else if (isContentSearch) {
-        console.log('Iniciando búsqueda por contenido:', term);
-        setSearchTerm(term);
-        
-        // Indicar al usuario que la búsqueda puede tardar
-        setError('Buscando en el contenido de los archivos. Esto puede tardar un momento...');
-        
-        // Ya tenemos los resultados directos de la búsqueda por contenido
-        results = await api.searchByContent(term);
-        
-        // Marcar los resultados como encontrados por contenido para visualización
-        results = results.map(file => ({
-          ...file,
-          foundByContent: true
-        }));
-        
-        console.log('Resultados finales de búsqueda por contenido:', results);
-      }
-
-      else {
-        // Búsqueda normal por nombre
-        setSearchTerm(term);
-        results = await api.searchFiles(term);
-      }
+  // Función mejorada para manejar la búsqueda (normal, por etiquetas, por fecha y por tamaño)
+const handleSearch = async (term, isTagSearch = false, isDateSearch = false, dateSearchType = 'specific', isDirectResults = false, filterMetadata = true, isContentSearch = false, isSizeSearchResults = false) => {
+  setIsLoading(true);
+  setError(null);
+  let results = [];
   
-      // Filtrar archivos de metadata si es necesario
-      if (filterMetadata) {
-        results = results.filter(file => {
-          return !file.name.endsWith('.metadata') && 
-                 !file.name.endsWith('.youtube.metadata') && 
-                 !file.name.endsWith('.audio.metadata') &&
-                 !file.name.endsWith('.image.metadata') &&
-                 !file.name.endsWith('.access.metadata');
-        });
-        console.log('Resultados después de filtrar archivos metadata:', results.length);
-      }
-    
-      setSearchResults(results);
-      setIsSearchMode(true);
-      
-      // Mostrar mensaje si no hay resultados
-      if (results.length === 0) {
-        if (isTagSearch) {
-          setError(`No se encontraron archivos con la etiqueta "${term}"`);
-        } else if (isDateSearch) {
-          setError(`No se encontraron archivos para la fecha especificada`);
-        } else {
-          setError(`No se encontraron resultados para "${term}"`);
-        }
-      } else {
-        // Limpiar el mensaje de error si hay resultados
-        setError(null);
-      }
-    } catch (err) {
-      console.error('Error en la búsqueda:', err);
-      setError(`Error al realizar la búsqueda: ${err.message}`);
-      setIsSearchMode(false);
-    } finally {
-      setIsLoading(false);
+  try {
+    // Verificar si ya recibimos resultados directos (para búsqueda combinada)
+    if (isDirectResults) {
+      console.log('Recibidos resultados directos de búsqueda combinada:', term.length);
+      results = term; // En este caso, term contiene directamente los resultados
+      setSearchTerm('Búsqueda combinada');
+      setIsSizeSearch(isSizeSearchResults); // Actualizar estado para búsqueda por tamaño
     }
-  };
+    else if (isTagSearch) {
+      console.log('Iniciando búsqueda por etiqueta:', term);
+      setSearchTerm(term);
+      setIsSizeSearch(false);
+      
+      // Indicar al usuario que la búsqueda puede tardar
+      setError('Buscando archivos con la etiqueta. Esto puede tardar un momento...');
+      
+      // NUEVO: Usar la función optimizada del API
+      results = await api.searchFilesByTag(term);
+      console.log('Resultados finales de búsqueda por etiqueta:', results);
+    }
+    else if (isDateSearch) {
+      console.log('Iniciando búsqueda por fecha:', term);
+      setSearchTerm(term);
+      setIsSizeSearch(false);
+      
+      // Indicar al usuario que la búsqueda puede tardar
+      setError('Buscando archivos por fecha. Esto puede tardar un momento...');
+      
+      // Procesar parámetros de búsqueda por fecha
+      let searchDate;
+      let searchType;
+      
+      if (term.startsWith('date:')) {
+        searchType = 'specific';
+        searchDate = term.substring(5); // Eliminar 'date:' del inicio
+      } else if (term.startsWith('month:')) {
+        searchType = 'month';
+        searchDate = term.substring(6); // Eliminar 'month:' del inicio
+      } else if (term.startsWith('year:')) {
+        searchType = 'year';
+        searchDate = term.substring(5); // Eliminar 'year:' del inicio
+      } else {
+        throw new Error('Formato de fecha inválido');
+      }
+      
+      console.log('Parámetros de búsqueda por fecha:', { searchType, searchDate });
+      
+      // NUEVO: Usar la función optimizada del API
+      results = await api.searchFilesByDate(searchDate, searchType);
+      console.log('Resultados finales de búsqueda por fecha:', results);
+    }
+    else if (isContentSearch) {
+      console.log('Iniciando búsqueda por contenido:', term);
+      setSearchTerm(term);
+      setIsSizeSearch(false);
+      
+      // Indicar al usuario que la búsqueda puede tardar
+      setError('Buscando en el contenido de los archivos. Esto puede tardar un momento...');
+      
+      // Ya tenemos los resultados directos de la búsqueda por contenido
+      results = await api.searchByContent(term);
+      
+      // Marcar los resultados como encontrados por contenido para visualización
+      results = results.map(file => ({
+        ...file,
+        foundByContent: true
+      }));
+      
+      console.log('Resultados finales de búsqueda por contenido:', results);
+    }
+    else if (isSizeSearchResults) {
+      console.log('Iniciando búsqueda por tamaño:', term);
+      setSearchTerm(term);
+      setIsSizeSearch(true);
+      
+      // Para búsqueda por tamaño, los resultados ya vienen directamente
+      results = term;
+    }
+    else {
+      // Búsqueda normal por nombre
+      setSearchTerm(term);
+      setIsSizeSearch(false);
+      results = await api.searchFiles(term);
+    }
+  
+    // Filtrar archivos de metadata si es necesario
+    if (filterMetadata) {
+      results = results.filter(file => {
+        return !file.name.endsWith('.metadata') && 
+               !file.name.endsWith('.youtube.metadata') && 
+               !file.name.endsWith('.audio.metadata') &&
+               !file.name.endsWith('.image.metadata') &&
+               !file.name.endsWith('.access.metadata');
+      });
+      console.log('Resultados después de filtrar archivos metadata:', results.length);
+    }
+  
+    setSearchResults(results);
+    setIsSearchMode(true);
+    
+    // Mostrar mensaje si no hay resultados
+    if (results.length === 0) {
+      if (isTagSearch) {
+        setError(`No se encontraron archivos con la etiqueta "${term}"`);
+      } else if (isDateSearch) {
+        setError(`No se encontraron archivos para la fecha especificada`);
+      } else if (isSizeSearchResults) {
+        setError(`No se encontraron archivos con el tamaño especificado`);
+      } else {
+        setError(`No se encontraron resultados para "${term}"`);
+      }
+    } else {
+      // Limpiar el mensaje de error si hay resultados
+      setError(null);
+    }
+    
+    // Actualizar el estado de búsqueda por tamaño si se recibieron resultados directos
+    if (isDirectResults && isSizeSearchResults) {
+      setIsSizeSearch(true);
+    }
+  } catch (err) {
+    console.error('Error en la búsqueda:', err);
+    setError(`Error al realizar la búsqueda: ${err.message}`);
+    setIsSearchMode(false);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   // Función para obtener todos los archivos de forma recursiva
   const fetchAllFiles = async (path = '') => {
@@ -305,6 +322,7 @@ const findFilesByDate = async (files, dateSearch, searchType) => {
     setIsSearchMode(false);
     setSearchResults([]);
     setSearchTerm('');
+    setIsSizeSearch(false);
   };
 
   return (
@@ -335,15 +353,16 @@ const findFilesByDate = async (files, dateSearch, searchType) => {
         <div className="loading">Cargando...</div>
       ) : (
         <>
-         <FileList 
+<FileList 
   files={isSearchMode ? searchResults : files} 
   currentPath={currentPath} 
   onNavigate={handleNavigate} 
   userRole={userRole}
   onActionComplete={handleActionComplete}
   isSearchResults={isSearchMode}
-  onSelectFile={setSelectedFile}  // Añadir esta prop
-  selectedFile={selectedFile}     // Añadir esta prop
+  isSizeSearch={isSizeSearch}  // Añadir esta prop
+  onSelectFile={setSelectedFile}
+  selectedFile={selectedFile}
 />
           
           {!isSearchMode && (
