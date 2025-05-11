@@ -1,0 +1,71 @@
+{
+  "startTime": "2025-05-10T20:50:10.094Z",
+  "sourceBucket": "master",
+  "targetBucket": "contenedor004",
+  "tablesRestored": {
+    "settings": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "tags_by_bucket": {
+      "status": "success",
+      "count": 7,
+      "method": "insert_unique_only"
+    },
+    "user_accounts": {
+      "status": "success",
+      "count": 8,
+      "method": "insert_with_modification"
+    },
+    "dynamic_users": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "dynamic_user_accounts": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "users": {
+      "status": "error"
+    },
+    "tags": {
+      "status": "error"
+    },
+    "tags-with-categories": {
+      "status": "error"
+    },
+    "unique-categories": {
+      "status": "error"
+    }
+  },
+  "usersRestored": {
+    "total": 8,
+    "regular": 8,
+    "dynamic": 0
+  },
+  "filesRestored": {
+    "total": 51,
+    "folders": 0,
+    "regular": 39,
+    "metadata": 12,
+    "failed": 0
+  },
+  "errors": [
+    "Error al restaurar tabla users: undefined",
+    "Error al restaurar tabla tags: undefined",
+    "Error al restaurar tabla tags-with-categories: undefined",
+    "Error al restaurar tabla unique-categories: undefined"
+  ],
+  "usersVerified": {
+    "count": 8,
+    "examples": [
+      "Jacobo Bernal_master",
+      "Mariana_master",
+      "hector1_master",
+      "hector1_contenedor003_master",
+      "hector1_contenedor003_64785_master"
+    ]
+  },
+  "endTime": "2025-05-10T20:50:45.743Z",
+  "duration": 35.649
+}

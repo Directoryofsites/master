@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Depuración de Usuarios</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .column {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .highlight {
+            background-color: #ffffcc;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>Depuración de Usuarios en DocuBox</h1>
+    <div id="status"></div>
+    <div class="container">
+        <div class="column">
+            <h2>Configuración</h2>
+            <div>
+                <label for="bucket">Nombre del Bucket:</label>
+                <input type="text" id="bucket" value="contenedor005">
+            </div>
+            <div>
+                <button id="loadUsers">Cargar Usuarios</button>
+                <button id="checkApi">Verificar API</button>
+            </div>
+        </div>
+        <div class="column">
+            <h2>Resultados</h2>
+            <div id="results">
+                <p>Use los botones para cargar información.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuración de Supabase (completar con tus valores)
+        const supabaseUrl = prompt("Ingresa la URL de Supabase:");
+        const supabaseKey = prompt("Ingresa la clave de Supabase:");
+        
+        if (!supabaseUrl || !supabaseKey) {
+            document.getElementById('status').textContent = 'Se requieren las credenciales de Supabase';
+            document.getElementById('status').className = 'error';
+        } else {
+            const supabase = supabase.createClient(supabaseUrl, supabaseKey);
+            
+            document.getElementById('status').textContent = 'Conexión establecida con Supabase';
+            document.getElementById('status').className = 'success';
+            
+            // Cargar usuarios
+            document.getElementById('loadUsers').addEventListener('click', async () => {
+                const bucket = document.getElementById('bucket').value;
+                const resultsDiv = document.getElementById('results');
+                
+                resultsDiv.innerHTML = '<p>Cargando usuarios...</p>';
+                
+                try {
+                    // Intentar consulta con 'bucket'
+                    const { data: usersByBucket, error: bucketError } = await supabase
+                        .from('user_accounts')
+                        .select('*')
+                        .eq('bucket', bucket);
+                    
+                    if (bucketError) {
+                        throw new Error(`Error al consultar con bucket: ${bucketError.message}`);
+                    }
+                    
+                    // Intentar consulta con 'bucketId' (probablemente fallará si no existe)
+                    let usersByBucketId = [];
+                    let bucketIdError = null;
+                    
+                    try {
+                        const result = await supabase
+                            .from('user_accounts')
+                            .select('*')
+                            .eq('bucketId', bucket);
+                        
+                        usersByBucketId = result.data || [];
+                        bucketIdError = result.error;
+                    } catch (error) {
+                        bucketIdError = error;
+                    }
+                    
+                    // Mostrar resultados
+                    let html = `
+                        <h3>Consulta con bucket='${bucket}'</h3>
+                        <p>Encontrados: ${usersByBucket ? usersByBucket.length : 0} usuarios</p>
+                    `;
+                    
+                    if (usersByBucket && usersByBucket.length > 0) {
+                        html += `
+                            <table>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Username</th>
+                                    <th>Bucket</th>
+                                    <th>Active</th>
+                                    <th>Created By</th>
+                                </tr>
+                        `;
+                        
+                        usersByBucket.forEach(user => {
+                            html += `
+                                <tr>
+                                    <td>${user.id}</td>
+                                    <td>${user.username}</td>
+                                    <td>${user.bucket}</td>
+                                    <td>${user.active}</td>
+                                    <td>${user.created_by || 'N/A'}</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        html += '</table>';
+                    } else {
+                        html += '<p>No se encontraron usuarios con este bucket.</p>';
+                    }
+                    
+                    html += `
+                        <h3>Consulta con bucketId='${bucket}'</h3>
+                    `;
+                    
+                    if (bucketIdError) {
+                        html += `<p class="error">Error: ${bucketIdError.message}</p>`;
+                        if (bucketIdError.message.includes('does not exist')) {
+                            html += '<p>Este error es esperado si la columna bucketId no existe en la tabla.</p>';
+                        }
+                    } else {
+                        html += `<p>Encontrados: ${usersByBucketId ? usersByBucketId.length : 0} usuarios</p>`;
+                        
+                        if (usersByBucketId && usersByBucketId.length > 0) {
+                            html += '<table><!-- tabla similar para bucketId --></table>';
+                        } else {
+                            html += '<p>No se encontraron usuarios con este bucketId.</p>';
+                        }
+                    }
+                    
+                    resultsDiv.innerHTML = html;
+                } catch (error) {
+                    resultsDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+                }
+            });
+            
+            // Verificar API
+            document.getElementById('checkApi').addEventListener('click', async () => {
+                const bucket = document.getElementById('bucket').value;
+                const resultsDiv = document.getElementById('results');
+                
+                resultsDiv.innerHTML = '<p>Verificando API...</p>';
+                
+                try {
+                    // Simular una llamada a la API de usuarios (ajustar URL según tu aplicación)
+                    const response = await fetch(`/api/users?bucket=${bucket}`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    let html = `
+                        <h3>Respuesta de API para bucket='${bucket}'</h3>
+                        <p>Estado: ${response.status} ${response.statusText}</p>
+                        <p>Usuarios encontrados: ${data.length || 0}</p>
+                    `;
+                    
+                    if (data && data.length > 0) {
+                        html += `
+                            <table>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Username</th>
+                                    <th>Bucket</th>
+                                    <th>Active</th>
+                                </tr>
+                        `;
+                        
+                        data.forEach(user => {
+                            html += `
+                                <tr>
+                                    <td>${user.id}</td>
+                                    <td>${user.username}</td>
+                                    <td>${user.bucket || user.bucketId || 'N/A'}</td>
+                                    <td>${user.active}</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        html += '</table>';
+                    } else {
+                        html += '<p>No se encontraron usuarios en la respuesta de la API.</p>';
+                    }
+                    
+                    resultsDiv.innerHTML = html;
+                } catch (error) {
+                    resultsDiv.innerHTML = `
+                        <p class="error">Error: ${error.message}</p>
+                        <p>Esto puede ocurrir si la API no está disponible o la URL es incorrecta.</p>
+                        <p>Intenta revisar el código fuente de UserManagement.js para determinar cómo se están consultando los usuarios.</p>
+                    `;
+                }
+            });
+        }
+    </script>
+</body>
+</html>

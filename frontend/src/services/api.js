@@ -1493,7 +1493,25 @@ export const getUsers = async () => {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${BASE_URL}/admin/users`, {
+    // Obtener el bucket actual del token
+    let currentBucket = null;
+    try {
+      if (token) {
+        const tokenData = JSON.parse(atob(token));
+        currentBucket = tokenData.bucket || null;
+        console.log('[API-DEBUG] getUsers - Bucket actual del admin:', currentBucket);
+      }
+    } catch (error) {
+      console.error('[API-DEBUG] Error al decodificar token en getUsers:', error);
+    }
+
+    // Añadir el bucket como parámetro de consulta para filtrar usuarios por bucket
+    let url = `${BASE_URL}/admin/users`;
+    if (currentBucket) {
+      url += `?bucket=${encodeURIComponent(currentBucket)}`;
+    }
+
+    const response = await fetch(url, {
       headers: headers
     });
     
@@ -1524,6 +1542,24 @@ export const createUser = async (userData) => {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    // Decodificar el token para obtener información sobre el bucket del admin
+    let adminBucket = null;
+    try {
+      if (token) {
+        const tokenData = JSON.parse(atob(token));
+        adminBucket = tokenData.bucket || null;
+        console.log('[API-DEBUG] createUser - Bucket del admin:', adminBucket);
+      }
+    } catch (error) {
+      console.error('[API-DEBUG] Error al decodificar token en createUser:', error);
+    }
+
+    // Añadir el bucket del admin a los datos del usuario si no tiene uno definido
+    if (adminBucket && !userData.bucket) {
+      userData.bucket = adminBucket;
+      console.log('[API-DEBUG] createUser - Asignando bucket del admin al nuevo usuario:', adminBucket);
+    }
+
     const response = await fetch(`${BASE_URL}/admin/create-user`, {
       method: 'POST',
       headers: headers,
@@ -1540,7 +1576,6 @@ export const createUser = async (userData) => {
     throw error;
   }
 };
-
 /**
  * Actualiza un usuario existente
  * @param {string|number} userId - ID del usuario a actualizar

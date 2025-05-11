@@ -183,34 +183,37 @@ const prepareUserData = () => {
 };
   
   // Crear un nuevo usuario
-  const handleCreateUser = async (e) => {
-    e.preventDefault();
-    setError('');
+const handleCreateUser = async (e) => {
+  e.preventDefault();
+  setError('');
+  
+  // Validar datos
+  if (!formData.username || !formData.password) {
+    setError('El nombre de usuario y la contraseña son obligatorios');
+    return;
+  }
+  
+  try {
+    const userData = prepareUserData();
     
-    // Validar datos
-    if (!formData.username || !formData.password) {
-      setError('El nombre de usuario y la contraseña son obligatorios');
-      return;
-    }
+    // Agregar log de depuración
+    console.log('Enviando datos para nuevo usuario:', userData);
     
-    try {
-      const userData = prepareUserData();
-      console.log('Enviando datos para nuevo usuario:', userData);
-      
-      const data = await createUser(userData);
-      
-      if (data.success) {
-        alert('Usuario creado correctamente');
-        resetForm();
-        fetchUsers(); // Recargar lista de usuarios
-      } else {
-        setError(data.message || 'Error al crear usuario');
-      }
-    } catch (err) {
-      setError('Error de conexión al crear usuario');
-      console.error('Error al crear usuario:', err);
+    // Si no existe el campo bucket, la API lo agregará automáticamente usando el del admin
+    const data = await createUser(userData);
+    
+    if (data.success) {
+      alert('Usuario creado correctamente');
+      resetForm();
+      fetchUsers(); // Recargar lista de usuarios
+    } else {
+      setError(data.message || 'Error al crear usuario');
     }
-  };
+  } catch (err) {
+    setError('Error de conexión al crear usuario');
+    console.error('Error al crear usuario:', err);
+  }
+};
   
   // Actualizar un usuario existente
   const handleUpdateUser = async (e) => {

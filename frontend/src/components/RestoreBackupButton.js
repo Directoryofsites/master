@@ -3,8 +3,10 @@ import React, { useState, useRef } from 'react';
 /**
  * Componente de botón para restaurar copias de seguridad
  * Permite al usuario seleccionar un archivo de backup para restaurarlo
+ * @param {Object} props - Propiedades del componente
+ * @param {Function} props.onSuccess - Función a ejecutar después de una restauración exitosa
  */
-const RestoreBackupButton = () => {
+const RestoreBackupButton = ({ onSuccess }) => {
   const [status, setStatus] = useState('idle'); // idle, uploading, success, error
   const [message, setMessage] = useState('');
   const fileInputRef = useRef(null);
@@ -39,22 +41,50 @@ const RestoreBackupButton = () => {
       const auth = await import('../services/auth');
       const token = auth.getAuthToken();
 
+      // Obtener información del usuario y su bucket
+      const userSession = localStorage.getItem('user_session');
+      if (!userSession) {
+        throw new Error('No se pudo obtener información del usuario');
+      }
+      
+      const userData = JSON.parse(userSession);
+      const bucketName = userData.bucket;
+      
+      if (!bucketName) {
+        throw new Error('No se pudo determinar el bucket del usuario');
+      }
+      
       // Crear FormData para enviar el archivo
       const formData = new FormData();
-      formData.append('backup', file);
+      // Usa el mismo nombre que espera el servidor
+      formData.append('backupFile', file);
+      // Agrega explícitamente el nombre del bucket
+      formData.append('bucketName', bucketName);
+      
+      console.log(`[DEBUG] Enviando restauración para bucket: ${bucketName}`);
+      console.log(`[DEBUG] Tamaño del archivo: ${file.size} bytes`);
 
-      // URL completa al endpoint de restauración
-      const backendUrl = "https://master-production-5386.up.railway.app"; // URL de tu backend
+      // URL del endpoint de restauración
+      // Usa la misma URL que tu servidor backend local
+      const backendUrl = "http://localhost:3001";
       const restoreUrl = `${backendUrl}/api/admin/restore`;
-
+      
+      // Configurar la petición con un timeout mayor y sin caché
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minutos de timeout
+      
       // Enviar el archivo al servidor
       const response = await fetch(restoreUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          'Cache-Control': 'no-cache'
         },
-        body: formData
+        body: formData,
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Error en el servidor: ${response.status} ${response.statusText}`);
@@ -66,10 +96,16 @@ const RestoreBackupButton = () => {
       setStatus('success');
       setMessage('Restauración completada con éxito. El sistema se actualizará en breve.');
 
+      // Llamar a la función onSuccess si existe
+      if (typeof onSuccess === 'function') {
+        onSuccess();
+      }
+
       // Recargar la página después de 3 segundos para mostrar los cambios
       setTimeout(() => {
         window.location.reload();
       }, 3000);
+
     } catch (error) {
       console.error('Error en proceso de restauración:', error);
       setStatus('error');

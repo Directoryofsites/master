@@ -8,6 +8,8 @@ import BackupManager from './components/BackupManager';
 import ConfigMenu from './components/ConfigMenu';
 import Dashboard from './components/Dashboard';
 
+import BackupRestoreManager from './components/BackupRestoreManager';
+
 
 import { hasAdminPermission } from './services/auth';
 import './App.css';
@@ -234,13 +236,14 @@ const [siteSettings, setSiteSettings] = useState({
 )}
 
       {showBackupManager && userRole === 'admin' && (
-        <div className="modal-overlay backup-manager-modal">
-          <div className="modal-content backup-manager-modal-content">
-            <button onClick={toggleBackupManager} className="close-modal">×</button>
-            <BackupManager />
-          </div>
-        </div>
-      )}
+  <div className="modal-overlay backup-manager-modal">
+    <div className="modal-content backup-manager-modal-content">
+      <button onClick={toggleBackupManager} className="close-modal">×</button>
+      <BackupRestoreManager />
+    </div>
+  </div>
+)}
+
       {showDashboard && userRole === 'admin' && (
   <div className="modal-overlay dashboard-modal">
     <div className="modal-content dashboard-modal-content">

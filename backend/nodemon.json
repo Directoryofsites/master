@@ -1,0 +1,9 @@
+{
+  "ignore": [
+    "*.json",
+    "temp_uploads/*",
+    "restauracion-*.json",
+    "restauration-running-*.flag"
+  ],
+  "delay": "1000"
+}

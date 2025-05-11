@@ -1,0 +1,71 @@
+{
+  "startTime": "2025-05-10T22:08:18.923Z",
+  "sourceBucket": "contenedor003",
+  "targetBucket": "contenedor005",
+  "tablesRestored": {
+    "settings": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "tags_by_bucket": {
+      "status": "success",
+      "count": 3,
+      "method": "insert_unique_only"
+    },
+    "user_accounts": {
+      "status": "success",
+      "count": 11,
+      "method": "insert_with_modification"
+    },
+    "dynamic_users": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "dynamic_user_accounts": {
+      "status": "skipped",
+      "reason": "file_not_found"
+    },
+    "users": {
+      "status": "error"
+    },
+    "tags": {
+      "status": "error"
+    },
+    "tags-with-categories": {
+      "status": "error"
+    },
+    "unique-categories": {
+      "status": "error"
+    }
+  },
+  "usersRestored": {
+    "total": 16,
+    "regular": 16,
+    "dynamic": 0
+  },
+  "filesRestored": {
+    "total": 6,
+    "folders": 0,
+    "regular": 2,
+    "metadata": 4,
+    "failed": 0
+  },
+  "errors": [
+    "Error al restaurar tabla users: undefined",
+    "Error al restaurar tabla tags: undefined",
+    "Error al restaurar tabla tags-with-categories: undefined",
+    "Error al restaurar tabla unique-categories: undefined"
+  ],
+  "usersVerified": {
+    "count": 71,
+    "examples": [
+      "hector1_contenedor003",
+      "hector1_contenedor003_64785",
+      "hector1_contenedor003_88833",
+      "hector1_contenedor003_14186",
+      "hector1_contenedor003_16457"
+    ]
+  },
+  "endTime": "2025-05-10T22:08:31.430Z",
+  "duration": 12.507
+}

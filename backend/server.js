@@ -2,9 +2,145 @@
 require('dotenv').config();
 const { spawn } = require('child_process');
 const fallbackTranscribe = require('./fallback_transcribe');
+const { v4: uuidv4 } = require('uuid');
 
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
+
+// Función reutilizable para insertar etiquetas por lotes
+async function insertTagsBatch(tags, bucket, logPrefix = '[TAGS]') {
+  console.log(`${logPrefix} Insertando ${tags.length} etiquetas para el bucket ${bucket}`);
+  
+  // Asegurar que todas las etiquetas tengan UUIDs válidos y apunten al bucket correcto
+  const preparedTags = tags.map(tag => {
+    // Preservar ID si ya es un UUID válido, de lo contrario generar uno nuevo
+    const useExistingId = tag.id && isValidUUID(tag.id);
+    return {
+      ...tag,
+      id: useExistingId ? tag.id : uuidv4(),
+      bucket: bucket
+    };
+  });
+  
+  // Verificar UUIDs
+  function isValidUUID(id) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+  }
+  
+  let successCount = 0;
+  let errorCount = 0;
+  let failedTags = [];
+  
+  try {
+    const batchSize = 20; // Reducir el tamaño del lote para mayor seguridad
+    
+    for (let i = 0; i < preparedTags.length; i += batchSize) {
+      const batch = preparedTags.slice(i, i + batchSize);
+      console.log(`${logPrefix} Insertando lote de etiquetas ${i+1}-${Math.min(i+batchSize, preparedTags.length)} de ${preparedTags.length}`);
+      
+      try {
+        const { data, error: insertError } = await supabase
+          .from('tags_by_bucket')
+          .insert(batch);
+        
+        if (insertError) {
+          console.error(`${logPrefix} Error al insertar lote de etiquetas:`, insertError);
+          
+          // Si falla el lote completo, intentar insertar de una en una
+          console.log(`${logPrefix} Intentando insertar etiquetas individualmente...`);
+          
+          for (const tag of batch) {
+            try {
+              const { data: singleData, error: singleError } = await supabase
+                .from('tags_by_bucket')
+                .insert([tag]);
+              
+              if (singleError) {
+                console.error(`${logPrefix} Error al insertar etiqueta individual "${tag.tag_name}":`, singleError);
+                errorCount++;
+                failedTags.push({
+                  tag: tag.tag_name,
+                  category: tag.category,
+                  error: singleError.message
+                });
+              } else {
+                successCount++;
+              }
+            } catch (singleCatchError) {
+              console.error(`${logPrefix} Excepción al insertar etiqueta individual:`, singleCatchError);
+              errorCount++;
+              failedTags.push({
+                tag: tag.tag_name,
+                category: tag.category,
+                error: singleCatchError.message
+              });
+            }
+          }
+        } else {
+          successCount += batch.length;
+          console.log(`${logPrefix} Lote de etiquetas insertado correctamente`);
+        }
+      } catch (batchError) {
+        console.error(`${logPrefix} Excepción al insertar lote:`, batchError);
+        
+        // Intentar inserción individual en caso de excepción
+        for (const tag of batch) {
+          try {
+            const { data: singleData, error: singleError } = await supabase
+              .from('tags_by_bucket')
+              .insert([tag]);
+            
+            if (singleError) {
+              errorCount++;
+              failedTags.push({
+                tag: tag.tag_name,
+                category: tag.category,
+                error: singleError.message
+              });
+            } else {
+              successCount++;
+            }
+          } catch (singleCatchError) {
+            errorCount++;
+            failedTags.push({
+              tag: tag.tag_name,
+              category: tag.category,
+              error: singleCatchError.message
+            });
+          }
+        }
+      }
+    }
+    
+    // Registrar detalles de errores si los hay
+    if (failedTags.length > 0) {
+      console.log(`${logPrefix} Detalle de ${failedTags.length} etiquetas que no se pudieron insertar:`);
+      failedTags.slice(0, 10).forEach((failedTag, index) => {
+        console.log(`${logPrefix} Fallo #${index + 1}: ${failedTag.tag} (${failedTag.category}) - ${failedTag.error}`);
+      });
+      if (failedTags.length > 10) {
+        console.log(`${logPrefix} ... y ${failedTags.length - 10} más`);
+      }
+    }
+    
+    return {
+      success: successCount > 0,
+      successCount,
+      errorCount,
+      failedTags,
+      totalTags: preparedTags.length
+    };
+  } catch (error) {
+    console.error(`${logPrefix} Error general en inserción de etiquetas:`, error);
+    return {
+      success: false,
+      successCount,
+      errorCount: preparedTags.length - successCount,
+      error: error.message,
+      totalTags: preparedTags.length
+    };
+  }
+}
 
 // Configuración para detectar el entorno
 const isProduction = process.env.NODE_ENV === 'production';
@@ -155,6 +291,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Importar módulo para extraer archivos ZIP
+const extract = require('extract-zip');
+
 const os = require('os');
 
 // Asegurarse de que existe el directorio de almacenamiento local
@@ -210,6 +349,9 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'production' ? {} : err.message
   });
 });
+
+// Ruta para restauración mediante script independiente
+app.use('/api', require('./routes/restore-bridge'));
 
 // Configuración de Supabase (sin valores predeterminados para garantizar separación)
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -466,6 +608,55 @@ async function getUsersByAdmin(adminUsername) {
   } catch (error) {
     console.error('Error en getUsersByAdmin:', error);
     return { success: false, error };
+  }
+}
+
+async function getUsersByAdminAndBucket(adminUsername, bucketName) {
+  try {
+    console.log(`[getUsersByAdminAndBucket] Buscando usuarios creados por: ${adminUsername}, bucket: ${bucketName}`);
+    
+    // Verificar parámetros
+    if (!adminUsername) {
+      return { success: false, error: 'Se requiere nombre de administrador' };
+    }
+    
+    // Iniciar la consulta básica
+    let query = supabase.from('user_accounts').select('*');
+    
+    // Si hay un bucket específico, filtrar por él
+    if (bucketName) {
+      console.log(`[getUsersByAdminAndBucket] Filtrando por bucket: ${bucketName}`);
+      query = query.eq('bucket', bucketName);
+    } else {
+      console.log('[getUsersByAdminAndBucket] ADVERTENCIA: No se proporcionó bucket para filtrar');
+    }
+    
+    // Obtener solo usuarios activos
+    // Comentamos temporalmente esta línea para ver TODOS los usuarios, incluso inactivos
+    // query = query.eq('active', true);
+    
+    // Ejecutar la consulta
+    const { data, error } = await query;
+    
+    if (error) {
+      console.error('[getUsersByAdminAndBucket] Error en consulta:', error);
+      return { success: false, error: error.message };
+    }
+    
+    console.log(`[getUsersByAdminAndBucket] Encontrados ${data ? data.length : 0} usuarios`);
+    
+    // Log detallado para depuración
+    if (data && data.length > 0) {
+      console.log('[getUsersByAdminAndBucket] Primeros 5 usuarios:');
+      data.slice(0, 5).forEach(user => {
+        console.log(`- ${user.username} (bucket: ${user.bucket}, active: ${user.active})`);
+      });
+    }
+    
+    return { success: true, data: data || [] };
+  } catch (error) {
+    console.error('[getUsersByAdminAndBucket] Error general:', error);
+    return { success: false, error: error.message };
   }
 }
 
@@ -5345,6 +5536,70 @@ app.get('/api/admin/backup', async (req, res) => {
       });
     }
 
+    // 7.5 Exportar datos de la base de datos (metadatos, usuarios, etiquetas)
+console.log('[BACKUP] Exportando metadatos de la base de datos...');
+    
+try {
+  const dbExports = {};
+  
+  // Exportar tabla de usuarios
+  console.log('[BACKUP] Exportando usuarios...');
+  const { data: users, error: usersError } = await supabase
+    .from('user_accounts')
+    .select('*')
+    .eq('active', true);
+  
+  if (usersError) {
+    console.error('[BACKUP] Error al exportar usuarios:', usersError);
+  } else {
+    dbExports.users = users;
+    console.log(`[BACKUP] Exportados ${users.length} usuarios`);
+  }
+  
+  // Exportar tabla de etiquetas
+  console.log('[BACKUP] Exportando etiquetas...');
+  // Recolectar todas las etiquetas para el bucket actual
+  // Nota: asegurarse de usar el bucketName correcto
+  const bucketToBackup = bucketName || defaultBucketName;
+  console.log(`[BACKUP] Recolectando etiquetas para bucket: ${bucketToBackup}`);
+  
+  const { data: tags, error: tagsError } = await supabase
+    .from('tags_by_bucket')
+    .select('*')
+    .eq('bucket', bucketToBackup);
+  
+  if (tagsError) {
+    console.error('[BACKUP] Error al exportar etiquetas:', tagsError);
+  } else {
+    dbExports.tags = tags;
+    console.log(`[BACKUP] Exportadas ${tags?.length || 0} etiquetas`);
+    
+    // Mostrar categorías encontradas para diagnóstico
+    if (tags && tags.length > 0) {
+      const categories = [...new Set(tags.map(tag => tag.category))];
+      console.log(`[BACKUP] Categorías de etiquetas encontradas: ${categories.join(', ')}`);
+    }
+  }      
+      if (tagsError) {
+        console.error('[BACKUP] Error al exportar etiquetas:', tagsError);
+      } else {
+        dbExports.tags = tags;
+        console.log(`[BACKUP] Exportadas ${tags.length} etiquetas`);
+      }
+      
+      // Guardar toda la información en un archivo JSON
+      const dbExportPath = path.join(tempDir, 'database-export.json');
+      fs.writeFileSync(dbExportPath, JSON.stringify(dbExports, null, 2));
+      
+      // Añadir el archivo de exportación al ZIP
+      archive.append(fs.createReadStream(dbExportPath), { name: 'database-export.json' });
+      console.log('[BACKUP] Metadatos de base de datos añadidos al backup');
+      
+    } catch (dbExportError) {
+      console.error('[BACKUP] Error al exportar datos de la base de datos:', dbExportError);
+      // No bloquear el proceso de backup por este error
+    }
+
     // Verificar token en la URL
     let userRole = req.userRole || 'guest';
     let bucketToUse = req.bucketName || defaultBucketName;
@@ -5403,8 +5658,13 @@ app.get('/api/admin/backup', async (req, res) => {
     archive.on('error', (err) => {
       console.error('[BACKUP] Error del archivador:', err);
       if (!res.headersSent) {
-        return res.status(500).json({ 
+        return res.status(500).json({
+          
+          
           success: false, 
+
+
+          
           message: 'Error al crear archivo ZIP', 
           error: err.message 
         });
@@ -5443,15 +5703,11 @@ app.get('/api/admin/backup', async (req, res) => {
         let filesList = [];
 
         // Procesar archivos primero
-        for (const item of data) {
-          // Ignorar archivos especiales
-          if (item.name === '.folder' || 
-              item.name.endsWith('.metadata') ||
-              item.name.endsWith('.youtube.metadata') || 
-              item.name.endsWith('.audio.metadata') || 
-              item.name.endsWith('.image.metadata')) {
-            continue;
-          }
+for (const item of data) {
+  // Solo ignorar archivos de sistema, INCLUIR todos los metadatos
+  if (item.name === '.folder') {
+    continue;
+  }
           
           const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
           
@@ -5593,6 +5849,290 @@ console.log(`[BACKUP] Token presente en URL: ${!!req.query.token}`);
     } else {
       try { res.end(); } catch (e) {}
     }
+  }
+});
+
+// Endpoint para restaurar una copia de seguridad
+app.post('/api/admin/restore', upload.single('backupFile'), async (req, res) => {
+  console.log('[RESTORE] Iniciando proceso de restauración');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden restaurar copias de seguridad'
+      });
+    }
+
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de copia de seguridad'
+      });
+    }
+
+    // Verificar que el archivo es un ZIP
+    if (!req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un ZIP válido de copia de seguridad'
+      });
+    }
+
+    // Obtener el bucket a restaurar
+    const bucketToRestore = req.bucketName || defaultBucketName;
+    console.log(`[RESTORE] Restaurando al bucket: ${bucketToRestore}`);
+
+    // Crear un directorio temporal para extraer el zip
+    const tempDir = path.join(os.tmpdir(), 'restore-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`[RESTORE] Directorio temporal creado: ${tempDir}`);
+
+    // Guardar el archivo ZIP recibido con mayor cuidado
+const zipPath = path.join(tempDir, 'backup.zip');
+try {
+  // Usar writeFile con un callback en lugar de writeFileSync para mejor manejo
+  fs.writeFile(zipPath, req.file.buffer, { encoding: null, flag: 'wx' }, (writeErr) => {
+    if (writeErr) {
+      console.error(`[RESTORE] Error al guardar archivo ZIP: ${writeErr.message}`);
+      throw writeErr;
+    }
+    console.log(`[RESTORE] Archivo ZIP guardado correctamente: ${zipPath} (tamaño: ${req.file.buffer.length} bytes)`);
+    
+    // Verificar que el archivo existe y tiene el tamaño correcto
+    const stats = fs.statSync(zipPath);
+    console.log(`[RESTORE] Archivo ZIP verificado: ${zipPath} (tamaño: ${stats.size} bytes)`);
+    
+    if (stats.size !== req.file.buffer.length) {
+      throw new Error(`Tamaño de archivo incorrecto: esperado ${req.file.buffer.length}, obtenido ${stats.size}`);
+    }
+  });
+} catch (writeError) {
+  console.error(`[RESTORE] Error al guardar archivo ZIP: ${writeError.message}`);
+  throw writeError;
+}
+
+       
+if (fs.existsSync(dbExportPath)) {
+  console.log('[RESTORE] Encontrado archivo de exportación de base de datos, restaurando...');
+  
+  try {
+    const dbExport = JSON.parse(fs.readFileSync(dbExportPath, 'utf8'));
+    
+    // Restaurar usuarios (sin sobrescribir existentes)
+    if (dbExport.users && Array.isArray(dbExport.users) && dbExport.users.length > 0) {
+      console.log(`[RESTORE] Restaurando ${dbExport.users.length} usuarios...`);
+      
+      for (const user of dbExport.users) {
+        // Verificar si el usuario ya existe
+        const { data: existingUser } = await supabase
+          .from('user_accounts')
+          .select('id')
+          .eq('username', user.username)
+          .single();
+        
+        if (!existingUser) {
+          // Insertar usuario nuevo
+          const { error: createError } = await supabase
+            .from('user_accounts')
+            .insert([user]);
+          
+          if (createError) {
+            console.error(`[RESTORE] Error al crear usuario ${user.username}:`, createError);
+          } else {
+            console.log(`[RESTORE] Usuario ${user.username} creado correctamente`);
+          }
+        } else {
+          // Actualizar usuario existente sin cambiar contraseña
+          const { password_hash, ...userData } = user;
+          
+          const { error: updateError } = await supabase
+            .from('user_accounts')
+            .update(userData)
+            .eq('id', existingUser.id);
+          
+          if (updateError) {
+            console.error(`[RESTORE] Error al actualizar usuario ${user.username}:`, updateError);
+          } else {
+            console.log(`[RESTORE] Usuario ${user.username} actualizado correctamente`);
+          }
+        }
+      }
+    }
+    
+    // Restaurar etiquetas
+    if (dbExport.tags && Array.isArray(dbExport.tags) && dbExport.tags.length > 0) {
+      console.log(`[RESTORE] Restaurando ${dbExport.tags.length} etiquetas...`);
+      
+      // Determinar el bucket al que se está restaurando
+      const bucketToRestore = req.body.targetBucket || bucketToUse;
+      
+      // Primero eliminar etiquetas existentes para el bucket
+      console.log(`[RESTORE] Eliminando etiquetas existentes para el bucket ${bucketToRestore}...`);
+      const { error: deleteError } = await supabase
+        .from('tags_by_bucket')
+        .delete()
+        .eq('bucket', bucketToRestore);
+      
+      if (deleteError) {
+        console.error('[RESTORE] Error al eliminar etiquetas existentes:', deleteError);
+      } else {
+        console.log(`[RESTORE] Etiquetas existentes eliminadas correctamente`);
+      }
+      
+       
+      // Insertar etiquetas del backup en lotes de 50 para evitar límites de API
+      const batchSize = 50;
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (let i = 0; i < tagsToInsert.length; i += batchSize) {
+        const batch = tagsToInsert.slice(i, i + batchSize);
+        console.log(`[RESTORE] Insertando lote de etiquetas ${i + 1}-${Math.min(i + batchSize, tagsToInsert.length)}...`);
+        
+        // Insertar lote actual
+        const { data, error: insertError } = await supabase
+          .from('tags_by_bucket')
+          .insert(batch);
+        
+        if (insertError) {
+          console.error(`[RESTORE] Error al insertar lote de etiquetas:`, insertError);
+          errorCount += batch.length;
+        } else {
+          successCount += batch.length;
+          console.log(`[RESTORE] Lote de etiquetas insertado correctamente`);
+        }
+      }
+      
+      console.log(`[RESTORE] Restauración de etiquetas completada: ${successCount} exitosas, ${errorCount} con errores`);
+    } else {
+      console.log(`[RESTORE] No se encontraron etiquetas para restaurar en el backup`);
+    }
+  } catch (dbRestoreError) {
+    console.error('[RESTORE] Error al restaurar datos de la base de datos:', dbRestoreError);
+  }
+} else {
+  console.log('[RESTORE] No se encontró archivo de exportación de base de datos');
+}
+
+    // Ahora recorremos los archivos extraídos y los subimos a Supabase
+    const processDirectory = async (directory, prefix = '') => {
+      const entries = fs.readdirSync(path.join(tempDir, directory), { withFileTypes: true });
+      
+      // Función para determinar si este es un archivo de metadatos especial
+      const isSpecialMetadataFile = (filename) => {
+        return filename.endsWith('.metadata') || 
+               filename.endsWith('.youtube.metadata') || 
+               filename.endsWith('.audio.metadata') ||
+               filename.endsWith('.image.metadata');
+      };
+      
+      // Priorizar archivos - metadatos al final para garantizar que primero existan los archivos
+      let standardEntries = [];
+      let metadataEntries = [];
+      
+      // Separar archivos normales de archivos de metadatos
+      for (const entry of entries) {
+        if (isSpecialMetadataFile(entry.name)) {
+          metadataEntries.push(entry);
+        } else {
+          standardEntries.push(entry);
+        }
+      }
+      
+      // Procesar primero los archivos estándar, luego los metadatos
+      const orderedEntries = [...standardEntries, ...metadataEntries];
+      
+      // Procesar todos los archivos en el orden correcto
+      for (const entry of orderedEntries) {
+        const entryPath = path.join(directory, entry.name);
+        const fullPath = path.join(tempDir, entryPath);
+        const remotePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        if (entry.isDirectory()) {
+          // Si es directorio, procesar recursivamente
+          await processDirectory(entryPath, remotePath);
+        } else {
+          // Si es archivo, subir a Supabase
+          console.log(`[RESTORE] Subiendo archivo: ${remotePath}`);
+          
+          try {
+            const fileContent = fs.readFileSync(fullPath);
+            const contentType = getContentType(entry.name);
+            
+            const { error } = await supabase.storage
+              .from(bucketToRestore)
+              .upload(remotePath, fileContent, {
+                contentType,
+                upsert: true // Sobrescribir si existe
+              });
+            
+            if (error) {
+              console.error(`[RESTORE] Error al subir ${remotePath}:`, error);
+            }
+          } catch (fileError) {
+            console.error(`[RESTORE] Error al leer o subir ${remotePath}:`, fileError);
+          }
+        }
+      }
+    };
+    // Función auxiliar para determinar el tipo de contenido
+    function getContentType(filename) {
+      const ext = path.extname(filename).toLowerCase();
+      const mimeTypes = {
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.json': 'application/json',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.ppt': 'application/vnd.ms-powerpoint',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.zip': 'application/zip',
+        '.txt': 'text/plain',
+        '.mp3': 'audio/mpeg',
+        '.mp4': 'video/mp4',
+        '.avi': 'video/x-msvideo',
+        '.mov': 'video/quicktime',
+        '.svg': 'image/svg+xml'
+      };
+      
+      return mimeTypes[ext] || 'application/octet-stream';
+    }
+
+    // Iniciar la restauración procesando el directorio raíz
+    await processDirectory('');
+
+    // Limpiar archivos temporales
+    console.log(`[RESTORE] Limpiando archivos temporales: ${tempDir}`);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+
+    res.status(200).json({
+      success: true,
+      message: 'Restauración completada correctamente',
+      bucket: bucketToRestore,
+      details: {
+        metadataRestored: fs.existsSync(dbExportPath),
+        filesProcessed: true
+      }
+    });
+  } catch (error) {
+    console.error('[RESTORE] Error general:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error al restaurar la copia de seguridad',
+      error: error.message
+    });
   }
 });
 
@@ -7120,36 +7660,47 @@ app.post('/api/login', express.json(), async (req, res) => {
     } else {
       
               // Verificar usuarios dinámicos (en la base de datos)
-        console.log(`Usuario ${username} no encontrado en usuarios estáticos, verificando en BD...`);
-        
-        const user = await getUserByUsername(username);
-        
-        if (user && await comparePassword(password, user.password_hash)) {
-          // Verificar explícitamente que el bucket asignado al usuario sea válido
-          if (!user.bucket) {
-            console.error(`Error: Usuario dinámico ${username} no tiene bucket asignado`);
-            return res.status(401).json({
-              success: false,
-              message: 'Error de configuración: Usuario no tiene bucket asignado'
-            });
-          }
-          
-          console.log(`Usuario dinámico ${username} autenticado para bucket ${user.bucket}`);
-          console.log(`Carpetas asignadas: ${JSON.stringify(user.assigned_folders || [])}`);
-          
-          // Construir información de carpetas asignadas
-          const userFolders = user.assigned_folders || [];
-          
-          // Generar token con información del usuario
-          const token = Buffer.from(JSON.stringify({
-            username: user.username,
-            role: 'user', // Los usuarios dinámicos siempre tienen rol 'user'
-            bucket: user.bucket,
-            folders: userFolders,
-            createdBy: user.created_by,
-            type: 'dynamic',
-            userId: user.id
-          })).toString('base64');
+console.log(`Usuario ${username} no encontrado en usuarios estáticos, verificando en BD...`);
+
+const user = await getUserByUsername(username);
+
+if (user && await comparePassword(password, user.password_hash)) {
+  // Verificar explícitamente que el bucket asignado al usuario sea válido
+  if (!user.bucket) {
+    console.error(`Error: Usuario dinámico ${username} no tiene bucket asignado`);
+    return res.status(401).json({
+      success: false,
+      message: 'Error de configuración: Usuario no tiene bucket asignado'
+    });
+  }
+  
+  // Asegurar que se use el bucket correcto del creador del usuario
+  // Buscar el bucket del admin que creó este usuario
+  let bucketToUse = user.bucket;
+  const createdBy = user.created_by;
+  
+  // Si el creador del usuario es un admin estático, obtener su bucket del mapa
+  if (createdBy && userBucketMap[createdBy]) {
+    bucketToUse = userBucketMap[createdBy];
+    console.log(`[LOGIN] Corrigiendo bucket: usuario creado por ${createdBy}, usando su bucket: ${bucketToUse}`);
+  }
+  
+  console.log(`Usuario dinámico ${username} autenticado para bucket ${bucketToUse} (original: ${user.bucket})`);
+  console.log(`Carpetas asignadas: ${JSON.stringify(user.assigned_folders || [])}`);
+  
+  // Construir información de carpetas asignadas
+  const userFolders = user.assigned_folders || [];
+  
+  // Generar token con información del usuario
+  const token = Buffer.from(JSON.stringify({
+    username: user.username,
+    role: 'user', // Los usuarios dinámicos siempre tienen rol 'user'
+    bucket: bucketToUse, // Usar el bucket del creador, no el del usuario
+    folders: userFolders,
+    createdBy: user.created_by,
+    type: 'dynamic',
+    userId: user.id
+  })).toString('base64');
         
         // Log adicional para depuración
         console.log(`[LOGIN] Éxito: Usuario dinámico ${user.username}`);
@@ -7524,10 +8075,14 @@ app.post('/api/admin/create-user', isAdmin, express.json(), async (req, res) => 
     });
   }
 });
+
 // Listar usuarios creados por el administrador actual
+// Listar usuarios para el bucket del administrador actual
 app.get('/api/admin/users', isAdmin, async (req, res) => {
   try {
     const adminUsername = req.username;
+    const adminBucket = req.bucketName;
+    const requestedBucket = req.query.bucket;
     
     if (!adminUsername) {
       return res.status(401).json({
@@ -7536,34 +8091,86 @@ app.get('/api/admin/users', isAdmin, async (req, res) => {
       });
     }
     
-    // Obtener usuarios creados por este administrador
-    const result = await getUsersByAdmin(adminUsername);
+    // Determinar qué bucket usar para filtrar
+    const bucketToFilter = requestedBucket || adminBucket;
     
-    if (!result.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Error al obtener usuarios',
-        error: result.error
+    console.log(`[GET_USERS] Listando usuarios para bucket: ${bucketToFilter}, solicitado por admin: ${adminUsername}`);
+    
+    try {
+      // Consulta directa a Supabase para obtener todos los usuarios del bucket
+      const { data: users, error } = await supabase
+        .from('user_accounts')
+        .select('*')
+        .eq('bucket', bucketToFilter);
+      
+      if (error) {
+        console.error('[GET_USERS] Error al consultar usuarios en Supabase:', error);
+        return res.status(500).json({
+          success: false,
+          message: 'Error al obtener usuarios',
+          error: error.message
+        });
+      }
+      
+      console.log(`[GET_USERS] Encontrados ${users ? users.length : 0} usuarios para bucket ${bucketToFilter}`);
+      
+      // Log detallado para depuración
+      if (users && users.length > 0) {
+        console.log('[GET_USERS] Primeros 5 usuarios:');
+        users.slice(0, 5).forEach(user => {
+          console.log(`- ${user.username} (bucket: ${user.bucket}, active: ${user.active})`);
+        });
+      } else {
+        console.log('[GET_USERS] ADVERTENCIA: No se encontraron usuarios para este bucket');
+      }
+      
+      // Filtrar información sensible como contraseñas
+      const usersData = users.map(user => ({
+        id: user.id,
+        username: user.username,
+        bucket: user.bucket,
+        assigned_folders: user.assigned_folders,
+        group_name: user.group_name,
+        created_at: user.created_at,
+        active: user.active
+      }));
+      
+      res.status(200).json({
+        success: true,
+        users: usersData
+      });
+    } catch (queryError) {
+      console.error('[GET_USERS] Error en consulta directa:', queryError);
+      
+      // Plan B: Intentar con la función existente
+      console.log('[GET_USERS] Intentando con función getUsersByAdminAndBucket como plan B');
+      const result = await getUsersByAdminAndBucket(adminUsername, bucketToFilter);
+      
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Error al obtener usuarios',
+          error: result.error
+        });
+      }
+      
+      const usersData = result.data.map(user => ({
+        id: user.id,
+        username: user.username,
+        bucket: user.bucket,
+        assigned_folders: user.assigned_folders,
+        group_name: user.group_name,
+        created_at: user.created_at,
+        active: user.active
+      }));
+      
+      res.status(200).json({
+        success: true,
+        users: usersData
       });
     }
-    
-    // Filtrar información sensible como contraseñas
-    const usersData = result.data.map(user => ({
-      id: user.id,
-      username: user.username,
-      bucket: user.bucket,
-      assigned_folders: user.assigned_folders,
-      group_name: user.group_name,
-      created_at: user.created_at,
-      active: user.active
-    }));
-    
-    res.status(200).json({
-      success: true,
-      users: usersData
-    });
   } catch (error) {
-    console.error('Error al listar usuarios:', error);
+    console.error('Error general al listar usuarios:', error);
     res.status(500).json({
       success: false,
       message: 'Error interno al listar usuarios',
@@ -8993,6 +9600,2379 @@ app.get('/api/diagnose-python', async (req, res) => {
       success: false,
       message: 'Error al ejecutar diagnóstico de Python',
       error: error.message
+    });
+  }
+});
+
+// Ruta de prueba para verificar la configuración de backup
+app.get('/api/backup/test', (req, res) => {
+  console.log('Ruta de prueba de backup accedida');
+  res.json({
+    success: true,
+    message: 'API de backup funcionando correctamente',
+    serverTime: new Date().toISOString()
+  });
+});
+
+
+// Ruta para crear backup
+app.get('/api/backup/create/:bucketName', async (req, res) => {
+  try {
+    const { bucketName } = req.params;
+    
+    if (!bucketName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre del bucket no proporcionado' 
+      });
+    }
+    
+    console.log(`[BACKUP] Iniciando backup para bucket: ${bucketName}`);
+    
+    // Crear nombre de archivo para el backup
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
+    const backupPath = path.join(__dirname, 'backups', backupFileName);
+    
+    // Asegurar que existe el directorio
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+    
+    // Ejecutar el script de backup como un proceso separado
+console.log('[BACKUP] Intentando ejecutar script de backup...');
+const backupScriptPath = path.join(__dirname, 'backup_script.js');
+console.log(`[BACKUP] Ruta completa del script: ${backupScriptPath}`);
+
+const backupProcess = spawn('node', [
+  backupScriptPath,
+  bucketName,
+  backupPath
+]);
+    
+    let output = '';
+    
+    backupProcess.stdout.on('data', (data) => {
+      const dataStr = data.toString();
+      console.log(`[BACKUP STDOUT] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.stderr.on('data', (data) => {
+      const dataStr = data.toString();
+      console.error(`[BACKUP STDERR] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.on('close', (code) => {
+      console.log(`[BACKUP] Proceso terminado con código: ${code}`);
+      
+      if (code !== 0) {
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de backup terminó con código ${code}`,
+          output
+        });
+      }
+      
+      // Verificar que el archivo existe
+      if (!fs.existsSync(backupPath)) {
+        return res.status(500).json({
+          success: false,
+          message: 'El archivo de backup no se generó correctamente'
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Backup completado correctamente',
+        filename: backupFileName,
+        path: backupPath,
+        output
+      });
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al iniciar el proceso de backup:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ruta para descargar un backup
+app.get('/api/backup/download/:filename', (req, res) => {
+  const { filename } = req.params;
+  const filePath = path.join(__dirname, 'backups', filename);
+  
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ 
+      success: false, 
+      message: 'Archivo no encontrado' 
+    });
+  }
+  
+  res.download(filePath, filename, (err) => {
+    if (err) {
+      console.error(`[BACKUP] Error al descargar archivo ${filename}:`, err);
+      
+      // Si ya se envió la cabecera, no podemos enviar otro error
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    }
+  });
+});
+
+// Ruta para restaurar desde un backup
+app.post('/api/backup/restore', upload.single('backupFile'), async (req, res) => {
+  console.log('[RESTORE] Iniciando proceso de restauración');
+  console.log('[RESTORE] Headers:', req.headers);
+  console.log('[RESTORE] Archivo recibido:', req.file ? {
+    originalname: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size,
+    path: req.file.path
+  } : 'No hay archivo');
+  console.log('[RESTORE] Datos del cuerpo:', req.body);
+  
+  try {
+    // Verificar que tenemos el buffer del archivo
+if (!req.file.buffer) {
+  // Si no hay buffer, intentar leer el archivo desde la ruta
+  try {
+    console.log('[RESTORE] No se encontró buffer, intentando leer desde path:', req.file.path);
+    req.file.buffer = fs.readFileSync(req.file.path);
+    console.log('[RESTORE] Archivo leído correctamente, tamaño:', req.file.buffer.length);
+  } catch (readError) {
+    console.error('[RESTORE] Error al leer archivo:', readError);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al procesar el archivo: ' + readError.message
+    });
+  }
+}
+    
+    // Aceptar ambos nombres de parámetros para mayor compatibilidad
+const targetBucket = req.body.targetBucket || req.body.bucketName;
+    
+if (!targetBucket) {
+  console.log('[RESTORE] Error: Nombre de bucket destino no proporcionado');
+  return res.status(400).json({ 
+    success: false, 
+    message: 'Nombre de bucket destino no proporcionado. Proporcione targetBucket o bucketName' 
+  });
+}
+    
+    console.log(`[RESTORE] Procesando restauración para bucket: ${targetBucket}`);
+    
+    // Crear un directorio temporal para la restauración
+const tempDir = path.join(os.tmpdir(), 'docubox_restore_' + Date.now());
+fs.mkdirSync(tempDir, { recursive: true });
+console.log(`[RESTORE] Directorio temporal creado: ${tempDir}`);
+
+// Guardar el buffer del archivo en disco para prevenir corrupción
+const zipPath = path.join(tempDir, 'backup.zip');
+fs.writeFileSync(zipPath, req.file.buffer);
+console.log(`[RESTORE] Archivo ZIP guardado en: ${zipPath}`);
+
+// Ejecutar el script de restauración con la nueva ruta
+const restoreScriptPath = path.join(__dirname, 'restore_script.js');
+console.log(`[RESTORE] Ejecutando script de restauración: ${restoreScriptPath}`);
+console.log(`[RESTORE] Verificando existencia del script: ${fs.existsSync(restoreScriptPath)}`);
+
+// Guardar el comando para referencia
+console.log(`[RESTORE] Comando: node ${restoreScriptPath} ${zipPath} ${targetBucket}`);
+
+// Iniciar el proceso de restauración
+let restoreProcess = spawn('node', [
+  restoreScriptPath,
+  zipPath,
+  targetBucket
+]);
+
+console.log(`[RESTORE] Comando completo: ${commandArray.join(' ')}`);
+console.log(`[RESTORE] Argumentos: ${JSON.stringify(commandArray.slice(1))}`);
+
+let restoreProcessAlternative = spawn('node', [
+  restoreScriptPath,
+  uploadedFilePath,
+  targetBucket
+]);
+    let output = '';
+    
+    // Capturar salida estándar del proceso
+restoreProcess.stdout.on('data', (data) => {
+  const dataStr = data.toString();
+  // Mostrar líneas individuales para mejor visualización
+  dataStr.split('\n').filter(line => line.trim()).forEach(line => {
+    console.log(`[RESTORE STDOUT] ${line}`);
+  });
+  output += dataStr;
+});
+
+// Capturar errores del proceso
+restoreProcess.stderr.on('data', (data) => {
+  const dataStr = data.toString();
+  // Mostrar líneas individuales para mejor visualización
+  dataStr.split('\n').filter(line => line.trim()).forEach(line => {
+    console.error(`[RESTORE STDERR] ${line}`);
+  });
+  output += dataStr;
+});
+    
+    restoreProcess.on('close', (code) => {
+      console.log(`[RESTORE] Proceso terminado con código: ${code}`);
+      
+      // Limpiar el archivo subido
+      try {
+        fs.unlinkSync(uploadedFilePath);
+        console.log(`[RESTORE] Archivo temporal eliminado: ${uploadedFilePath}`);
+      } catch (cleanupError) {
+        console.error(`[RESTORE] Error al limpiar archivo temporal: ${cleanupError.message}`);
+      }
+      
+      if (code !== 0) {
+        console.log(`[RESTORE] Error: El proceso de restauración terminó con código ${code}`);
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de restauración terminó con código ${code}`,
+          output
+        });
+      }
+      
+      console.log('[RESTORE] Restauración completada exitosamente');
+      res.json({
+        success: true,
+        message: 'Restauración completada exitosamente',
+        output
+      });
+    });
+  } catch (error) {
+    console.error('[RESTORE] Error general:', error);
+    
+    // Asegurarse de limpiar el archivo si ocurre un error
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      try {
+        fs.unlinkSync(req.file.path);
+        console.log(`[RESTORE] Archivo temporal eliminado durante manejo de error: ${req.file.path}`);
+      } catch (cleanupError) {
+        console.error(`[RESTORE] Error al limpiar archivo temporal durante error: ${cleanupError.message}`);
+      }
+    }
+    
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Rutas directas para backup/restore que utilizan los scripts externos
+app.get('/direct_backup', async (req, res) => {
+  try {
+    const bucketName = req.query.bucket;
+    
+    if (!bucketName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre del bucket no proporcionado' 
+      });
+    }
+    
+    console.log(`[DIRECT_BACKUP] Iniciando backup para bucket: ${bucketName}`);
+    
+    // Crear nombre de archivo para el backup
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
+    const backupPath = path.join(__dirname, 'backups', backupFileName);
+    
+    // Asegurar que existe el directorio
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+    
+    // Comando directo que utilizaría exactamente la misma sintaxis que en la línea de comandos
+    console.log(`[DIRECT_BACKUP] Ejecutando: node "${path.join(__dirname, 'backup_script.js')}" ${bucketName} "${backupPath}"`);
+    
+    const cmd = `node "${path.join(__dirname, 'backup_script.js')}" ${bucketName} "${backupPath}"`;
+    
+    // Ejecutar como un proceso con shell
+    const { error, stdout, stderr } = await new Promise((resolve) => {
+      require('child_process').exec(cmd, (error, stdout, stderr) => {
+        resolve({ error, stdout, stderr });
+      });
+    });
+    
+    if (error) {
+      console.error(`[DIRECT_BACKUP] Error al ejecutar backup: ${error.message}`);
+      console.error(`[DIRECT_BACKUP] stderr: ${stderr}`);
+      return res.status(500).json({
+        success: false,
+        message: `Error al ejecutar backup: ${error.message}`,
+        stderr
+      });
+    }
+    
+    console.log(`[DIRECT_BACKUP] Backup completado. stdout: ${stdout}`);
+    
+    // Verificar que el archivo existe
+    if (!fs.existsSync(backupPath)) {
+      return res.status(500).json({
+        success: false,
+        message: 'El archivo de backup no se generó correctamente'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Backup completado correctamente',
+      filename: backupFileName,
+      path: backupPath
+    });
+  } catch (error) {
+    console.error('[DIRECT_BACKUP] Error general:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ruta para descargar directamente un backup
+app.get('/direct_download', (req, res) => {
+  const { filename } = req.query;
+  const filePath = path.join(__dirname, 'backups', filename);
+  
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ 
+      success: false, 
+      message: 'Archivo no encontrado' 
+    });
+  }
+  
+  res.download(filePath, filename, (err) => {
+    if (err) {
+      console.error(`[DIRECT_DOWNLOAD] Error al descargar archivo ${filename}:`, err);
+      
+      // Si ya se envió la cabecera, no podemos enviar otro error
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    }
+  });
+});
+
+// Ruta directa para restauración que ejecuta el script directamente
+app.post('/direct_restore', upload.single('backupFile'), async (req, res) => {
+  console.log('[DIRECT_RESTORE] Iniciando proceso de restauración directa');
+  console.log('[DIRECT_RESTORE] Archivo recibido:', req.file ? {
+    originalname: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size,
+    path: req.file.path
+  } : 'No hay archivo');
+  
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No se proporcionó archivo de backup' 
+      });
+    }
+    
+    const { targetBucket } = req.body;
+    
+    if (!targetBucket) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre de bucket destino no proporcionado' 
+      });
+    }
+    
+    // Comando directo que utilizaría exactamente la misma sintaxis que en la línea de comandos
+    const cmd = `node "${path.join(__dirname, 'restore_script.js')}" "${req.file.path}" ${targetBucket}`;
+    
+    console.log(`[DIRECT_RESTORE] Ejecutando comando: ${cmd}`);
+    
+    // Ejecutar como un proceso con shell
+    const { error, stdout, stderr } = await new Promise((resolve) => {
+      require('child_process').exec(cmd, (error, stdout, stderr) => {
+        resolve({ error, stdout, stderr });
+      });
+    });
+    
+    // Limpiar archivo temporal
+    try {
+      fs.unlinkSync(req.file.path);
+      console.log(`[DIRECT_RESTORE] Archivo temporal eliminado: ${req.file.path}`);
+    } catch (cleanupError) {
+      console.error(`[DIRECT_RESTORE] Error al limpiar archivo temporal: ${cleanupError.message}`);
+    }
+    
+    if (error) {
+      console.error(`[DIRECT_RESTORE] Error al ejecutar restore: ${error.message}`);
+      console.error(`[DIRECT_RESTORE] stderr: ${stderr}`);
+      return res.status(500).json({
+        success: false,
+        message: `Error al ejecutar restore: ${error.message}`,
+        stderr
+      });
+    }
+    
+    console.log(`[DIRECT_RESTORE] Restauración completada con éxito`);
+    console.log(`[DIRECT_RESTORE] stdout: ${stdout}`);
+    
+    res.json({
+      success: true,
+      message: 'Restauración completada exitosamente'
+    });
+  } catch (error) {
+    console.error('[DIRECT_RESTORE] Error general:', error);
+    
+    // Limpiar archivo temporal en caso de error
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (cleanupError) {
+        console.error(`[DIRECT_RESTORE] Error al limpiar archivo temporal en error: ${cleanupError.message}`);
+      }
+    }
+    
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Endpoint de prueba para verificar la configuración de backup
+app.get('/api/backup/test', (req, res) => {
+  console.log('Ruta de prueba de backup accedida');
+  res.json({
+    success: true,
+    message: 'API de backup funcionando correctamente',
+    serverTime: new Date().toISOString()
+  });
+});
+
+// Ruta para crear backup
+app.get('/api/backup/create/:bucketName', async (req, res) => {
+  try {
+    const { bucketName } = req.params;
+    
+    if (!bucketName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre del bucket no proporcionado' 
+      });
+    }
+    
+    console.log(`[BACKUP] Iniciando backup para bucket: ${bucketName}`);
+    
+    // Crear nombre de archivo para el backup
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
+    const backupPath = path.join(__dirname, 'backups', backupFileName);
+    
+    // Asegurar que existe el directorio
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+    
+    // Ejecutar el script de backup como un proceso separado
+    console.log('[BACKUP] Intentando ejecutar script de backup...');
+    const backupScriptPath = path.join(__dirname, 'scripts', 'backup_script.js');
+    console.log(`[BACKUP] Ruta completa del script: ${backupScriptPath}`);
+
+    const backupProcess = spawn('node', [
+      backupScriptPath,
+      bucketName,
+      backupPath
+    ]);
+    
+    let output = '';
+    
+    backupProcess.stdout.on('data', (data) => {
+      const dataStr = data.toString();
+      console.log(`[BACKUP STDOUT] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.stderr.on('data', (data) => {
+      const dataStr = data.toString();
+      console.error(`[BACKUP STDERR] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.on('close', (code) => {
+      console.log(`[BACKUP] Proceso terminado con código: ${code}`);
+      
+      if (code !== 0) {
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de backup terminó con código ${code}`,
+          output
+        });
+      }
+      
+      // Verificar que el archivo existe
+      if (!fs.existsSync(backupPath)) {
+        return res.status(500).json({
+          success: false,
+          message: 'El archivo de backup no se generó correctamente'
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Backup completado correctamente',
+        filename: backupFileName,
+        path: backupPath,
+        output
+      });
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al iniciar el proceso de backup:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ruta para listar todos los backups disponibles
+app.get('/api/backup/list', (req, res) => {
+  try {
+    const backupsDir = path.join(__dirname, 'backups');
+    
+    // Verificar que existe el directorio
+    if (!fs.existsSync(backupsDir)) {
+      return res.json({
+        success: true,
+        message: 'No hay directorio de backups',
+        backups: []
+      });
+    }
+    
+    // Leer archivos del directorio
+    fs.readdir(backupsDir, (err, files) => {
+      if (err) {
+        console.error('[BACKUP] Error al leer directorio de backups:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Error al listar backups'
+        });
+      }
+      
+      // Filtrar solo archivos zip
+      const backupFiles = files.filter(file => file.endsWith('.zip'));
+      
+      // Obtener información de cada archivo
+      const backups = backupFiles.map(filename => {
+        const filePath = path.join(backupsDir, filename);
+        const stats = fs.statSync(filePath);
+        
+        return {
+          filename,
+          createdAt: stats.birthtime,
+          size: stats.size,
+          downloadUrl: `/api/backup/download/${filename}`
+        };
+      });
+      
+      res.json({
+        success: true,
+        message: `Se encontraron ${backups.length} backups`,
+        backups
+      });
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al listar backups:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ruta para descargar un backup específico
+app.get('/api/backup/download/:filename', (req, res) => {
+  try {
+    const { filename } = req.params;
+    
+    // Validar el nombre de archivo para evitar path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre de archivo inválido'
+      });
+    }
+    
+    const filePath = path.join(__dirname, 'backups', filename);
+    
+    // Verificar que el archivo existe
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo de backup no existe'
+      });
+    }
+    
+    // Enviar el archivo
+    res.download(filePath, filename, (err) => {
+      if (err) {
+        console.error('[BACKUP] Error al descargar backup:', err);
+        // Si el encabezado no se ha enviado aún, podemos enviar un error
+        if (!res.headersSent) {
+          return res.status(500).json({
+            success: false,
+            message: 'Error al descargar el archivo'
+          });
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al descargar backup:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ruta para restaurar un backup
+app.post('/api/backup/restore', express.json(), async (req, res) => {
+  try {
+    const { filename, bucketName } = req.body;
+    
+    // Validar parámetros
+    if (!filename || !bucketName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere nombre del archivo y bucket de destino'
+      });
+    }
+    
+    // Validar el nombre de archivo para evitar path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre de archivo inválido'
+      });
+    }
+    
+    console.log(`[RESTORE] Iniciando restauración del archivo ${filename} al bucket ${bucketName}`);
+    
+    const backupPath = path.join(__dirname, 'backups', filename);
+    
+    // Verificar que el archivo existe
+    if (!fs.existsSync(backupPath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo de backup no existe'
+      });
+    }
+    
+    // Ejecutar el script de restauración como un proceso separado
+    console.log('[RESTORE] Intentando ejecutar script de restauración...');
+    
+    const restoreScriptPath = path.join(__dirname, 'scripts', 'restore_script.js');
+    console.log(`[RESTORE] Ruta completa del script: ${restoreScriptPath}`);
+    
+    let restoreProcess = spawn('node', [
+      restoreScriptPath,
+      backupPath,
+      bucketName
+    ]);
+    
+    let output = '';
+    
+    restoreProcess.stdout.on('data', (data) => {
+      const dataStr = data.toString();
+      console.log(`[RESTORE STDOUT] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    restoreProcess.stderr.on('data', (data) => {
+      const dataStr = data.toString();
+      console.error(`[RESTORE STDERR] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    restoreProcess.on('close', (code) => {
+      console.log(`[RESTORE] Proceso terminado con código: ${code}`);
+      
+      if (code !== 0) {
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de restauración terminó con código ${code}`,
+          output
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Restauración completada correctamente',
+        bucket: bucketName,
+        output
+      });
+    });
+  } catch (error) {
+    console.error('[RESTORE] Error al iniciar el proceso de restauración:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
+// Endpoint para verificar las etiquetas contenidas en un archivo de backup
+app.post('/api/backup/check-tags', upload.single('backupFile'), async (req, res) => {
+  console.log('[CHECK_TAGS] Verificando etiquetas en archivo de backup');
+  
+  try {
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de copia de seguridad'
+      });
+    }
+
+    // Verificar que el archivo es un ZIP
+    if (!req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un ZIP válido de copia de seguridad'
+      });
+    }
+
+    // Crear un directorio temporal para extraer el zip
+    const tempDir = path.join(os.tmpdir(), 'check-tags-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`[CHECK_TAGS] Directorio temporal creado: ${tempDir}`);
+
+    // Guardar el archivo ZIP recibido
+    const zipPath = path.join(tempDir, 'backup.zip');
+    fs.writeFileSync(zipPath, req.file.buffer);
+
+    
+    // Verificar si existe el archivo de exportación de la base de datos
+    const dbExportPath = path.join(tempDir, 'database-export.json');
+    
+    if (!fs.existsSync(dbExportPath)) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo no contiene exportación de base de datos con etiquetas'
+      });
+    }
+    
+    // Cargar el archivo de exportación
+    let dbExport;
+    try {
+      const fileContent = fs.readFileSync(dbExportPath, 'utf8');
+      dbExport = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[CHECK_TAGS] Error al parsear archivo de exportación:', parseError);
+      
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al procesar el archivo de exportación',
+        error: parseError.message
+      });
+    }
+    
+    // Verificar si hay etiquetas
+    if (!dbExport.tags || !Array.isArray(dbExport.tags) || dbExport.tags.length === 0) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(200).json({
+        success: true,
+        hasTags: false,
+        message: 'No se encontraron etiquetas en el archivo de copia de seguridad',
+        tags: [],
+        categories: []
+      });
+    }
+    
+    console.log(`[CHECK_TAGS] Encontradas ${dbExport.tags.length} etiquetas en el backup`);
+    
+    // Agrupar etiquetas por categoría
+    const tagsByCategory = {};
+    const categories = [];
+    
+    dbExport.tags.forEach(tag => {
+      const category = tag.category || 'Sin categoría';
+      
+      if (!tagsByCategory[category]) {
+        tagsByCategory[category] = [];
+        categories.push(category);
+      }
+      
+      tagsByCategory[category].push(tag.tag_name);
+    });
+    
+    // Ordenar categorías y etiquetas
+    categories.sort();
+    for (const category in tagsByCategory) {
+      tagsByCategory[category].sort();
+    }
+    
+    // Limpiar archivos temporales
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return res.status(200).json({
+      success: true,
+      hasTags: true,
+      message: `Se encontraron ${dbExport.tags.length} etiquetas en ${categories.length} categorías`,
+      tagCount: dbExport.tags.length,
+      categories: categories,
+      tagsByCategory: tagsByCategory,
+      sourceBucket: dbExport.tags.length > 0 ? dbExport.tags[0].bucket : 'desconocido',
+      tags: dbExport.tags // Opcional: incluir todas las etiquetas (podría ser mucho para mostrar)
+    });
+  } catch (error) {
+    console.error('[CHECK_TAGS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al verificar etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para exportar solo las etiquetas de un bucket a un archivo JSON
+app.get('/api/backup/export-tags', async (req, res) => {
+  console.log('[EXPORT_TAGS] Iniciando exportación de etiquetas');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden exportar etiquetas'
+      });
+    }
+
+    // Obtener el bucket para exportar etiquetas
+    const bucketToExport = req.query.bucket || req.bucketName || defaultBucketName;
+    console.log(`[EXPORT_TAGS] Exportando etiquetas del bucket: ${bucketToExport}`);
+
+    // Consultar todas las etiquetas para el bucket
+    const { data: tags, error: tagsError } = await supabase
+      .from('tags_by_bucket')
+      .select('*')
+      .eq('bucket', bucketToExport);
+
+    if (tagsError) {
+      console.error('[EXPORT_TAGS] Error al obtener etiquetas:', tagsError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error al obtener etiquetas',
+        error: tagsError.message
+      });
+    }
+
+    // Verificar si hay etiquetas
+    if (!tags || tags.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontraron etiquetas para exportar en el bucket'
+      });
+    }
+
+    console.log(`[EXPORT_TAGS] Encontradas ${tags.length} etiquetas para exportar`);
+
+    // Crear objeto con la información
+    const exportData = {
+      tags: tags,
+      metadata: {
+        exportDate: new Date().toISOString(),
+        bucket: bucketToExport,
+        totalTags: tags.length
+      }
+    };
+
+    // Agrupar etiquetas por categoría para información adicional
+    const categoryCounts = {};
+    tags.forEach(tag => {
+      const category = tag.category || 'Sin categoría';
+      if (!categoryCounts[category]) {
+        categoryCounts[category] = 0;
+      }
+      categoryCounts[category]++;
+    });
+
+    exportData.metadata.categories = Object.keys(categoryCounts);
+    exportData.metadata.categoryCounts = categoryCounts;
+
+    // Generar nombre para el archivo
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const fileName = `tags_export_${bucketToExport}_${timestamp}.json`;
+
+    // Configurar cabeceras para descargar el archivo
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Type', 'application/json');
+
+    // Enviar los datos como archivo descargable
+    res.send(JSON.stringify(exportData, null, 2));
+    
+    console.log(`[EXPORT_TAGS] Exportación completada: ${tags.length} etiquetas`);
+  } catch (error) {
+    console.error('[EXPORT_TAGS] Error general:', error);
+    
+    // Verificar si ya se enviaron cabeceras
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al exportar etiquetas',
+        error: error.message
+      });
+    }
+  }
+});
+
+// Endpoint para importar etiquetas desde un archivo JSON
+app.post('/api/backup/import-tags', upload.single('tagsFile'), async (req, res) => {
+  console.log('[IMPORT_TAGS] Iniciando importación de etiquetas');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden importar etiquetas'
+      });
+    }
+
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de etiquetas'
+      });
+    }
+
+    // Verificar que el archivo es un JSON
+    if (!req.file.originalname.toLowerCase().endsWith('.json')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un JSON válido de etiquetas'
+      });
+    }
+
+    // Obtener el bucket de destino
+    const targetBucket = req.body.targetBucket || req.bucketName || defaultBucketName;
+    console.log(`[IMPORT_TAGS] Importando etiquetas al bucket: ${targetBucket}`);
+
+    // Parsear el archivo JSON
+    let importData;
+    try {
+      const fileContent = req.file.buffer.toString('utf8');
+      importData = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[IMPORT_TAGS] Error al parsear archivo JSON:', parseError);
+      
+      return res.status(400).json({
+        success: false,
+        message: 'Error al parsear el archivo JSON',
+        error: parseError.message
+      });
+    }
+
+    // Verificar estructura del archivo
+    if (!importData.tags || !Array.isArray(importData.tags) || importData.tags.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de archivo inválido o no contiene etiquetas'
+      });
+    }
+
+    // Extraer etiquetas
+    const tagsToImport = importData.tags;
+    console.log(`[IMPORT_TAGS] Encontradas ${tagsToImport.length} etiquetas para importar`);
+    
+    // Opciones de importación
+    const replaceExisting = req.body.replaceExisting === 'true' || req.body.replaceExisting === true;
+    console.log(`[IMPORT_TAGS] Modo: ${replaceExisting ? 'Reemplazar existentes' : 'Mantener existentes y añadir nuevas'}`);
+
+    // Si se debe reemplazar, eliminar etiquetas existentes
+    if (replaceExisting) {
+      try {
+        const { error: deleteError } = await supabase
+          .from('tags_by_bucket')
+          .delete()
+          .eq('bucket', targetBucket);
+          
+        if (deleteError) {
+          console.error('[IMPORT_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+          throw deleteError;
+        }
+        
+        console.log('[IMPORT_TAGS] Etiquetas existentes eliminadas correctamente');
+      } catch (deleteError) {
+        console.error('[IMPORT_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+        
+        return res.status(500).json({
+          success: false,
+          message: 'Error al eliminar etiquetas existentes',
+          error: deleteError.message
+        });
+      }
+    } else {
+      // Si no se reemplazan, obtener etiquetas existentes para evitar duplicados
+      console.log('[IMPORT_TAGS] Verificando etiquetas existentes para evitar duplicados...');
+      const { data: existingTags, error: queryError } = await supabase
+        .from('tags_by_bucket')
+        .select('tag_name, category')
+        .eq('bucket', targetBucket);
+        
+      if (queryError) {
+        console.error('[IMPORT_TAGS] Error al obtener etiquetas existentes:', queryError);
+      } else if (existingTags && existingTags.length > 0) {
+        console.log(`[IMPORT_TAGS] Encontradas ${existingTags.length} etiquetas existentes`);
+        
+        // Crear un mapa de etiquetas existentes para búsqueda rápida
+        const existingTagsMap = {};
+        existingTags.forEach(tag => {
+          const key = `${tag.category}:${tag.tag_name}`.toLowerCase();
+          existingTagsMap[key] = true;
+        });
+        
+        // Filtrar etiquetas para no incluir duplicados
+        const originalCount = tagsToImport.length;
+        const filteredTags = tagsToImport.filter(tag => {
+          const key = `${tag.category}:${tag.tag_name}`.toLowerCase();
+          return !existingTagsMap[key];
+        });
+        
+        // Actualizar lista de etiquetas a importar
+        console.log(`[IMPORT_TAGS] Filtradas ${originalCount - filteredTags.length} etiquetas duplicadas`);
+        tagsToImport.length = 0;
+        tagsToImport.push(...filteredTags);
+      }
+    }
+    
+    if (tagsToImport.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No hay nuevas etiquetas para importar',
+        imported: 0
+      });
+    }
+
+    // Realizar la inserción usando la función reutilizable
+const insertResult = await insertTagsBatch(tagsToImport, targetBucket, '[IMPORT_TAGS]');
+
+// Extraer resultados para la respuesta
+const successCount = insertResult.successCount;
+const errorCount = insertResult.errorCount;
+
+    if (successCount === 0 && errorCount > 0) {
+      return res.status(500).json({
+        success: false,
+        message: `No se pudo importar ninguna etiqueta`,
+        details: {
+          totalTags: preparedTags.length,
+          success: successCount,
+          errors: errorCount
+        }
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: `Importación de etiquetas completada: ${successCount} exitosas, ${errorCount} con errores`,
+      details: {
+        totalTags: preparedTags.length,
+        success: successCount,
+        errors: errorCount,
+        sourceBucket: importData.metadata?.bucket || 'desconocido'
+      }
+    });
+  } catch (error) {
+    console.error('[IMPORT_TAGS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al importar etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para restaurar solo las etiquetas de un backup
+
+app.post('/api/backup/restore-tags', upload.single('backupFile'), async (req, res) => {
+  console.log('[RESTORE_TAGS] Iniciando proceso de restauración de etiquetas');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden restaurar etiquetas'
+      });
+    }
+
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de copia de seguridad'
+      });
+    }
+
+    // Verificar que el archivo es un ZIP
+    if (!req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un ZIP válido de copia de seguridad'
+      });
+    }
+
+    // Obtener el bucket a restaurar
+    const bucketToRestore = req.bucketName || defaultBucketName;
+    console.log(`[RESTORE_TAGS] Restaurando etiquetas al bucket: ${bucketToRestore}`);
+
+    // Crear un directorio temporal para extraer el zip
+    const tempDir = path.join(os.tmpdir(), 'restore-tags-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`[RESTORE_TAGS] Directorio temporal creado: ${tempDir}`);
+
+    // Guardar el archivo ZIP recibido
+    const zipPath = path.join(tempDir, 'backup.zip');
+    fs.writeFileSync(zipPath, req.file.buffer);
+
+    // Extraer el archivo ZIP
+    console.log(`[RESTORE_TAGS] Extrayendo archivo ZIP: ${zipPath}`);
+    const extract = require('extract-zip');
+    await extract(zipPath, { dir: tempDir });
+    console.log(`[RESTORE_TAGS] Extracción completada en ${tempDir}`);
+
+    // Verificar si existe el archivo de exportación de la base de datos
+    const dbExportPath = path.join(tempDir, 'database-export.json');
+    
+    if (!fs.existsSync(dbExportPath)) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo no contiene exportación de base de datos con etiquetas'
+      });
+    }
+    
+    // Cargar el archivo de exportación
+    let dbExport;
+    try {
+      const fileContent = fs.readFileSync(dbExportPath, 'utf8');
+      dbExport = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[RESTORE_TAGS] Error al parsear archivo de exportación:', parseError);
+      
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al procesar el archivo de exportación',
+        error: parseError.message
+      });
+    }
+    
+    // Verificar si hay etiquetas para restaurar
+    if (!dbExport.tags || !Array.isArray(dbExport.tags) || dbExport.tags.length === 0) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontraron etiquetas en el archivo de copia de seguridad'
+      });
+    }
+    
+    console.log(`[RESTORE_TAGS] Encontradas ${dbExport.tags.length} etiquetas para restaurar`);
+    
+    // Primero, eliminar etiquetas existentes para el bucket de destino
+    try {
+      const { error: deleteError } = await supabase
+        .from('tags_by_bucket')
+        .delete()
+        .eq('bucket', bucketToRestore);
+        
+      if (deleteError) {
+        console.error('[RESTORE_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+        throw deleteError;
+      }
+      
+      console.log('[RESTORE_TAGS] Etiquetas existentes eliminadas correctamente');
+    } catch (deleteError) {
+      console.error('[RESTORE_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+      
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al eliminar etiquetas existentes',
+        error: deleteError.message
+      });
+    }
+    
+    // Preparar etiquetas para su inserción, con UUIDs válidos
+    let tagsToInsert = [];
+    try {
+      // Simplificar la preparación de etiquetas para evitar errores
+      tagsToInsert = dbExport.tags.map(tag => {
+        // Crear un nuevo objeto limpio para cada etiqueta
+        return {
+          tag_name: tag.tag_name || '',
+          category: tag.category || '',
+          bucket: bucketToRestore,
+          // Omitimos el ID para que la base de datos asigne uno nuevo
+          // Esto evita problemas con UUIDs inválidos
+          created_at: tag.created_at || new Date().toISOString(),
+          created_by: tag.created_by || req.username || 'admin',
+          is_public: tag.is_public === true ? true : false
+        };
+      });
+      
+      console.log(`[RESTORE_TAGS] Preparadas ${tagsToInsert.length} etiquetas para inserción`);
+    } catch (prepError) {
+      console.error('[RESTORE_TAGS] Error al preparar etiquetas:', prepError);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al preparar etiquetas para restauración',
+        error: prepError.message
+      });
+    }
+    
+    // Insertar etiquetas por lotes para evitar límites de la API
+    let successCount = 0;
+    let errorCount = 0;
+    
+    try {
+      // Usar lotes más pequeños para mayor robustez
+      const batchSize = 10;
+      
+      for (let i = 0; i < tagsToInsert.length; i += batchSize) {
+        const batch = tagsToInsert.slice(i, i + batchSize);
+        console.log(`[RESTORE_TAGS] Insertando lote de etiquetas ${i+1}-${Math.min(i+batchSize, tagsToInsert.length)} de ${tagsToInsert.length}`);
+        
+        try {
+          const { data, error: insertError } = await supabase
+            .from('tags_by_bucket')
+            .insert(batch);
+          
+          if (insertError) {
+            console.error('[RESTORE_TAGS] Error al insertar lote de etiquetas:', insertError);
+            
+            // Intentar insertar las etiquetas una por una
+            console.log('[RESTORE_TAGS] Reintentando inserción individual...');
+            
+            for (const singleTag of batch) {
+              try {
+                const { error: singleError } = await supabase
+                  .from('tags_by_bucket')
+                  .insert([singleTag]);
+                
+                if (singleError) {
+                  console.error(`[RESTORE_TAGS] Error al insertar etiqueta "${singleTag.tag_name}":`, singleError);
+                  errorCount++;
+                } else {
+                  successCount++;
+                }
+              } catch (e) {
+                console.error('[RESTORE_TAGS] Excepción al insertar etiqueta individual:', e);
+                errorCount++;
+              }
+            }
+          } else {
+            successCount += batch.length;
+            console.log(`[RESTORE_TAGS] Lote de etiquetas insertado correctamente`);
+          }
+        } catch (e) {
+          console.error('[RESTORE_TAGS] Excepción al insertar lote:', e);
+          errorCount += batch.length;
+        }
+      }
+    } catch (insertError) {
+      console.error('[RESTORE_TAGS] Error general al insertar etiquetas:', insertError);
+      // No salimos inmediatamente, reportamos lo que se pudo hacer
+    }
+    
+    // Limpiar archivos temporales
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.error('[RESTORE_TAGS] Error al limpiar archivos temporales:', cleanupError);
+    }
+    
+    if (successCount === 0 && errorCount > 0) {
+      return res.status(500).json({
+        success: false,
+        message: 'No se pudo restaurar ninguna etiqueta',
+        details: {
+          totalTags: tagsToInsert.length,
+          success: successCount,
+          errors: errorCount
+        }
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: `Restauración de etiquetas completada: ${successCount} exitosas, ${errorCount} con errores`,
+      details: {
+        totalTags: tagsToInsert.length,
+        success: successCount,
+        errors: errorCount
+      }
+    });
+
+  } catch (error) {
+    console.error('[RESTORE_TAGS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al restaurar etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para verificar las etiquetas contenidas en un archivo de backup
+app.post('/api/backup/check-tags', upload.single('backupFile'), async (req, res) => {
+  console.log('[CHECK_TAGS] Verificando etiquetas en archivo de backup');
+  
+  try {
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de copia de seguridad'
+      });
+    }
+
+    // Verificar que el archivo es un ZIP
+    if (!req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un ZIP válido de copia de seguridad'
+      });
+    }
+
+    // Crear un directorio temporal para extraer el zip
+    const tempDir = path.join(os.tmpdir(), 'check-tags-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`[CHECK_TAGS] Directorio temporal creado: ${tempDir}`);
+
+    // Guardar el archivo ZIP recibido
+    const zipPath = path.join(tempDir, 'backup.zip');
+    fs.writeFileSync(zipPath, req.file.buffer);
+
+    // Extraer el archivo ZIP
+    console.log(`[CHECK_TAGS] Extrayendo archivo ZIP: ${zipPath}`);
+    const extract = require('extract-zip');
+    await extract(zipPath, { dir: tempDir });
+    console.log(`[CHECK_TAGS] Extracción completada en ${tempDir}`);
+
+    // Verificar si existe el archivo de exportación de la base de datos
+    const dbExportPath = path.join(tempDir, 'database-export.json');
+    
+    if (!fs.existsSync(dbExportPath)) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo no contiene exportación de base de datos con etiquetas'
+      });
+    }
+    
+    // Cargar el archivo de exportación
+    let dbExport;
+    try {
+      const fileContent = fs.readFileSync(dbExportPath, 'utf8');
+      dbExport = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[CHECK_TAGS] Error al parsear archivo de exportación:', parseError);
+      
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al procesar el archivo de exportación',
+        error: parseError.message
+      });
+    }
+    
+    // Verificar si hay etiquetas
+    if (!dbExport.tags || !Array.isArray(dbExport.tags) || dbExport.tags.length === 0) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(200).json({
+        success: true,
+        hasTags: false,
+        message: 'No se encontraron etiquetas en el archivo de copia de seguridad',
+        tags: [],
+        categories: []
+      });
+    }
+    
+    console.log(`[CHECK_TAGS] Encontradas ${dbExport.tags.length} etiquetas en el backup`);
+    
+    // Agrupar etiquetas por categoría
+    const tagsByCategory = {};
+    const categories = [];
+    
+    dbExport.tags.forEach(tag => {
+      const category = tag.category || 'Sin categoría';
+      
+      if (!tagsByCategory[category]) {
+        tagsByCategory[category] = [];
+        categories.push(category);
+      }
+      
+      tagsByCategory[category].push(tag.tag_name);
+    });
+    
+    // Ordenar categorías y etiquetas
+    categories.sort();
+    for (const category in tagsByCategory) {
+      tagsByCategory[category].sort();
+    }
+    
+    // Limpiar archivos temporales
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return res.status(200).json({
+      success: true,
+      hasTags: true,
+      message: `Se encontraron ${dbExport.tags.length} etiquetas en ${categories.length} categorías`,
+      tagCount: dbExport.tags.length,
+      categories: categories,
+      tagsByCategory: tagsByCategory,
+      sourceBucket: dbExport.tags.length > 0 ? dbExport.tags[0].bucket : 'desconocido',
+      tags: dbExport.tags // Opcional: incluir todas las etiquetas (podría ser mucho para mostrar)
+    });
+  } catch (error) {
+    console.error('[CHECK_TAGS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al verificar etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para exportar solo las etiquetas de un bucket a un archivo JSON
+app.get('/api/backup/export-tags', async (req, res) => {
+  console.log('[EXPORT_TAGS] Iniciando exportación de etiquetas');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden exportar etiquetas'
+      });
+    }
+
+    // Obtener el bucket para exportar etiquetas
+    const bucketToExport = req.query.bucket || req.bucketName || defaultBucketName;
+    console.log(`[EXPORT_TAGS] Exportando etiquetas del bucket: ${bucketToExport}`);
+
+    // Consultar todas las etiquetas para el bucket
+    const { data: tags, error: tagsError } = await supabase
+      .from('tags_by_bucket')
+      .select('*')
+      .eq('bucket', bucketToExport);
+
+    if (tagsError) {
+      console.error('[EXPORT_TAGS] Error al obtener etiquetas:', tagsError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error al obtener etiquetas',
+        error: tagsError.message
+      });
+    }
+
+    // Verificar si hay etiquetas
+    if (!tags || tags.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontraron etiquetas para exportar en el bucket'
+      });
+    }
+
+    console.log(`[EXPORT_TAGS] Encontradas ${tags.length} etiquetas para exportar`);
+
+    // Crear objeto con la información
+    const exportData = {
+      tags: tags,
+      metadata: {
+        exportDate: new Date().toISOString(),
+        bucket: bucketToExport,
+        totalTags: tags.length
+      }
+    };
+
+    // Agrupar etiquetas por categoría para información adicional
+    const categoryCounts = {};
+    tags.forEach(tag => {
+      const category = tag.category || 'Sin categoría';
+      if (!categoryCounts[category]) {
+        categoryCounts[category] = 0;
+      }
+      categoryCounts[category]++;
+    });
+
+    exportData.metadata.categories = Object.keys(categoryCounts);
+    exportData.metadata.categoryCounts = categoryCounts;
+
+    // Generar nombre para el archivo
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const fileName = `tags_export_${bucketToExport}_${timestamp}.json`;
+
+    // Configurar cabeceras para descargar el archivo
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Type', 'application/json');
+
+    // Enviar los datos como archivo descargable
+    res.send(JSON.stringify(exportData, null, 2));
+    
+    console.log(`[EXPORT_TAGS] Exportación completada: ${tags.length} etiquetas`);
+  } catch (error) {
+    console.error('[EXPORT_TAGS] Error general:', error);
+    
+    // Verificar si ya se enviaron cabeceras
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al exportar etiquetas',
+        error: error.message
+      });
+    }
+  }
+});
+
+// Endpoint para importar etiquetas desde un archivo JSON
+app.post('/api/backup/import-tags', upload.single('tagsFile'), async (req, res) => {
+  console.log('[IMPORT_TAGS] Iniciando importación de etiquetas');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden importar etiquetas'
+      });
+    }
+
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de etiquetas'
+      });
+    }
+
+    // Verificar que el archivo es un JSON
+    if (!req.file.originalname.toLowerCase().endsWith('.json')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un JSON válido de etiquetas'
+      });
+    }
+
+    // Obtener el bucket de destino
+    const targetBucket = req.body.targetBucket || req.bucketName || defaultBucketName;
+    console.log(`[IMPORT_TAGS] Importando etiquetas al bucket: ${targetBucket}`);
+
+    // Parsear el archivo JSON
+    let importData;
+    try {
+      const fileContent = req.file.buffer.toString('utf8');
+      importData = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[IMPORT_TAGS] Error al parsear archivo JSON:', parseError);
+      
+      return res.status(400).json({
+        success: false,
+        message: 'Error al parsear el archivo JSON',
+        error: parseError.message
+      });
+    }
+
+    // Verificar estructura del archivo
+    if (!importData.tags || !Array.isArray(importData.tags) || importData.tags.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de archivo inválido o no contiene etiquetas'
+      });
+    }
+
+    // Extraer etiquetas
+    const tagsToImport = importData.tags;
+    console.log(`[IMPORT_TAGS] Encontradas ${tagsToImport.length} etiquetas para importar`);
+    
+    // Opciones de importación
+    const replaceExisting = req.body.replaceExisting === 'true' || req.body.replaceExisting === true;
+    console.log(`[IMPORT_TAGS] Modo: ${replaceExisting ? 'Reemplazar existentes' : 'Mantener existentes y añadir nuevas'}`);
+
+    // Si se debe reemplazar, eliminar etiquetas existentes
+    if (replaceExisting) {
+      try {
+        const { error: deleteError } = await supabase
+          .from('tags_by_bucket')
+          .delete()
+          .eq('bucket', targetBucket);
+          
+        if (deleteError) {
+          console.error('[IMPORT_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+          throw deleteError;
+        }
+        
+        console.log('[IMPORT_TAGS] Etiquetas existentes eliminadas correctamente');
+      } catch (deleteError) {
+        console.error('[IMPORT_TAGS] Error al eliminar etiquetas existentes:', deleteError);
+        
+        return res.status(500).json({
+          success: false,
+          message: 'Error al eliminar etiquetas existentes',
+          error: deleteError.message
+        });
+      }
+    } else {
+      // Si no se reemplazan, obtener etiquetas existentes para evitar duplicados
+      console.log('[IMPORT_TAGS] Verificando etiquetas existentes para evitar duplicados...');
+      const { data: existingTags, error: queryError } = await supabase
+        .from('tags_by_bucket')
+        .select('tag_name, category')
+        .eq('bucket', targetBucket);
+        
+      if (queryError) {
+        console.error('[IMPORT_TAGS] Error al obtener etiquetas existentes:', queryError);
+      } else if (existingTags && existingTags.length > 0) {
+        console.log(`[IMPORT_TAGS] Encontradas ${existingTags.length} etiquetas existentes`);
+        
+        // Crear un mapa de etiquetas existentes para búsqueda rápida
+        const existingTagsMap = {};
+        existingTags.forEach(tag => {
+          const key = `${tag.category}:${tag.tag_name}`.toLowerCase();
+          existingTagsMap[key] = true;
+        });
+        
+        // Filtrar etiquetas para no incluir duplicados
+        const originalCount = tagsToImport.length;
+        const filteredTags = tagsToImport.filter(tag => {
+          const key = `${tag.category}:${tag.tag_name}`.toLowerCase();
+          return !existingTagsMap[key];
+        });
+        
+        // Actualizar lista de etiquetas a importar
+        console.log(`[IMPORT_TAGS] Filtradas ${originalCount - filteredTags.length} etiquetas duplicadas`);
+        tagsToImport.length = 0;
+        tagsToImport.push(...filteredTags);
+      }
+    }
+    
+    if (tagsToImport.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No hay nuevas etiquetas para importar',
+        imported: 0
+      });
+    }
+
+    // Asegurar que todas las etiquetas apunten al bucket correcto
+    const preparedTags = tagsToImport.map(tag => ({
+      ...tag,
+      id: undefined, // Quitar ID para permitir que la base de datos genere uno nuevo
+      bucket: targetBucket // Asegurar que se use el bucket destino
+    }));
+    
+    // Insertar etiquetas por lotes para evitar límites de la API
+    let successCount = 0;
+    let errorCount = 0;
+    
+    try {
+      const batchSize = 50;
+      
+      for (let i = 0; i < preparedTags.length; i += batchSize) {
+        const batch = preparedTags.slice(i, i + batchSize);
+        console.log(`[IMPORT_TAGS] Insertando lote de etiquetas ${i+1}-${Math.min(i+batchSize, preparedTags.length)} de ${preparedTags.length}`);
+        
+        const { data, error: insertError } = await supabase
+          .from('tags_by_bucket')
+          .insert(batch);
+        
+        if (insertError) {
+          console.error('[IMPORT_TAGS] Error al insertar etiquetas:', insertError);
+          errorCount += batch.length;
+        } else {
+          successCount += batch.length;
+          console.log(`[IMPORT_TAGS] Lote de etiquetas insertado correctamente`);
+        }
+      }
+    } catch (insertError) {
+      console.error('[IMPORT_TAGS] Error al insertar etiquetas:', insertError);
+      // Continuamos para reportar lo que se pudo hacer
+    }
+    
+    if (successCount === 0 && errorCount > 0) {
+      return res.status(500).json({
+        success: false,
+        message: `No se pudo importar ninguna etiqueta`,
+        details: {
+          totalTags: preparedTags.length,
+          success: successCount,
+          errors: errorCount
+        }
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: `Importación de etiquetas completada: ${successCount} exitosas, ${errorCount} con errores`,
+      details: {
+        totalTags: preparedTags.length,
+        success: successCount,
+        errors: errorCount,
+        sourceBucket: importData.metadata?.bucket || 'desconocido'
+      }
+    });
+  } catch (error) {
+    console.error('[IMPORT_TAGS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al importar etiquetas',
+      error: error.message
+    });
+  }
+});
+
+// Ruta alternativa para restauración directa (sin usar script externo)
+app.post('/api/direct_restore', upload.single('backupFile'), async (req, res) => {
+  console.log('[DIRECT_RESTORE] Iniciando proceso de restauración directa');
+  
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No se proporcionó archivo de backup' });
+    }
+    
+    // Aceptar ambos nombres de parámetros
+    const targetBucket = req.body.targetBucket || req.body.bucketName;
+    
+    if (!targetBucket) {
+      return res.status(400).json({ success: false, message: 'Nombre de bucket destino no proporcionado' });
+    }
+    
+    console.log(`[DIRECT_RESTORE] Restaurando para bucket: ${targetBucket}`);
+    
+    // Verificar que tenemos el buffer del archivo
+    if (!req.file.buffer) {
+      try {
+        req.file.buffer = fs.readFileSync(req.file.path);
+      } catch (readError) {
+        return res.status(500).json({
+          success: false,
+          message: 'Error al leer el archivo: ' + readError.message
+        });
+      }
+    }
+    
+    // Mostrar información del archivo para diagnóstico
+    console.log(`[DIRECT_RESTORE] Información del archivo:`, {
+      originalname: req.file.originalname,
+      size: req.file.size,
+      buffer_length: req.file.buffer.length
+    });
+    
+    // Crear un directorio temporal
+    const tempDir = path.join(os.tmpdir(), 'docubox_direct_restore_' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Guardar el buffer a un archivo
+    const zipPath = path.join(tempDir, 'backup.zip');
+    fs.writeFileSync(zipPath, req.file.buffer);
+    
+    console.log(`[DIRECT_RESTORE] Archivo guardado en: ${zipPath}`);
+    
+    // Verificar el archivo ZIP antes de intentar extraerlo
+    try {
+      const stats = fs.statSync(zipPath);
+      console.log(`[DIRECT_RESTORE] Tamaño del archivo guardado: ${stats.size} bytes`);
+      
+      if (stats.size === 0) {
+        throw new Error('El archivo ZIP está vacío');
+      }
+    } catch (verifyError) {
+      console.error('[DIRECT_RESTORE] Error al verificar ZIP:', verifyError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error al verificar archivo ZIP: ' + verifyError.message
+      });
+    }
+    
+    // Función auxiliar para listar de forma recursiva todos los archivos en un directorio
+    function listFilesRecursively(dir, level = 0) {
+      if (!fs.existsSync(dir)) {
+        return [`${' '.repeat(level)}📁 ${dir} (DIRECTORIO NO EXISTE)`];
+      }
+
+      let results = [];
+      const indent = ' '.repeat(level);
+      try {
+        const files = fs.readdirSync(dir);
+        results.push(`${indent}📁 ${path.basename(dir)} (${files.length} elementos)`);
+        for (const file of files) {
+          const filePath = path.join(dir, file);
+          const stat = fs.statSync(filePath);
+          if (stat.isDirectory()) {
+            results = results.concat(listFilesRecursively(filePath, level + 1));
+          } else {
+            results.push(`${indent} 📄 ${file} (${Math.round(stat.size / 1024)}KB)`);
+          }
+        }
+      } catch (error) {
+        results.push(`${indent}❌ ERROR: ${error.message}`);
+      }
+      return results;
+    }
+    
+    // Extraer el archivo ZIP
+    console.log(`[DIRECT_RESTORE] Extrayendo archivo ZIP: ${zipPath}`);
+    
+    try {
+      // Usamos extract-zip que sabemos que funciona en la restauración de etiquetas
+      const extract = require('extract-zip');
+      await extract(zipPath, { dir: tempDir });
+      
+      // Verificar la estructura de los archivos extraídos
+      console.log('[DIRECT_RESTORE] Estructura detallada de los archivos extraídos:');
+      const fileStructure = listFilesRecursively(tempDir);
+      fileStructure.forEach(line => console.log(line));
+      
+      // Verificar que el directorio de destino existe
+      const docsDir = path.join(__dirname, 'buckets', targetBucket);
+      if (!fs.existsSync(docsDir)) {
+        console.log(`[DIRECT_RESTORE] Creando directorio de destino: ${docsDir}`);
+        fs.mkdirSync(docsDir, { recursive: true });
+      } else {
+        console.log(`[DIRECT_RESTORE] Directorio de destino existe: ${docsDir}`);
+        // Listar contenido del directorio de destino antes de copiar
+        console.log('[DIRECT_RESTORE] Contenido del directorio de destino ANTES de copiar:');
+        const destStructureBefore = listFilesRecursively(docsDir);
+        destStructureBefore.forEach(line => console.log(line));
+      }
+      
+      // Restaurar los archivos de manera más robusta
+      console.log(`[DIRECT_RESTORE] Iniciando copia de archivos a: ${docsDir}`);
+      
+      // Función de copia mejorada
+      function copyFilesSafely(src, dest) {
+        console.log(`[DIRECT_RESTORE] Copiando de ${src} a ${dest}`);
+        
+        // Verificar que el origen existe
+        if (!fs.existsSync(src)) {
+          console.error(`[DIRECT_RESTORE] ERROR: Origen no existe: ${src}`);
+          return false;
+        }
+        
+        // Crear destino si no existe
+        if (!fs.existsSync(dest)) {
+          console.log(`[DIRECT_RESTORE] Creando directorio: ${dest}`);
+          fs.mkdirSync(dest, { recursive: true });
+        }
+        
+        // Leer el contenido del origen
+        const items = fs.readdirSync(src);
+        console.log(`[DIRECT_RESTORE] Encontrados ${items.length} elementos para copiar`);
+        
+        let copiedCount = 0;
+        let errorCount = 0;
+        
+        // Copiar cada elemento
+        for (const item of items) {
+          if (item === 'backup.zip' || item === 'database-export.json' || 
+              item === 'metadata.json' || item === 'tags.json') {
+            console.log(`[DIRECT_RESTORE] Omitiendo archivo especial: ${item}`);
+            continue;
+          }
+          
+          const srcPath = path.join(src, item);
+          const destPath = path.join(dest, item);
+          
+          try {
+            const stat = fs.statSync(srcPath);
+            
+            if (stat.isDirectory()) {
+              // Recursivamente copiar subdirectorios
+              const success = copyFilesSafely(srcPath, destPath);
+              if (success) {
+                copiedCount++;
+              } else {
+                errorCount++;
+              }
+            } else {
+              // Copiar archivo
+              console.log(`[DIRECT_RESTORE] Copiando archivo: ${item} (${Math.round(stat.size / 1024)}KB)`);
+              fs.copyFileSync(srcPath, destPath);
+              copiedCount++;
+            }
+          } catch (itemError) {
+            console.error(`[DIRECT_RESTORE] Error al copiar ${item}: ${itemError.message}`);
+            errorCount++;
+          }
+        }
+        
+        console.log(`[DIRECT_RESTORE] Resultados de copia: ${copiedCount} exitosos, ${errorCount} errores`);
+        return errorCount === 0;
+      }
+      
+      // Primero, verificar si hay directorios específicos que debemos usar
+      const potentialSourceDirs = ['files', 'documentos', 'archivos', 'documents', 'backup'];
+      let sourceDir = tempDir;
+      
+      for (const dirName of potentialSourceDirs) {
+        const dirPath = path.join(tempDir, dirName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          sourceDir = dirPath;
+          console.log(`[DIRECT_RESTORE] Usando directorio específico: ${dirName}`);
+          break;
+        }
+      }
+      
+      // Iniciar la copia desde el directorio fuente
+      const copySuccess = copyFilesSafely(sourceDir, docsDir);
+      
+      // Verificar que los archivos se han copiado correctamente
+      console.log('[DIRECT_RESTORE] Contenido del directorio de destino DESPUÉS de copiar:');
+      const destStructureAfter = listFilesRecursively(docsDir);
+      destStructureAfter.forEach(line => console.log(line));
+      
+      if (copySuccess) {
+        console.log(`[DIRECT_RESTORE] Archivos copiados exitosamente de ${sourceDir} a ${docsDir}`);
+      } else {
+        console.warn(`[DIRECT_RESTORE] Se completó la copia con algunos errores`);
+      }
+      
+      // Restaurar metadatos si existe el archivo
+      const metadataFile = path.join(tempDir, 'metadata.json');
+      if (fs.existsSync(metadataFile)) {
+        try {
+          console.log(`[DIRECT_RESTORE] Restaurando metadatos desde: ${metadataFile}`);
+          const metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+          // Aquí se puede implementar la lógica para restaurar los metadatos
+        } catch (metadataError) {
+          console.error('[DIRECT_RESTORE] Error al restaurar metadatos:', metadataError);
+        }
+      }
+      
+      // Limpiar archivos temporales
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        console.log(`[DIRECT_RESTORE] Directorio temporal eliminado: ${tempDir}`);
+      } catch (cleanupError) {
+        console.error(`[DIRECT_RESTORE] Error al limpiar directorio temporal: ${cleanupError.message}`);
+      }
+      
+      return res.json({
+        success: true,
+        message: 'Restauración completada exitosamente'
+      });
+      
+    } catch (extractError) {
+      console.error('[DIRECT_RESTORE] Error al extraer ZIP:', extractError);
+      
+      // Intento alternativo con otro método
+      try {
+        console.log('[DIRECT_RESTORE] Intentando método alternativo de extracción...');
+        
+        // Intentar con spawn para utilizar utilidades del sistema
+        const { spawn } = require('child_process');
+        
+        if (process.platform === 'win32') {
+          // En Windows, intentar con PowerShell
+          const psProcess = spawn('powershell.exe', [
+            '-Command',
+            `Expand-Archive -Path "${zipPath}" -DestinationPath "${tempDir}" -Force`
+          ]);
+          
+          await new Promise((resolve, reject) => {
+            psProcess.on('close', (code) => {
+              if (code === 0) {
+                console.log('[DIRECT_RESTORE] Extracción con PowerShell exitosa');
+                resolve();
+              } else {
+                console.warn('[DIRECT_RESTORE] Error en extracción con PowerShell');
+                resolve(); // Continuamos para probar el siguiente método
+              }
+            });
+          });
+        } else {
+          // En Unix, intentar con unzip
+          const unzipProcess = spawn('unzip', ['-o', zipPath, '-d', tempDir]);
+          
+          await new Promise((resolve, reject) => {
+            unzipProcess.on('close', (code) => {
+              if (code === 0) {
+                console.log('[DIRECT_RESTORE] Extracción con unzip exitosa');
+                resolve();
+              } else {
+                console.warn('[DIRECT_RESTORE] Error en extracción con unzip');
+                resolve(); // Continuamos para probar el siguiente método
+              }
+            });
+          });
+        }
+        
+        // Verificar si se extrajeron archivos
+        const filesAfterAlt = fs.readdirSync(tempDir);
+        if (filesAfterAlt.length > 1 || (filesAfterAlt.length === 1 && filesAfterAlt[0] !== 'backup.zip')) {
+          console.log('[DIRECT_RESTORE] Método alternativo de extracción exitoso, continuando con restauración...');
+          
+          // Continuamos con el mismo proceso de copia que antes
+          const docsDir = path.join(__dirname, 'buckets', targetBucket);
+          if (!fs.existsSync(docsDir)) {
+            fs.mkdirSync(docsDir, { recursive: true });
+          }
+          
+          // Intentar restaurar los archivos
+          console.log(`[DIRECT_RESTORE] Copiando archivos extraídos a: ${docsDir}`);
+          
+          // Copiar todo el contenido recursivamente
+          function copyRecursive(src, dest) {
+            if (fs.existsSync(src)) {
+              const stats = fs.statSync(src);
+              if (stats.isDirectory()) {
+                if (!fs.existsSync(dest)) {
+                  fs.mkdirSync(dest, { recursive: true });
+                }
+                fs.readdirSync(src).forEach(function(childItemName) {
+                  if (childItemName !== 'backup.zip' && !childItemName.endsWith('.json')) {
+                    copyRecursive(
+                      path.join(src, childItemName),
+                      path.join(dest, childItemName)
+                    );
+                  }
+                });
+              } else {
+                fs.copyFileSync(src, dest);
+              }
+            }
+          }
+          
+          // Buscar carpetas específicas en el directorio temporal
+          const potentialSourceDirs = ['files', 'documentos', 'archivos', 'documents', 'backup'];
+          let sourceDir = tempDir;
+          
+          for (const dirName of potentialSourceDirs) {
+            const dirPath = path.join(tempDir, dirName);
+            if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+              sourceDir = dirPath;
+              console.log(`[DIRECT_RESTORE] Usando directorio específico: ${dirName}`);
+              break;
+            }
+          }
+          
+          copyRecursive(sourceDir, docsDir);
+          console.log(`[DIRECT_RESTORE] Archivos copiados exitosamente con método alternativo`);
+          
+          // Limpiar archivos temporales
+          try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            console.error(`[DIRECT_RESTORE] Error al limpiar directorio temporal: ${cleanupError.message}`);
+          }
+          
+          return res.json({
+            success: true,
+            message: 'Restauración completada exitosamente (método alternativo)'
+          });
+        } else {
+          throw new Error('No se pudieron extraer archivos con el método alternativo');
+        }
+      } catch (altError) {
+        console.error('[DIRECT_RESTORE] Error en método alternativo:', altError);
+        
+        // Último recurso: copiar el archivo ZIP directamente
+        try {
+          console.log(`[DIRECT_RESTORE] Procediendo a restauración manual (último recurso)`);
+          
+          // Obtener la ruta del directorio de documentos
+          const docsDir = path.join(__dirname, 'buckets', targetBucket);
+          
+          // Crear el directorio si no existe
+          fs.mkdirSync(docsDir, { recursive: true });
+          
+          // Copiar el archivo ZIP al directorio de destino
+          const destZipPath = path.join(docsDir, req.file.originalname);
+          fs.copyFileSync(zipPath, destZipPath);
+          
+          console.log(`[DIRECT_RESTORE] Archivo ZIP copiado a: ${destZipPath}`);
+          
+          // Limpiar archivos temporales
+          try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            console.error(`[DIRECT_RESTORE] Error al limpiar directorio temporal: ${cleanupError.message}`);
+          }
+          
+          return res.json({
+            success: true,
+            message: 'Archivo de backup copiado al bucket (sin extraer). Puede ser necesario procesarlo manualmente.',
+            warning: 'No se pudo extraer el archivo ZIP automaticamente'
+          });
+        } catch (copyError) {
+          console.error('[DIRECT_RESTORE] Error al copiar ZIP:', copyError);
+          return res.status(500).json({
+            success: false,
+            message: 'Error al procesar archivo: No se pudo extraer ni copiar'
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[DIRECT_RESTORE] Error general:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error al procesar la restauración: ' + error.message 
+    });
+  }
+});
+
+// Nuevo endpoint simplificado para restauración
+app.post('/api/simple-restore', upload.single('backupFile'), async (req, res) => {
+  console.log('[SIMPLE_RESTORE] Iniciando proceso de restauración simplificado');
+  
+  // Objeto para registrar cada paso del proceso
+  const processLog = {
+    steps: [],
+    success: false,
+    errors: []
+  };
+
+  try {
+    // Paso 1: Validar datos de entrada
+    if (!req.file) {
+      processLog.errors.push('No se proporcionó archivo de backup');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No se proporcionó archivo de backup',
+        log: processLog
+      });
+    }
+    
+    processLog.steps.push('Archivo recibido correctamente');
+    
+    // Obtener el bucket destino
+    const targetBucket = req.body.targetBucket || req.body.bucketName;
+    
+    if (!targetBucket) {
+      processLog.errors.push('Nombre de bucket destino no proporcionado');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre de bucket destino no proporcionado',
+        log: processLog
+      });
+    }
+    
+    processLog.steps.push(`Bucket destino identificado: ${targetBucket}`);
+    
+    // Paso 2: Crear directorio temporal
+    const tempDir = path.join(os.tmpdir(), 'simple_restore_' + Date.now());
+    try {
+      fs.mkdirSync(tempDir, { recursive: true });
+      processLog.steps.push(`Directorio temporal creado: ${tempDir}`);
+    } catch (mkdirError) {
+      processLog.errors.push(`Error al crear directorio temporal: ${mkdirError.message}`);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al crear directorio temporal',
+        error: mkdirError.message,
+        log: processLog
+      });
+    }
+    
+    // Paso 3: Guardar archivo ZIP
+    const zipPath = path.join(tempDir, 'backup.zip');
+    try {
+      fs.writeFileSync(zipPath, req.file.buffer);
+      const stats = fs.statSync(zipPath);
+      processLog.steps.push(`Archivo ZIP guardado: ${zipPath} (${stats.size} bytes)`);
+    } catch (saveError) {
+      processLog.errors.push(`Error al guardar archivo ZIP: ${saveError.message}`);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al guardar archivo ZIP',
+        error: saveError.message,
+        log: processLog
+      });
+    }
+    
+    // Paso 4: Extraer archivo ZIP
+    try {
+      // Importar módulo para extraer ZIP
+      const extract = require('extract-zip');
+      await extract(zipPath, { dir: tempDir });
+      
+      // Verificar que se extrajeron archivos
+      const extractedFiles = fs.readdirSync(tempDir);
+      processLog.steps.push(`ZIP extraído correctamente con ${extractedFiles.length} elementos`);
+      
+      // Listar archivos extraídos
+      const extractedFilesList = extractedFiles.map(file => {
+        const filePath = path.join(tempDir, file);
+        const stats = fs.statSync(filePath);
+        return `${file} (${stats.isDirectory() ? 'directorio' : `${Math.round(stats.size / 1024)}KB`})`;
+      });
+      processLog.steps.push(`Archivos extraídos: ${extractedFilesList.join(', ')}`);
+      
+    } catch (extractError) {
+      processLog.errors.push(`Error al extraer ZIP: ${extractError.message}`);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al extraer archivo ZIP',
+        error: extractError.message,
+        log: processLog
+      });
+    }
+    
+    // Paso 5: Verificar directorio destino
+    const docsDir = path.join(__dirname, 'buckets', targetBucket);
+    try {
+      if (!fs.existsSync(docsDir)) {
+        fs.mkdirSync(docsDir, { recursive: true });
+        processLog.steps.push(`Directorio destino creado: ${docsDir}`);
+      } else {
+        processLog.steps.push(`Directorio destino ya existe: ${docsDir}`);
+      }
+    } catch (dirError) {
+      processLog.errors.push(`Error al verificar/crear directorio destino: ${dirError.message}`);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al verificar/crear directorio destino',
+        error: dirError.message,
+        log: processLog
+      });
+    }
+    
+    // Paso 6: Copiar archivos
+    try {
+      // Copiar archivos manualmente
+      function copyFile(src, dest) {
+        try {
+          fs.copyFileSync(src, dest);
+          return true;
+        } catch (e) {
+          console.error(`[SIMPLE_RESTORE] Error al copiar archivo ${src} a ${dest}: ${e.message}`);
+          return false;
+        }
+      }
+      
+      function copyDir(srcDir, destDir) {
+        // Crear el directorio de destino si no existe
+        if (!fs.existsSync(destDir)) {
+          fs.mkdirSync(destDir, { recursive: true });
+        }
+        
+        let copied = 0;
+        let errors = 0;
+        
+        // Leer el contenido del directorio
+        const entries = fs.readdirSync(srcDir);
+        
+        // Iterar sobre cada entrada
+        for (const entry of entries) {
+          // Omitir archivos especiales
+          if (entry === 'backup.zip' || entry === 'database-export.json' || 
+              entry === 'metadata.json' || entry === 'tags.json') {
+            continue;
+          }
+          
+          const srcPath = path.join(srcDir, entry);
+          const destPath = path.join(destDir, entry);
+          
+          const stat = fs.statSync(srcPath);
+          
+          if (stat.isDirectory()) {
+            // Si es un directorio, copiar recursivamente
+            const result = copyDir(srcPath, destPath);
+            copied += result.copied;
+            errors += result.errors;
+          } else {
+            // Si es un archivo, copiar directamente
+            if (copyFile(srcPath, destPath)) {
+              copied++;
+            } else {
+              errors++;
+            }
+          }
+        }
+        
+        return { copied, errors };
+      }
+      
+      // Buscar directorios específicos como en la versión anterior
+      const potentialSourceDirs = ['files', 'documentos', 'archivos', 'documents', 'backup'];
+      let sourceDir = tempDir;
+      
+      for (const dirName of potentialSourceDirs) {
+        const dirPath = path.join(tempDir, dirName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          sourceDir = dirPath;
+          processLog.steps.push(`Usando directorio específico para copia: ${dirName}`);
+          break;
+        }
+      }
+      
+      // Iniciar copia
+      processLog.steps.push(`Iniciando copia de archivos desde ${sourceDir} a ${docsDir}`);
+      const copyResult = copyDir(sourceDir, docsDir);
+      
+      if (copyResult.errors === 0) {
+        processLog.steps.push(`Copia completada exitosamente: ${copyResult.copied} archivos copiados`);
+      } else {
+        processLog.steps.push(`Copia completada con advertencias: ${copyResult.copied} archivos copiados, ${copyResult.errors} errores`);
+      }
+      
+    } catch (copyError) {
+      processLog.errors.push(`Error al copiar archivos: ${copyError.message}`);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al copiar archivos',
+        error: copyError.message,
+        log: processLog
+      });
+    }
+    
+    // Paso 7: Limpiar archivos temporales
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      processLog.steps.push('Archivos temporales eliminados correctamente');
+    } catch (cleanupError) {
+      processLog.steps.push(`Advertencia: No se pudieron eliminar archivos temporales: ${cleanupError.message}`);
+      // No fallamos por esto, solo es una advertencia
+    }
+    
+    // Todo exitoso
+    processLog.success = true;
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Restauración completada exitosamente',
+      log: processLog
+    });
+    
+  } catch (generalError) {
+    // Error general no manejado
+    processLog.errors.push(`Error general no manejado: ${generalError.message}`);
+    console.error('[SIMPLE_RESTORE] Error general:', generalError);
+    
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error general no manejado',
+      error: generalError.message,
+      log: processLog
     });
   }
 });

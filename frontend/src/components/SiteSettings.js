@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import BackupButton from './BackupButton'; // Ajusta la ruta si es necesario
 
 const SiteSettings = ({ onClose, onSave }) => {
   const [title, setTitle] = useState('');
@@ -8,10 +7,8 @@ const SiteSettings = ({ onClose, onSave }) => {
   const [previewLogo, setPreviewLogo] = useState('');
 
   const [storageStats, setStorageStats] = useState(null);
-const [loadingStats, setLoadingStats] = useState(false);
-const [isAdmin, setIsAdmin] = useState(false);
-
-
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Cargar configuración actual al iniciar
   useEffect(() => {
@@ -32,49 +29,42 @@ const [isAdmin, setIsAdmin] = useState(false);
     }
   }, []);
 
-
-
-// Verificar si el usuario es admin y cargar estadísticas de almacenamiento
-
-
-
-useEffect(() => {
-  // Importar la función de autenticación
-  import('../services/auth').then(auth => {
-    // Siempre mostrar las estadísticas por ahora
-    setIsAdmin(true);
-    
-    // Obtener el token de autorización
-    const token = auth.getAuthToken();
-    
-    // Cargar las estadísticas de almacenamiento con la URL completa
-    setLoadingStats(true);
-    
-    const headers = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    
-    fetch('http://localhost:3001/api/bucket-size', { headers })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Error al obtener estadísticas de almacenamiento');
-        }
-        return response.json();
-      })
-      .then(data => {
-        console.log('Datos de almacenamiento recibidos:', data);
-        setStorageStats(data);
-        setLoadingStats(false);
-      })
-      .catch(error => {
-        console.error('Error al cargar estadísticas:', error);
-        setLoadingStats(false);
-      });
-  });
-}, []);
-
-
+  // Verificar si el usuario es admin y cargar estadísticas de almacenamiento
+  useEffect(() => {
+    // Importar la función de autenticación
+    import('../services/auth').then(auth => {
+      // Siempre mostrar las estadísticas por ahora
+      setIsAdmin(true);
+      
+      // Obtener el token de autorización
+      const token = auth.getAuthToken();
+      
+      // Cargar las estadísticas de almacenamiento con la URL completa
+      setLoadingStats(true);
+      
+      const headers = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      fetch('http://localhost:3001/api/bucket-size', { headers })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Error al obtener estadísticas de almacenamiento');
+          }
+          return response.json();
+        })
+        .then(data => {
+          console.log('Datos de almacenamiento recibidos:', data);
+          setStorageStats(data);
+          setLoadingStats(false);
+        })
+        .catch(error => {
+          console.error('Error al cargar estadísticas:', error);
+          setLoadingStats(false);
+        });
+    });
+  }, []);
 
   const handleLogoChange = (e) => {
     const file = e.target.files[0];
@@ -154,47 +144,7 @@ useEffect(() => {
               </div>
             )}
           </div>
-
-
-          {isAdmin && (
-  <div className="form-group storage-stats-section">
-    <h3>Estadísticas de Almacenamiento</h3>
-    {loadingStats ? (
-      <p>Cargando estadísticas...</p>
-    ) : storageStats ? (
-      <div>
-        <div className="storage-progress-container">
-          <div className="storage-progress-bar">
-            <div 
-              className="storage-progress" 
-              style={{ 
-                width: `${storageStats.percentUsed}%`,
-                backgroundColor: storageStats.percentUsed > 80 ? '#ff4d4d' : '#4682b4'
-              }}
-            ></div>
-          </div>
-          <div className="storage-percentage">{storageStats.percentUsed}%</div>
-        </div>
-        <div className="storage-details">
-          <p><strong>Espacio utilizado:</strong> {storageStats.sizeMB} MB</p>
-          <p><strong>Espacio total:</strong> {storageStats.maxSizeMB} MB</p>
-          <p><strong>Espacio disponible:</strong> {storageStats.remainingMB} MB</p>
-        </div>
-      </div>
-    ) : (
-      <p>No se pudieron cargar las estadísticas de almacenamiento.</p>
-    )}
-  </div>
-
-)}
-
-{isAdmin && (
-  <div className="form-group backup-section">
-    <h3>Copia de Seguridad</h3>
-    <p>Genere una copia de seguridad de todos los archivos del sistema.</p>
-    <BackupButton />
-  </div>
-)}
+  
         </div>
         
         <div className="settings-actions">
