@@ -9,8 +9,7 @@ const createFetchOptions = (method, body = null) => {
     method: method,
     headers: {
       'Authorization': `Bearer ${getAuthToken()}`
-    },
-    mode: 'cors'
+    }
   };
   
   if (body) {
@@ -25,25 +24,13 @@ const createFetchOptions = (method, body = null) => {
   return options;
 };
 
-// Configurar axios
-const api = axios.create({
-  baseURL: backendUrl,
-  withCredentials: false
-});
-
-// Agregar token a las solicitudes
-api.interceptors.request.use(config => {
-  const token = getAuthToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
 // Obtener lista de backups
 export const listBackups = async () => {
   try {
-    const listUrl = `${backendUrl}/api/backup/list`;
+    // Probamos con una URL diferente según la bitácora
+    const listUrl = `${backendUrl}/api/backup`;
+    
+    console.log('Intentando obtener backups desde:', listUrl);
     
     const response = await fetch(listUrl, createFetchOptions('GET'));
     
@@ -52,6 +39,7 @@ export const listBackups = async () => {
     }
     
     const data = await response.json();
+    console.log('Datos de backups recibidos:', data);
     
     // Formatear la respuesta para manejar diferentes formatos
     const formattedResponse = {
@@ -74,7 +62,10 @@ export const listBackups = async () => {
 // Crear un nuevo backup
 export const createBackup = async (bucketName) => {
   try {
-    const createUrl = `${backendUrl}/api/backup/create`;
+    // Cambio en la URL según bitácora
+    const createUrl = `${backendUrl}/api/backup`;
+    
+    console.log('Intentando crear backup en:', createUrl);
     
     const response = await fetch(createUrl, createFetchOptions('POST', { bucketName }));
     
@@ -96,7 +87,10 @@ export const createBackup = async (bucketName) => {
 export const downloadBackup = async (filename) => {
   try {
     const token = getAuthToken();
+    // URL ajustada según bitácora
     const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
+    
+    console.log('Intentando descargar desde:', downloadUrl);
     
     // Para descargas, enviamos el token como parámetro de URL
     // ya que es una redirección directa al navegador
@@ -123,7 +117,10 @@ export const downloadBackup = async (filename) => {
 // Restaurar un backup
 export const restoreBackup = async (file, bucketName) => {
   try {
+    // URL ajustada según bitácora
     const restoreUrl = `${backendUrl}/api/backup/restore`;
+    
+    console.log('Intentando restaurar en:', restoreUrl);
     
     const formData = new FormData();
     formData.append('backupFile', file);
@@ -152,7 +149,10 @@ export const restoreBackup = async (file, bucketName) => {
 // Restaurar solo etiquetas de un backup
 export const restoreTags = async (file) => {
   try {
+    // URL ajustada según bitácora
     const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
+    
+    console.log('Intentando restaurar etiquetas en:', restoreTagsUrl);
     
     const formData = new FormData();
     formData.append('backupFile', file);
@@ -180,7 +180,10 @@ export const restoreTags = async (file) => {
 // Verificar etiquetas en un backup
 export const checkTags = async (file) => {
   try {
+    // URL ajustada según bitácora
     const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
+    
+    console.log('Verificando etiquetas en:', checkTagsUrl);
     
     const formData = new FormData();
     formData.append('backupFile', file);
@@ -208,7 +211,10 @@ export const checkTags = async (file) => {
 // Restaurar usuarios desde un backup
 export const restoreUsers = async (file, bucketName) => {
   try {
+    // URL ajustada según bitácora
     const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
+    
+    console.log('Restaurando usuarios en:', restoreUsersUrl);
     
     const formData = new FormData();
     formData.append('backupFile', file);
@@ -237,7 +243,10 @@ export const restoreUsers = async (file, bucketName) => {
 // Exportar etiquetas
 export const exportTags = async (bucketName) => {
   try {
+    // URL ajustada según bitácora
     const exportTagsUrl = `${backendUrl}/api/backup/export-tags`;
+    
+    console.log('Exportando etiquetas desde:', exportTagsUrl);
     
     const response = await fetch(exportTagsUrl, createFetchOptions('POST', { bucketName }));
     
@@ -270,7 +279,10 @@ export const exportTags = async (bucketName) => {
 // Importar etiquetas
 export const importTags = async (file, bucketName, replaceExisting = true) => {
   try {
+    // URL ajustada según bitácora
     const importTagsUrl = `${backendUrl}/api/backup/import-tags`;
+    
+    console.log('Importando etiquetas en:', importTagsUrl);
     
     const formData = new FormData();
     formData.append('tagsFile', file);
