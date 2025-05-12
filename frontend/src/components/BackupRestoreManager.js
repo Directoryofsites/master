@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { getAuthToken, getCurrentBucket } from '../services/auth';
 import { 
   listBackups,
@@ -38,29 +39,25 @@ const BackupRestoreManager = () => {
   }, []);
 
   // Función para obtener la lista de backups
+
 const fetchBackupList = async () => {
   try {
     setLoadingList(true);
     
-    // URL completa al backend en Railway
-    const backendUrl = 'https://master-production-5386.up.railway.app';
-    const apiUrl = `${backendUrl}/api/backup/list`;
-    
-    console.log('Intentando obtener lista de backups desde:', apiUrl);
-    
-    const response = await axios.get(apiUrl, {
-      headers: {
-        'Authorization': `Bearer ${authToken}`
-      }
-    });
+    const response = await listBackups();
       
-      if (response.data.success) {
-        setBackupList(response.data.backups || []);
-      } else {
-        console.error('Error al obtener lista de backups:', response.data);
-        setMessageType('error');
-        setMessage('Error al obtener lista de backups: ' + response.data.message);
+    if (response.success) {
+      setBackupList(response.backups || []);
+      if (response.backups && response.backups.length === 0) {
+        setMessageType('info');
+        setMessage('No hay backups disponibles en el servidor');
       }
+    } else {
+      console.error('Error al obtener lista de backups:', response);
+      setMessageType('error');
+      setMessage('Error al obtener lista de backups: ' + response.message);
+    }
+
     } catch (error) {
       console.error('Error al obtener lista de backups:', error);
       setMessageType('error');

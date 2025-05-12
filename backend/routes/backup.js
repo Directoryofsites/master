@@ -5,6 +5,32 @@ const { spawn } = require('child_process');
 const multer = require('multer');
 const router = express.Router();
 
+// Middleware para CORS específico para este router
+router.use((req, res, next) => {
+  // Permitir específicamente GitHub Pages y localhost durante desarrollo
+  const allowedOrigins = [
+    'https://directoryofsites.github.io',
+    'http://localhost:3000',
+    'http://localhost:3001'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Manejar las solicitudes OPTIONS preflight
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
+
 // Determinar directorio temporal adecuado para el entorno
 const os = require('os');
 let tempUploadsDir;
@@ -54,41 +80,83 @@ router.get('/test', (req, res) => {
 });
 
 // AÑADIR ESTE CÓDIGO AQUÍ
+
 // Ruta para listar backups disponibles
 router.get('/list', (req, res) => {
   try {
+    // Verificar token de autorización (opcional, dependiendo de tu configuración)
+    const authHeader = req.headers.authorization;
+    if (!authHeader && !req.query.token) {
+      console.log('[BACKUP] Intento de listar backups sin autenticación');
+      // Dependiendo de tu configuración, puedes bloquear o permitir
+      // return res.status(401).json({ 
+      //   success: false, 
+      //   message: 'No autorizado', 
+      //   backups: [] 
+      // });
+    }
+    
     console.log('[BACKUP] Listando backups disponibles');
     
     // Verificar que el directorio exista
     if (!fs.existsSync(backupsDir)) {
       fs.mkdirSync(backupsDir, { recursive: true });
       console.log(`[BACKUP] Directorio de backups creado durante listado: ${backupsDir}`);
+      
+      // Si acabamos de crear el directorio, estará vacío
+      return res.json({
+        success: true,
+        message: 'Directorio de backups creado. No hay backups disponibles.',
+        backups: []
+      });
     }
     
     // Obtener lista de archivos
-    const files = fs.readdirSync(backupsDir)
-      .filter(file => file.endsWith('.zip'))
-      .map(file => {
-        const filePath = path.join(backupsDir, file);
-        const stats = fs.statSync(filePath);
-        return {
-          filename: file,
-          path: filePath,
-          size: stats.size,
-          created: stats.birthtime || stats.mtime
-        };
-      })
-      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
+    let files = [];
+    try {
+      files = fs.readdirSync(backupsDir)
+        .filter(file => file.endsWith('.zip'))
+        .map(file => {
+          try {
+            const filePath = path.join(backupsDir, file);
+            const stats = fs.statSync(filePath);
+            return {
+              filename: file,
+              path: filePath,
+              size: stats.size,
+              createdAt: stats.birthtime || stats.mtime
+            };
+          } catch (fileErr) {
+            console.error(`[BACKUP] Error al procesar archivo ${file}:`, fileErr);
+            return null;
+          }
+        })
+        .filter(file => file !== null) // Eliminar archivos que dieron error
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // Ordenar por fecha más reciente
+    } catch (readErr) {
+      console.error('[BACKUP] Error al leer directorio de backups:', readErr);
+      return res.json({
+        success: false,
+        message: `Error al leer directorio de backups: ${readErr.message}`,
+        backups: []
+      });
+    }
     
     console.log(`[BACKUP] Encontrados ${files.length} archivos de backup`);
+    console.log('[BACKUP] Lista de backups:', files.map(f => f.filename).join(', '));
     
     res.json({
       success: true,
+      message: files.length > 0 ? 'Backups obtenidos correctamente' : 'No hay backups disponibles',
       backups: files
     });
   } catch (error) {
     console.error('[BACKUP] Error al listar backups:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: `Error al listar backups: ${error.message}`,
+      backups: [] 
+    });
   }
 });
 
@@ -169,10 +237,18 @@ const backupProcess = spawn('node', [
 // Ruta para descargar un backup
 router.get('/download/:filename', (req, res) => {
   const { filename } = req.params;
+  const { token } = req.query;
   const filePath = path.join(backupsDir, filename);
   
+  // Verificar que el archivo existe
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ success: false, message: 'Archivo no encontrado' });
+  }
+  
+  // Verificar token (básico, solo para asegurar que hay algún tipo de autenticación)
+  if (!token) {
+    console.log('[BACKUP] Intento de descarga sin token');
+    return res.status(401).json({ success: false, message: 'No autorizado: Token requerido' });
   }
   
   res.download(filePath, filename, (err) => {
