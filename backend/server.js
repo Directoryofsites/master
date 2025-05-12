@@ -350,11 +350,268 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Ruta para restauración mediante script independiente
+// Rutas para backup y restore
 app.use('/api', require('./routes/restore-bridge'));
 
-// Ruta para backup
-app.use('/api/backup', require('./routes/backup'));
+// Configuración directa de la ruta de backup
+app.get('/api/admin/backup', async (req, res) => {
+  console.log('[BACKUP] Iniciando proceso de backup en Railway');
+  
+  try {
+    // 1. Verificaciones básicas
+    if (!supabase) {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Supabase no está configurado.' 
+      });
+    }
+
+    // Verificar token en la URL
+    let userRole = req.userRole || 'guest';
+    let bucketToUse = req.bucketName || defaultBucketName;
+    
+    // Verificar si hay un token en los parámetros de consulta
+    if (req.query.token) {
+      try {
+        const tokenData = JSON.parse(Buffer.from(req.query.token, 'base64').toString());
+        console.log(`[BACKUP] Token en parámetros de consulta decodificado:`, JSON.stringify(tokenData));
+        
+        if (tokenData.username && userBucketMap[tokenData.username]) {
+          // Para usuarios estáticos
+          userRole = userRoleMap[tokenData.username] || 'user';
+          bucketToUse = userBucketMap[tokenData.username];
+          console.log(`[BACKUP] Usuario estático ${tokenData.username} con rol ${userRole} y bucket ${bucketToUse}`);
+        } else if (tokenData.role) {
+          // Si el token tiene rol explícito, usarlo
+          userRole = tokenData.role;
+          console.log(`[BACKUP] Usando rol desde token: ${userRole}`);
+          
+          // Si tiene bucket explícito, usarlo también
+          if (tokenData.bucket) {
+            bucketToUse = tokenData.bucket;
+            console.log(`[BACKUP] Usando bucket desde token: ${bucketToUse}`);
+          }
+        }
+      } catch (tokenError) {
+        console.error('[BACKUP] Error al decodificar token de parámetros:', tokenError);
+      }
+    }
+
+    if (userRole !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Solo administradores pueden generar copias de seguridad.' 
+      });
+    }
+
+    // 2. Configuración
+    const bucketName = bucketToUse;
+    const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `backup_${bucketName}_${dateStr}.zip`;
+
+    // 3. Configuración de headers
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Transfer-Encoding', 'chunked'); // Para archivos grandes
+
+    // 4. Configuración del archivador con compresión baja para ahorrar CPU
+    const archive = archiver('zip', { 
+      zlib: { level: 3 } // Nivel bajo de compresión (1-9)
+    });
+
+    // 5. Manejo de errores del archivador
+    archive.on('error', (err) => {
+      console.error('[BACKUP] Error del archivador:', err);
+      if (!res.headersSent) {
+        return res.status(500).json({
+          success: false, 
+          message: 'Error al crear archivo ZIP', 
+          error: err.message 
+        });
+      } else {
+        try { res.end(); } catch (e) {}
+      }
+    });
+
+    // 6. Conectar el archivo a la respuesta HTTP
+    archive.pipe(res);
+
+    // 7. Función optimizada para listar archivos (evitando recursión profunda)
+    const listFiles = async (prefix = '', depth = 0) => {
+      // Limitar profundidad para evitar problemas de stack
+      if (depth > 20) {
+        console.warn(`[BACKUP] Límite de profundidad alcanzado en ${prefix}`);
+        return [];
+      }
+
+      try {
+        console.log(`[BACKUP] Listando archivos en ${bucketName}/${prefix || 'raíz'}`);
+        
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .list(prefix, { sortBy: { column: 'name', order: 'asc' } });
+        
+        if (error) {
+          console.error(`[BACKUP] Error al listar ${prefix}:`, error);
+          return [];
+        }
+        
+        if (!data || data.length === 0) {
+          return [];
+        }
+
+        let filesList = [];
+
+        // Procesar archivos primero
+        for (const item of data) {
+          // Solo ignorar archivos de sistema, INCLUIR todos los metadatos
+          if (item.name === '.folder') {
+            continue;
+          }
+                  
+          const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+                  
+          // Si es archivo, añadir a la lista
+          if (item.metadata && item.metadata.mimetype !== 'application/x-directory') {
+            filesList.push({
+              path: itemPath,
+              size: item.metadata.size || 0
+            });
+          }
+        }
+
+        // Procesar carpetas después, pero solo si no tenemos demasiados archivos ya
+        if (filesList.length < 500) { // Limitar para evitar problemas de memoria
+          for (const item of data) {
+            const itemPath = prefix ? `${prefix}/${item.name}` : item.name;
+                    
+            // Si es carpeta, procesar recursivamente
+            if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+              const subFiles = await listFiles(itemPath, depth + 1);
+              filesList = filesList.concat(subFiles);
+            }
+          }
+        } else {
+          console.warn(`[BACKUP] Limitando archivos para evitar problemas de memoria en ${prefix}`);
+        }
+            
+        return filesList;
+      } catch (err) {
+        console.error(`[BACKUP] Error al listar ${prefix}:`, err);
+        return [];
+      }
+    };
+
+    // 8. Procesar archivos por lotes muy pequeños
+    const processFiles = async () => {
+      try {
+        // Listar todos los archivos
+        console.log(`[BACKUP] Recopilando lista de archivos...`);
+        const allFiles = await listFiles();
+                
+        console.log(`[BACKUP] Total archivos a procesar: ${allFiles.length}`);
+                
+        // Si no hay archivos, añadir README
+        if (allFiles.length === 0) {
+          archive.append('Este bucket no contiene archivos.', { name: 'README.txt' });
+          return;
+        }
+                
+        // Ordenar por tamaño (primero los más pequeños)
+        allFiles.sort((a, b) => a.size - b.size);
+                
+        // Procesar en lotes muy pequeños
+        const batchSize = 3; // Muy pocos a la vez
+                
+        for (let i = 0; i < allFiles.length; i += batchSize) {
+          const batch = allFiles.slice(i, i + batchSize);
+                  
+          // Procesar secuencialmente para reducir uso de memoria
+          for (const fileInfo of batch) {
+            try {
+              const filePath = fileInfo.path;
+              console.log(`[BACKUP] Procesando ${filePath} (${fileInfo.size} bytes)`);
+                        
+              // Descargar con reintentos limitados
+              let fileData = null;
+                        
+              for (let attempt = 0; attempt < 2; attempt++) { // Solo 2 intentos para ahorrar recursos
+                try {
+                  const { data, error } = await supabase.storage
+                    .from(bucketName)
+                    .download(filePath);
+                          
+                  if (error) {
+                    console.error(`[BACKUP] Error al descargar ${filePath}:`, error);
+                    await new Promise(r => setTimeout(r, 500)); // Espera corta
+                  } else {
+                    fileData = data;
+                    break;
+                  }
+                } catch (err) {
+                  console.error(`[BACKUP] Excepción al descargar ${filePath}:`, err);
+                }
+              }
+                        
+              if (!fileData) {
+                console.warn(`[BACKUP] No se pudo descargar ${filePath}, continuando...`);
+                continue;
+              }
+                        
+              // Añadir al ZIP
+              const buffer = await fileData.arrayBuffer();
+              archive.append(Buffer.from(buffer), { name: filePath });
+                        
+              // Liberar memoria explícitamente
+              fileData = null;
+                        
+              // Pequeña pausa para permitir liberar recursos
+              await new Promise(r => setTimeout(r, 100));
+            } catch (fileErr) {
+              console.error(`[BACKUP] Error al procesar archivo:`, fileErr);
+              // Continuar con el siguiente archivo
+            }
+          }
+                  
+          // Mostrar progreso
+          console.log(`[BACKUP] Progreso: ${Math.min(i + batch.length, allFiles.length)}/${allFiles.length}`);
+                  
+          // Pequeña pausa entre lotes para liberar recursos
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (processErr) {
+        console.error('[BACKUP] Error al procesar archivos:', processErr);
+        throw processErr;
+      }
+    };
+
+    // 9. Iniciar procesamiento
+    await processFiles();
+        
+    // 10. Finalizar el archivo ZIP
+    console.log('[BACKUP] Finalizando archivo ZIP...');
+    await archive.finalize();
+        
+    console.log(`[BACKUP] Resumen de la operación:`);
+    console.log(`[BACKUP] Usuario con rol: ${userRole}`);
+    console.log(`[BACKUP] Bucket utilizado: ${bucketName}`);
+    console.log(`[BACKUP] Token presente en URL: ${!!req.query.token}`);
+    console.log(`[BACKUP] Proceso completado exitosamente`);
+  } catch (err) {
+    console.error('[BACKUP] Error general:', err);
+        
+    if (!res.headersSent) {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error al generar copia de seguridad', 
+        error: err.message 
+      });
+    } else {
+      try { res.end(); } catch (e) {}
+    }
+  }
+});
 
 // Configuración de Supabase (sin valores predeterminados para garantizar separación)
 const supabaseUrl = process.env.SUPABASE_URL;
