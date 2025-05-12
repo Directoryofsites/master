@@ -12,7 +12,7 @@ import {
   exportTags,
   importTags
 } from '../services/backup';
-import './BackupRestoreManager.css';
+import '../components/BackupRestoreManager.css';
 
 const BackupRestoreManager = () => {
   const authToken = getAuthToken();
