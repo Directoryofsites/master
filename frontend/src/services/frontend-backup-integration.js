@@ -34,9 +34,10 @@ export const generateBackup = () => {
     const token = getAuthToken();
     
     // Crear URL para el endpoint de backup
-    // IMPORTANTE: Cambiar la URL a la de tu backend en Railway
-    const backendUrl = 'https://tu-app.railway.app'; // ¡ACTUALIZA ESTA URL!
-    const backupUrl = `${backendUrl}/api/admin/backup`;
+
+  // URL del backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const backupUrl = `${backendUrl}/api/backup/create`;
     
     // Crear un elemento <a> temporal para la descarga
     const downloadLink = document.createElement('a');
@@ -68,9 +69,9 @@ export const checkBackupStatus = async () => {
   try {
     const token = getAuthToken();
     
-    // IMPORTANTE: Cambiar la URL a la de tu backend en Railway
-    const backendUrl = 'https://tu-app.railway.app'; // ¡ACTUALIZA ESTA URL!
-    const statusUrl = `${backendUrl}/api/admin/backup-status`;
+  // URL del backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const statusUrl = `${backendUrl}/api/backup/list`;
     
     const response = await fetch(statusUrl, {
       method: 'GET',

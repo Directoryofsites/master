@@ -28,14 +28,21 @@ const BackupRestoreManager = () => {
   }, []);
 
   // Función para obtener la lista de backups
-  const fetchBackupList = async () => {
-    try {
-      setLoadingList(true);
-      const response = await axios.get('/api/backup/list', {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
+const fetchBackupList = async () => {
+  try {
+    setLoadingList(true);
+    
+    // URL completa al backend en Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const apiUrl = `${backendUrl}/api/backup/list`;
+    
+    console.log('Intentando obtener lista de backups desde:', apiUrl);
+    
+    const response = await axios.get(apiUrl, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`
+      }
+    });
       
       if (response.data.success) {
         setBackupList(response.data.backups || []);
@@ -69,23 +76,29 @@ const BackupRestoreManager = () => {
 
   // Crear un nuevo backup
   const handleCreateBackup = async () => {
-    try {
-      setLoading(true);
-      setMessage('Creando backup. Esto puede tardar unos minutos...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const bucketName = getCurrentBucket();
-      
-      if (!bucketName) {
-        throw new Error('No se pudo determinar el bucket para el backup');
+  try {
+    setLoading(true);
+    setMessage('Creando backup. Esto puede tardar unos minutos...');
+    setMessageType('info');
+    
+    // Obtener el bucket usando la función específica
+    const bucketName = getCurrentBucket();
+    
+    if (!bucketName) {
+      throw new Error('No se pudo determinar el bucket para el backup');
+    }
+    
+    // URL completa al backend en Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const createUrl = `${backendUrl}/api/backup/create/${bucketName}`;
+    
+    console.log('Intentando crear backup en:', createUrl);
+    
+    const response = await axios.get(createUrl, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`
       }
-      
-      const response = await axios.get(`/api/backup/create/${bucketName}`, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
+    });
       
       if (response.data.success) {
         setMessageType('success');
@@ -130,12 +143,19 @@ const BackupRestoreManager = () => {
     formData.append('backupFile', selectedFile);
     formData.append('targetBucket', currentBucket);
 
-    // Usar nuestro nuevo endpoint de puente
-    setMessage('Enviando archivo al servicio de restauración...');
-    
-    const response = await axios.post('/api/bridge-restore', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
+    // Usar nuestro nuevo endpoint de puente con URL completa
+setMessage('Enviando archivo al servicio de restauración...');
+
+// URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const restoreUrl = `${backendUrl}/api/bridge-restore`;
+
+console.log('Enviando archivo a:', restoreUrl);
+
+const response = await axios.post(restoreUrl, formData, {
+  headers: {
+    'Content-Type': 'multipart/form-data',
+
         'Authorization': `Bearer ${authToken}`
       },
       timeout: 600000, // 10 minutos (aumentado porque el script puede tardar más)
@@ -193,11 +213,18 @@ const BackupRestoreManager = () => {
         setMessageType('info');
       }
       
-      const formData = new FormData();
-      formData.append('backupFile', selectedFile);
-      
-      // Configuración mejorada para la carga de archivos
-      const response = await axios.post('/api/backup/restore-tags', formData, {
+  const formData = new FormData();
+formData.append('backupFile', selectedFile);
+
+// URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
+
+console.log('Enviando archivo para restaurar etiquetas a:', restoreTagsUrl);
+
+// Configuración mejorada para la carga de archivos
+const response = await axios.post(restoreTagsUrl, formData, {
+
         headers: {
           'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'multipart/form-data'
@@ -254,10 +281,17 @@ const BackupRestoreManager = () => {
       setMessageType('info');
       
       const formData = new FormData();
-      formData.append('backupFile', selectedFile);
-      
-      // Configuración mejorada para la carga de archivos
-      const response = await axios.post('/api/backup/check-tags', formData, {
+formData.append('backupFile', selectedFile);
+
+// URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
+
+console.log('Enviando archivo para verificar etiquetas a:', checkTagsUrl);
+
+// Configuración mejorada para la carga de archivos
+const response = await axios.post(checkTagsUrl, formData, {
+
         headers: {
           'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'multipart/form-data'
@@ -309,11 +343,18 @@ const BackupRestoreManager = () => {
         throw new Error('No se pudo determinar el bucket para exportar etiquetas');
       }
       
-      // Crear un enlace para descargar el archivo
-      const link = document.createElement('a');
-      link.href = `/api/backup/export-tags?bucket=${bucketName}&token=${authToken}`;
-      link.setAttribute('download', `tags_export_${bucketName}.json`);
-      document.body.appendChild(link);
+      // URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const exportUrl = `${backendUrl}/api/backup/export-tags?bucket=${bucketName}&token=${authToken}`;
+
+console.log('URL de exportación de etiquetas:', exportUrl);
+
+// Crear un enlace para descargar el archivo
+const link = document.createElement('a');
+link.href = exportUrl;
+link.setAttribute('download', `tags_export_${bucketName}.json`);
+document.body.appendChild(link);
+
       link.click();
       document.body.removeChild(link);
       
@@ -355,10 +396,17 @@ const BackupRestoreManager = () => {
       formData.append('targetBucket', targetBucket);
       formData.append('replaceExisting', replaceExistingTags);
       
-      // Configuración mejorada para la carga de archivos
-      const response = await axios.post('/api/backup/import-tags', formData, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
+   // URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const importUrl = `${backendUrl}/api/backup/import-tags`;
+
+console.log('Enviando archivo para importar etiquetas a:', importUrl);
+
+// Configuración mejorada para la carga de archivos
+const response = await axios.post(importUrl, formData, {
+  headers: {
+    'Authorization': `Bearer ${authToken}`,
+
           'Content-Type': 'multipart/form-data'
         },
         // Aumentar el timeout para archivos grandes
@@ -417,10 +465,16 @@ const BackupRestoreManager = () => {
       
       formData.append('targetBucket', targetBucket);
       
-      // Endoint para restaurar usuarios (asumo que existe basado en la bitácora)
-      const response = await axios.post('/api/backup/restore-users', formData, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
+      // URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
+
+console.log('Enviando archivo para restaurar usuarios a:', restoreUsersUrl);
+
+// Endpoint para restaurar usuarios
+const response = await axios.post(restoreUsersUrl, formData, {
+  headers: {
+    'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'multipart/form-data'
         },
         timeout: 300000, // 5 minutos
@@ -453,11 +507,17 @@ const BackupRestoreManager = () => {
       setMessage('Preparando descarga...');
       setMessageType('info');
       
-      // Crear un enlace de descarga
-      const link = document.createElement('a');
-      link.href = `/api/backup/download/${filename}`;
-      link.setAttribute('download', filename);
-      document.body.appendChild(link);
+     // URL completa al backend en Railway
+const backendUrl = 'https://master-production-5386.up.railway.app';
+const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
+
+console.log('URL de descarga de backup:', downloadUrl);
+
+// Crear un enlace de descarga
+const link = document.createElement('a');
+link.href = downloadUrl;
+link.setAttribute('download', filename);
+document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       

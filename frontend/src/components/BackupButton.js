@@ -1,124 +1,140 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 
 /**
- * Componente de botón para restaurar copias de seguridad
- * Permite al usuario seleccionar un archivo de backup para restaurarlo
+ * Componente de botón para crear copias de seguridad
  */
-const RestoreBackupButton = () => {
-  const [status, setStatus] = useState('idle'); // idle, uploading, success, error
+const BackupButton = () => {
+  const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const fileInputRef = useRef(null);
+  const [error, setError] = useState('');
 
   /**
-   * Maneja la selección del archivo de backup
+   * Obtener el bucket actual del token en localStorage
    */
-  const handleFileSelect = () => {
-    fileInputRef.current.click();
+  const getCurrentBucket = () => {
+    try {
+      // Intentar primero obtener desde user_session (nuevo formato)
+      const userSession = localStorage.getItem('user_session');
+      if (userSession) {
+        try {
+          const userData = JSON.parse(userSession);
+          if (userData.bucket) {
+            console.log('Obteniendo bucket desde user_session:', userData.bucket);
+            return userData.bucket;
+          }
+        } catch (err) {
+          console.error('Error al parsear user_session:', err);
+        }
+      }
+
+      // Intentar desde authToken si es necesario
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try {
+          const decodedToken = atob(token);
+          const tokenData = JSON.parse(decodedToken);
+          if (tokenData.bucket) {
+            return tokenData.bucket;
+          }
+        } catch (error) {
+          console.error('Error al decodificar token:', error);
+        }
+      }
+
+      // Último recurso: localStorage directo
+      return localStorage.getItem('currentBucket');
+    } catch (error) {
+      console.error('Error al obtener bucket:', error);
+      return null;
+    }
   };
 
   /**
-   * Procesa el archivo seleccionado y lo envía al servidor
+   * Función para iniciar el proceso de backup
    */
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    // Verificar que sea un archivo ZIP
-    if (!file.name.toLowerCase().endsWith('.zip')) {
-      setStatus('error');
-      setMessage('Error: El archivo debe ser un ZIP válido de copia de seguridad.');
-      return;
-    }
-
+  const handleCreateBackup = async () => {
     try {
-      // Cambiar estado a cargando
-      setStatus('uploading');
-      setMessage('Cargando archivo de copia de seguridad...');
+      setIsLoading(true);
+      setMessage('Iniciando creación de backup...');
+      setError('');
 
-      // Importar auth para obtener el token
-      const auth = await import('../services/auth');
-      const token = auth.getAuthToken();
+      // Obtener el token y el bucket actual
+      const token = localStorage.getItem('authToken');
+      const currentBucket = getCurrentBucket();
 
-      // Crear FormData para enviar el archivo
-      const formData = new FormData();
-      formData.append('backup', file);
-
-      // URL completa al endpoint de restauración
-      const backendUrl = "https://master-production-5386.up.railway.app"; // URL de tu backend
-      const restoreUrl = `${backendUrl}/api/admin/restore`;
-
-      // Enviar el archivo al servidor
-      const response = await fetch(restoreUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error en el servidor: ${response.status} ${response.statusText}`);
+      if (!currentBucket) {
+        throw new Error('No se pudo determinar el bucket actual');
       }
 
-      const result = await response.json();
+      console.log(`Creando backup para bucket: ${currentBucket}`);
 
-      // Mostrar mensaje de éxito
-      setStatus('success');
-      setMessage('Restauración completada con éxito. El sistema se actualizará en breve.');
+      // URL absoluta al backend en Railway
+      const backendUrl = 'https://master-production-5386.up.railway.app';
+      const createUrl = `${backendUrl}/api/backup/create/${currentBucket}`;
 
-      // Recargar la página después de 3 segundos para mostrar los cambios
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
+      console.log('URL de creación de backup:', createUrl);
+
+      // Configurar el timeout para la petición
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minuto timeout
+
+      // Realizar la petición
+      const response = await fetch(createUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cache-Control': 'no-cache'
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error al crear backup: ${response.status} ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Respuesta del servidor:', data);
+
+      setMessage('Backup creado correctamente');
+      
+      // Si el servidor devuelve una URL de descarga, iniciar la descarga
+      if (data.downloadUrl) {
+        window.open(data.downloadUrl, '_blank');
+      }
+
     } catch (error) {
-      console.error('Error en proceso de restauración:', error);
-      setStatus('error');
-      setMessage(`Error: ${error.message}`);
-
-      // Volver a estado normal después de unos segundos en caso de error
-      setTimeout(() => {
-        setStatus('idle');
-        setMessage('');
-      }, 5000);
+      console.error('Error en la creación del backup:', error);
+      setError(error.message || 'Error desconocido');
+      setMessage('');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="restore-container">
-      {/* Input de archivo oculto */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        style={{ display: 'none' }}
-        accept=".zip"
-        onChange={handleFileChange}
-      />
-      
-      {/* Botón visible para iniciar la restauración */}
-      <button 
-        className={`restore-button ${status}`}
-        onClick={handleFileSelect}
-        disabled={status === 'uploading'}
+    <div className="backup-button-container">
+      <button
+        className="backup-button"
+        onClick={handleCreateBackup}
+        disabled={isLoading}
       >
-        {status === 'uploading' ? 'Restaurando...' : 
-         status === 'success' ? 'Restauración exitosa' : 
-         'Restaurar Copia de Seguridad'}
+        {isLoading ? 'Creando backup...' : 'Crear Copia de Seguridad'}
       </button>
-      
-      {message && (
-        <div className={`message ${status}`}>
-          {message}
-        </div>
-      )}
-      
+
+      {message && <div className="success-message">{message}</div>}
+      {error && <div className="error-message">{error}</div>}
+
       <style jsx>{`
-        .restore-container {
+        .backup-button-container {
           margin: 15px 0;
           padding: 10px;
         }
         
-        .restore-button {
-          background-color: #2196F3;
+        .backup-button {
+          background-color: #28a745;
           color: white;
           padding: 10px 15px;
           border: none;
@@ -128,44 +144,27 @@ const RestoreBackupButton = () => {
           transition: background-color 0.3s;
         }
         
-        .restore-button:hover {
-          background-color: #0b7dda;
+        .backup-button:hover {
+          background-color: #218838;
         }
         
-        .restore-button:disabled {
+        .backup-button:disabled {
           background-color: #cccccc;
           cursor: not-allowed;
         }
         
-        .restore-button.uploading {
-          background-color: #FF9800;
-        }
-        
-        .restore-button.success {
-          background-color: #4CAF50;
-        }
-        
-        .restore-button.error {
-          background-color: #f44336;
-        }
-        
-        .message {
+        .success-message {
           margin-top: 10px;
           padding: 8px;
           border-radius: 4px;
-        }
-        
-        .message.uploading {
-          color: #E65100;
-          background-color: #FFF3E0;
-        }
-        
-        .message.success {
           color: #1B5E20;
           background-color: #E8F5E9;
         }
         
-        .message.error {
+        .error-message {
+          margin-top: 10px;
+          padding: 8px;
+          border-radius: 4px;
           color: #B71C1C;
           background-color: #FFEBEE;
         }
@@ -174,4 +173,4 @@ const RestoreBackupButton = () => {
   );
 };
 
-export default RestoreBackupButton;
+export default BackupButton;
