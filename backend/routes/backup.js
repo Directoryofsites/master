@@ -43,6 +43,55 @@ router.get('/test', (req, res) => {
   });
 });
 
+// Ruta de prueba para verificar que el router funciona
+router.get('/test', (req, res) => {
+  console.log('[BACKUP] Ruta de prueba de backup accedida');
+  res.json({
+    success: true,
+    message: 'API de backup funcionando correctamente',
+    serverTime: new Date().toISOString()
+  });
+});
+
+// AÑADIR ESTE CÓDIGO AQUÍ
+// Ruta para listar backups disponibles
+router.get('/list', (req, res) => {
+  try {
+    console.log('[BACKUP] Listando backups disponibles');
+    
+    // Verificar que el directorio exista
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+      console.log(`[BACKUP] Directorio de backups creado durante listado: ${backupsDir}`);
+    }
+    
+    // Obtener lista de archivos
+    const files = fs.readdirSync(backupsDir)
+      .filter(file => file.endsWith('.zip'))
+      .map(file => {
+        const filePath = path.join(backupsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          filename: file,
+          path: filePath,
+          size: stats.size,
+          created: stats.birthtime || stats.mtime
+        };
+      })
+      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
+    
+    console.log(`[BACKUP] Encontrados ${files.length} archivos de backup`);
+    
+    res.json({
+      success: true,
+      backups: files
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al listar backups:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Ruta para crear backup
 router.get('/create/:bucketName', async (req, res) => {
   try {
@@ -59,12 +108,16 @@ router.get('/create/:bucketName', async (req, res) => {
     const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
     const backupPath = path.join(backupsDir, backupFileName);
     
-    // Ejecutar el script de backup como un proceso separado
-    const backupProcess = spawn('node', [
-      path.join(__dirname, '..', 'backup_script.js'),
-      bucketName,
-      backupPath
-    ]);
+  // Ejecutar el script de backup como un proceso separado
+const scriptPath = path.join(__dirname, '..', 'backup_script.js');
+console.log(`[BACKUP] Ruta al script de backup: ${scriptPath}`);
+console.log(`[BACKUP] Verificando existencia del script: ${fs.existsSync(scriptPath) ? 'EXISTE' : 'NO EXISTE'}`);
+
+const backupProcess = spawn('node', [
+  scriptPath,
+  bucketName,
+  backupPath
+]);
     
     let output = '';
     
@@ -164,12 +217,19 @@ router.post('/restore', upload.single('backupFile'), async (req, res) => {
     const uploadedFilePath = req.file.path;
     console.log(`[RESTORE] Ruta del archivo subido: ${uploadedFilePath}`);
     
-    // Ejecutar el script de restauración
-    const scriptPath = fs.existsSync(path.join(__dirname, '..', 'restore_script_simple.js')) 
-      ? path.join(__dirname, '..', 'restore_script_simple.js')
-      : path.join(__dirname, '..', 'restore_script.js');
-    
-    console.log(`[RESTORE] Ejecutando script de restauración: ${scriptPath}`);
+    // Determinar la ruta del script de restauración
+const simplePath = path.join(__dirname, '..', 'restore_script_simple.js');
+const standardPath = path.join(__dirname, '..', 'restore_script.js');
+
+console.log(`[RESTORE] Verificando scripts de restauración:`);
+console.log(`- Script simple (${simplePath}): ${fs.existsSync(simplePath) ? 'EXISTE' : 'NO EXISTE'}`);
+console.log(`- Script estándar (${standardPath}): ${fs.existsSync(standardPath) ? 'EXISTE' : 'NO EXISTE'}`);
+
+const scriptPath = fs.existsSync(simplePath) 
+  ? simplePath
+  : standardPath;
+
+console.log(`[RESTORE] Utilizando script de restauración: ${scriptPath}`);
     
     const restoreProcess = spawn('node', [
       scriptPath,

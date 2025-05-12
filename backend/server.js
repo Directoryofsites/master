@@ -422,6 +422,314 @@ app.use('/api', require('./routes/restore-bridge'));
 // Rutas para backup
 app.use('/api/admin', require('./routes/backup'));
 
+// Rutas de compatibilidad para el frontend
+console.log('[SERVER] Configurando rutas de compatibilidad para el frontend...');
+
+// Crear un router específico para compatibilidad con el frontend
+const frontendCompatRouter = express.Router();
+
+// Ruta para listar backups
+frontendCompatRouter.get('/backup/list', (req, res) => {
+  console.log('[SERVER] Petición recibida en /api/backup/list');
+  
+  try {
+    // Configurar directorio de backups
+    const backupsDir = path.join(__dirname, 'backups');
+    console.log(`[SERVER] Directorio de backups: ${backupsDir}`);
+    
+    // Verificar que el directorio exista
+    if (!fs.existsSync(backupsDir)) {
+      try {
+        fs.mkdirSync(backupsDir, { recursive: true });
+        console.log(`[SERVER] Directorio de backups creado: ${backupsDir}`);
+      } catch (dirError) {
+        console.error(`[SERVER] Error al crear directorio de backups: ${dirError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: 'Error al crear directorio de backups',
+          details: dirError.message
+        });
+      }
+    }
+    
+    console.log(`[SERVER] Listando archivos en directorio: ${backupsDir}`);
+    
+    // Obtener lista de archivos
+    const files = fs.readdirSync(backupsDir)
+      .filter(file => file.endsWith('.zip') || file.includes('backup'))
+      .map(file => {
+        const filePath = path.join(backupsDir, file);
+        try {
+          const stats = fs.statSync(filePath);
+          return {
+            filename: file,
+            path: filePath,
+            size: stats.size,
+            created: stats.birthtime || stats.mtime
+          };
+        } catch (statError) {
+          console.error(`[SERVER] Error al obtener stats para ${file}: ${statError.message}`);
+          return {
+            filename: file,
+            path: filePath,
+            error: statError.message
+          };
+        }
+      })
+      .sort((a, b) => {
+        if (!a.created) return 1;
+        if (!b.created) return -1;
+        return new Date(b.created) - new Date(a.created); // Ordenar por fecha más reciente
+      });
+    
+    console.log(`[SERVER] Encontrados ${files.length} archivos de backup`);
+    
+    res.json({
+      success: true,
+      backups: files
+    });
+  } catch (error) {
+    console.error('[SERVER] Error al listar backups:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Error al listar backups',
+      details: error.message 
+    });
+  }
+});
+
+// Ruta para crear backup
+frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
+  const { bucketName } = req.params;
+  console.log(`[SERVER] Petición recibida en /api/backup/create/${bucketName}`);
+  
+  try {
+    // Verificar el script de backup primero
+    const scriptPath = path.join(__dirname, 'backup_script.js');
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`[SERVER] Error: Script de backup no encontrado en ${scriptPath}`);
+      return res.status(500).json({
+        success: false,
+        error: 'Script de backup no encontrado',
+        details: `El archivo ${scriptPath} no existe`
+      });
+    }
+    
+    // Configurar directorio de backups
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      try {
+        fs.mkdirSync(backupsDir, { recursive: true });
+        console.log(`[SERVER] Directorio de backups creado: ${backupsDir}`);
+      } catch (dirError) {
+        console.error(`[SERVER] Error al crear directorio de backups: ${dirError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: 'Error al crear directorio de backups',
+          details: dirError.message
+        });
+      }
+    }
+    
+    // Crear nombre de archivo para el backup
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
+    const backupPath = path.join(backupsDir, backupFileName);
+    
+    console.log(`[SERVER] Iniciando backup directo para bucket: ${bucketName}`);
+    console.log(`[SERVER] Script de backup: ${scriptPath}`);
+    console.log(`[SERVER] Ruta del archivo de backup: ${backupPath}`);
+    
+    // Ejecutar el script directamente
+    const backupProcess = spawn('node', [
+      scriptPath,
+      bucketName,
+      backupPath
+    ]);
+    
+    let output = '';
+    
+    backupProcess.stdout.on('data', (data) => {
+      const dataStr = data.toString();
+      console.log(`[SERVER BACKUP STDOUT] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.stderr.on('data', (data) => {
+      const dataStr = data.toString();
+      console.error(`[SERVER BACKUP STDERR] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.on('close', (code) => {
+      console.log(`[SERVER] Proceso de backup terminado con código: ${code}`);
+      
+      if (code !== 0) {
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de backup terminó con código ${code}`,
+          output
+        });
+      }
+      
+      // Verificar que el archivo existe
+      if (!fs.existsSync(backupPath)) {
+        return res.status(500).json({
+          success: false,
+          message: 'El archivo de backup no se generó correctamente'
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Backup completado correctamente',
+        filename: backupFileName,
+        path: backupPath,
+        output
+      });
+    });
+    
+    backupProcess.on('error', (error) => {
+      console.error(`[SERVER] Error al iniciar proceso de backup: ${error.message}`);
+      res.status(500).json({
+        success: false,
+        error: 'Error al iniciar proceso de backup',
+        details: error.message
+      });
+    });
+    
+  } catch (error) {
+    console.error('[SERVER] Error general en proceso de backup:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      details: error.message
+    });
+  }
+});
+
+// Registrar el router de compatibilidad
+app.use('/api', frontendCompatRouter);
+console.log('[SERVER] Rutas de compatibilidad frontend registradas en /api');
+
+// Ruta de prueba específica para verificar que el sistema de backup está funcionando
+app.get('/api/backup-test', (req, res) => {
+  console.log('[SERVER] Ejecutando prueba de sistema de backup');
+  
+  const results = {
+    serverTime: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    isRailway: !!process.env.RAILWAY_PROJECT_ID,
+    backupRouterLoaded: false,
+    tempDirectories: {
+      exists: []
+    },
+    routes: {
+      registered: []
+    }
+  };
+  
+  // Verificar si el router de backup se puede cargar
+  try {
+    const backupPath = path.join(__dirname, 'routes', 'backup.js');
+    require(backupPath);
+    results.backupRouterLoaded = true;
+    console.log('[SERVER] Router de backup cargado correctamente');
+  } catch (error) {
+    console.error('[SERVER] Error al cargar router de backup:', error);
+    results.backupRouterError = error.message;
+  }
+  
+  // Verificar directorios temporales
+  const tempDirs = [
+    '/tmp',
+    '/tmp/docubox',
+    '/tmp/docubox-uploads',
+    '/tmp/docubox-backup',
+    path.join(__dirname, 'backups')
+  ];
+  
+  tempDirs.forEach(dir => {
+    try {
+      if (fs.existsSync(dir)) {
+        results.tempDirectories.exists.push(dir);
+        
+        // Intentar escribir un archivo de prueba para verificar permisos
+        const testFile = path.join(dir, `test-${Date.now()}.txt`);
+        fs.writeFileSync(testFile, 'test', 'utf8');
+        fs.unlinkSync(testFile); // Eliminar archivo de prueba
+        results.tempDirectories[dir] = 'read/write';
+      } else {
+        results.tempDirectories[dir] = 'no existe';
+      }
+    } catch (error) {
+      results.tempDirectories[dir] = `error: ${error.message}`;
+    }
+  });
+  
+  // Listar rutas registradas
+  const routesToCheck = [
+    { method: 'GET', path: '/api/backup/list' },
+    { method: 'GET', path: '/api/backup/create/test-bucket' },
+    { method: 'GET', path: '/api/admin/list' },
+    { method: 'GET', path: '/api/admin/create/test-bucket' }
+  ];
+  
+  // Verificar rutas registradas (simplificado)
+  app._router.stack.forEach(middleware => {
+    if (middleware.route) {
+      // Rutas simples
+      results.routes.registered.push(`${middleware.route.stack[0].method.toUpperCase()} ${middleware.route.path}`);
+    } else if (middleware.name === 'router' && middleware.handle.stack) {
+      // Router middleware
+      middleware.handle.stack.forEach(handler => {
+        if (handler.route) {
+          results.routes.registered.push(`${handler.route.stack[0].method.toUpperCase()} ${middleware.regexp}-${handler.route.path}`);
+        }
+      });
+    }
+  });
+  
+  console.log('[SERVER] Prueba de backup completada:', results);
+  res.json({
+    success: true,
+    message: 'Prueba de sistema de backup ejecutada correctamente',
+    results
+  });
+});
+
+// Verificación de scripts críticos
+console.log('[SERVER] Verificando scripts críticos para backup/restore...');
+
+const criticalScripts = [
+  { name: 'Backup Script', path: path.join(__dirname, 'backup_script.js') },
+  { name: 'Restore Script', path: path.join(__dirname, 'restore_script.js') },
+  { name: 'Restore Script (Simple)', path: path.join(__dirname, 'restore_script_simple.js') }
+];
+
+let scriptsOk = true;
+
+criticalScripts.forEach(script => {
+  try {
+    if (fs.existsSync(script.path)) {
+      const stats = fs.statSync(script.path);
+      console.log(`[SERVER] ✅ ${script.name} encontrado: ${script.path} (${stats.size} bytes)`);
+    } else {
+      console.log(`[SERVER] ❌ ${script.name} NO ENCONTRADO: ${script.path}`);
+      scriptsOk = false;
+    }
+  } catch (error) {
+    console.error(`[SERVER] ❌ Error al verificar ${script.name}: ${error.message}`);
+    scriptsOk = false;
+  }
+});
+
+if (!scriptsOk) {
+  console.warn('[SERVER] ⚠️ Algunos scripts críticos no están disponibles. Funcionalidades de backup/restore podrían fallar.');
+} else {
+  console.log('[SERVER] ✅ Todos los scripts críticos encontrados correctamente.');
+}
+
 // Log de confirmación de rutas registradas
 console.log('[STARTUP] Rutas de API registradas correctamente:');
 console.log('[STARTUP] - /api/* -> ./routes/restore-bridge.js');
@@ -12068,6 +12376,38 @@ app.post('/api/simple-restore', upload.single('backupFile'), async (req, res) =>
       log: processLog
     });
   }
+});
+
+// Manejador de rutas no encontradas (404)
+app.use((req, res, next) => {
+  console.log(`[SERVER] Ruta no encontrada: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint no encontrado',
+    path: req.originalUrl,
+    method: req.method
+  });
+});
+
+// Manejador global de errores
+app.use((err, req, res, next) => {
+  console.error('[SERVER] Error no manejado:', err);
+  console.error('[SERVER] Stack trace:', err.stack);
+  
+  // Verificar si ya se ha enviado una respuesta
+  if (res.headersSent) {
+    console.error('[SERVER] Headers ya enviados, no se puede enviar respuesta de error');
+    return next(err);
+  }
+  
+  // Enviar respuesta de error
+  res.status(err.status || 500).json({
+    success: false,
+    error: 'Error interno del servidor',
+    message: err.message || 'Ocurrió un error inesperado',
+    path: req.originalUrl,
+    method: req.method
+  });
 });
 
 // Iniciar el servidor
