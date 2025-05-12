@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 import { getAuthToken, getCurrentBucket } from '../services/auth';
+import { 
+  listBackups,
+  createBackup,
+  downloadBackup, 
+  restoreBackup,
+  restoreTags, 
+  checkTags,
+  restoreUsers,
+  exportTags,
+  importTags
+} from '../services/backup';
 import './BackupRestoreManager.css';
 
 const BackupRestoreManager = () => {
@@ -88,34 +98,24 @@ const fetchBackupList = async () => {
       throw new Error('No se pudo determinar el bucket para el backup');
     }
     
-    // URL completa al backend en Railway
-    const backendUrl = 'https://master-production-5386.up.railway.app';
-    const createUrl = `${backendUrl}/api/backup/create/${bucketName}`;
+    const response = await createBackup(bucketName);
     
-    console.log('Intentando crear backup en:', createUrl);
-    
-    const response = await axios.get(createUrl, {
-      headers: {
-        'Authorization': `Bearer ${authToken}`
-      }
-    });
-      
-      if (response.data.success) {
-        setMessageType('success');
-        setMessage('Backup creado exitosamente: ' + response.data.filename);
-        fetchBackupList(); // Actualizar lista
-      } else {
-        setMessageType('error');
-        setMessage('Error al crear backup: ' + response.data.message);
-      }
-    } catch (error) {
-      console.error('Error al crear backup:', error);
+    if (response.success) {
+      setMessageType('success');
+      setMessage('Backup creado exitosamente: ' + response.filename);
+      fetchBackupList(); // Actualizar lista
+    } else {
       setMessageType('error');
-      setMessage('Error al crear backup: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setLoading(false);
+      setMessage('Error al crear backup: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al crear backup:', error);
+    setMessageType('error');
+    setMessage('Error al crear backup: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Restaurar un backup
 
@@ -138,36 +138,28 @@ const fetchBackupList = async () => {
       throw new Error('No se pudo determinar el bucket de destino');
     }
 
-    // Crear FormData
-    const formData = new FormData();
-    formData.append('backupFile', selectedFile);
-    formData.append('targetBucket', currentBucket);
+    setMessage('Enviando archivo al servicio de restauración...');
+    
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo: ${currentPercent + 5}% completado...`;
+          }
+        }
+        return prevMessage;
+      });
+    }, 1000);
+    
+    const response = await restoreBackup(selectedFile, currentBucket);
+    
+    clearInterval(progressInterval);
 
-    // Usar nuestro nuevo endpoint de puente con URL completa
-setMessage('Enviando archivo al servicio de restauración...');
-
-// URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const restoreUrl = `${backendUrl}/api/bridge-restore`;
-
-console.log('Enviando archivo a:', restoreUrl);
-
-const response = await axios.post(restoreUrl, formData, {
-  headers: {
-    'Content-Type': 'multipart/form-data',
-
-        'Authorization': `Bearer ${authToken}`
-      },
-      timeout: 600000, // 10 minutos (aumentado porque el script puede tardar más)
-      onUploadProgress: (progressEvent) => {
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-        setMessage(`Subiendo archivo: ${percentCompleted}% completado...`);
-      }
-    });
-
-    if (response.data.status === 'success') {
+    if (response.success || response.status === 'success') {
       setMessageType('success');
-      setMessage(`Restauración completada: ${response.data.fileCount || 'múltiples'} archivos restaurados`);
+      setMessage(`Restauración completada: ${response.fileCount || 'múltiples'} archivos restaurados`);
       setSelectedFile(null);
       
       // Limpiar input de archivo
@@ -175,362 +167,312 @@ const response = await axios.post(restoreUrl, formData, {
       if (fileInput) fileInput.value = '';
       
       // Registrar detalles para debug
-      console.log('Detalles de restauración:', response.data);
+      console.log('Detalles de restauración:', response);
     } else {
-      throw new Error(response.data.message || 'Error desconocido');
+      throw new Error(response.message || 'Error desconocido');
     }
   } catch (error) {
     console.error('Error en la restauración:', error);
     setMessageType('error');
-    
-    if (error.response && error.response.data) {
-      console.log('Detalles del error:', error.response.data);
-      setMessage(`Error: ${error.response.data.message || error.message}`);
-    } else {
-      setMessage(`Error: ${error.message}`);
-    }
+    setMessage(`Error: ${error.message}`);
   } finally {
     setLoading(false);
   }
 };
 
   // Restaurar solo etiquetas de un backup
-  const handleRestoreTags = async (e, silent = false) => {
-    if (e && !silent) e.preventDefault();
-    
-    if (!selectedFile) {
-      if (!silent) {
-        setMessageType('error');
-        setMessage('Por favor seleccione un archivo de backup');
-      }
-      return;
+const handleRestoreTags = async (e, silent = false) => {
+  if (e && !silent) e.preventDefault();
+  
+  if (!selectedFile) {
+    if (!silent) {
+      setMessageType('error');
+      setMessage('Por favor seleccione un archivo de backup');
+    }
+    return;
+  }
+  
+  try {
+    if (!silent) {
+      setLoading(true);
+      setMessage('Restaurando etiquetas. Esto puede tardar unos minutos...');
+      setMessageType('info');
     }
     
-    try {
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    let progressInterval;
+    
+    if (!silent) {
+      progressInterval = setInterval(() => {
+        setMessage(prevMessage => {
+          if (prevMessage.includes('%')) {
+            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+            if (currentPercent < 95) {
+              return `Subiendo archivo para restaurar etiquetas: ${currentPercent + 5}% completado...`;
+            }
+          }
+          return prevMessage;
+        });
+      }, 1000);
+    }
+    
+    const response = await restoreTags(selectedFile);
+    
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+    
+    if (response.success) {
       if (!silent) {
-        setLoading(true);
-        setMessage('Restaurando etiquetas. Esto puede tardar unos minutos...');
-        setMessageType('info');
+        setMessageType('success');
+        setMessage(`Etiquetas restauradas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
       }
-      
-  const formData = new FormData();
-formData.append('backupFile', selectedFile);
-
-// URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
-
-console.log('Enviando archivo para restaurar etiquetas a:', restoreTagsUrl);
-
-// Configuración mejorada para la carga de archivos
-const response = await axios.post(restoreTagsUrl, formData, {
-
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'multipart/form-data'
-        },
-        // Aumentar el timeout para archivos grandes
-        timeout: 300000, // 5 minutos
-        // Mostrar progreso de carga si no es silencioso
-        onUploadProgress: !silent ? (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setMessage(`Subiendo archivo para restaurar etiquetas: ${percentCompleted}% completado...`);
-        } : undefined
-      });
-      
-      if (response.data.success) {
-        if (!silent) {
-          setMessageType('success');
-          setMessage(`Etiquetas restauradas exitosamente: ${response.data.details.success} etiquetas. ${response.data.details.errors || 0} errores.`);
-        }
-        return true;
-      } else {
-        if (!silent) {
-          setMessageType('error');
-          setMessage('Error al restaurar etiquetas: ' + response.data.message);
-        }
-        return false;
-      }
-    } catch (error) {
-      console.error('Error al restaurar etiquetas:', error);
+      return true;
+    } else {
       if (!silent) {
         setMessageType('error');
-        setMessage('Error al restaurar etiquetas: ' + (error.response?.data?.message || error.message));
+        setMessage('Error al restaurar etiquetas: ' + response.message);
       }
       return false;
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
     }
-  };
+  } catch (error) {
+    console.error('Error al restaurar etiquetas:', error);
+    if (!silent) {
+      setMessageType('error');
+      setMessage('Error al restaurar etiquetas: ' + error.message);
+    }
+    return false;
+  } finally {
+    if (!silent) {
+      setLoading(false);
+    }
+  }
+};
   
   // Verificar etiquetas en un backup
-  const handleCheckTags = async (e) => {
-    e.preventDefault();
+const handleCheckTags = async (e) => {
+  e.preventDefault();
+  
+  if (!selectedFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de backup');
+    return;
+  }
+  
+  try {
+    setCheckingTags(true);
+    setMessage('Verificando etiquetas en el backup...');
+    setMessageType('info');
     
-    if (!selectedFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de backup');
-      return;
-    }
-    
-    try {
-      setCheckingTags(true);
-      setMessage('Verificando etiquetas en el backup...');
-      setMessageType('info');
-      
-      const formData = new FormData();
-formData.append('backupFile', selectedFile);
-
-// URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
-
-console.log('Enviando archivo para verificar etiquetas a:', checkTagsUrl);
-
-// Configuración mejorada para la carga de archivos
-const response = await axios.post(checkTagsUrl, formData, {
-
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'multipart/form-data'
-        },
-        // Aumentar el timeout para archivos grandes
-        timeout: 300000, // 5 minutos
-        // Mostrar progreso de carga
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setMessage(`Subiendo archivo: ${percentCompleted}% completado...`);
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo: ${currentPercent + 5}% completado...`;
+          }
         }
+        return prevMessage;
       });
-      
-      if (response.data.success) {
-        if (response.data.hasTags) {
-          setTagsFound(response.data);
-          setMessageType('success');
-          setMessage(`Se encontraron ${response.data.tagCount} etiquetas en ${response.data.categories.length} categorías.`);
-        } else {
-          setTagsFound(null);
-          setMessageType('warning');
-          setMessage('No se encontraron etiquetas en el archivo de backup.');
-        }
+    }, 1000);
+    
+    const response = await checkTags(selectedFile);
+    
+    clearInterval(progressInterval);
+    
+    if (response.success) {
+      if (response.hasTags) {
+        setTagsFound(response);
+        setMessageType('success');
+        setMessage(`Se encontraron ${response.tagCount} etiquetas en ${response.categories.length} categorías.`);
       } else {
         setTagsFound(null);
-        setMessageType('error');
-        setMessage('Error al verificar etiquetas: ' + response.data.message);
+        setMessageType('warning');
+        setMessage('No se encontraron etiquetas en el archivo de backup.');
       }
-    } catch (error) {
-      console.error('Error al verificar etiquetas:', error);
+    } else {
+      setTagsFound(null);
       setMessageType('error');
-      setMessage('Error al verificar etiquetas: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setCheckingTags(false);
+      setMessage('Error al verificar etiquetas: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al verificar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al verificar etiquetas: ' + error.message);
+  } finally {
+    setCheckingTags(false);
+  }
+};
   
   // Exportar etiquetas
-  const handleExportTags = async () => {
-    try {
-      setExportingTags(true);
-      setMessage('Exportando etiquetas. Se iniciará una descarga automáticamente...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const bucketName = getCurrentBucket();
-      
-      if (!bucketName) {
-        throw new Error('No se pudo determinar el bucket para exportar etiquetas');
-      }
-      
-      // URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const exportUrl = `${backendUrl}/api/backup/export-tags?bucket=${bucketName}&token=${authToken}`;
-
-console.log('URL de exportación de etiquetas:', exportUrl);
-
-// Crear un enlace para descargar el archivo
-const link = document.createElement('a');
-link.href = exportUrl;
-link.setAttribute('download', `tags_export_${bucketName}.json`);
-document.body.appendChild(link);
-
-      link.click();
-      document.body.removeChild(link);
-      
+const handleExportTags = async () => {
+  try {
+    setExportingTags(true);
+    setMessage('Exportando etiquetas. Se iniciará una descarga automáticamente...');
+    setMessageType('info');
+    
+    // Obtener el bucket usando la función específica
+    const bucketName = getCurrentBucket();
+    
+    if (!bucketName) {
+      throw new Error('No se pudo determinar el bucket para exportar etiquetas');
+    }
+    
+    const response = await exportTags(bucketName);
+    
+    if (response.success) {
       setMessageType('success');
       setMessage('Exportación de etiquetas iniciada correctamente');
-    } catch (error) {
-      console.error('Error al exportar etiquetas:', error);
-      setMessageType('error');
-      setMessage('Error al exportar etiquetas: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setExportingTags(false);
+    } else {
+      throw new Error(response.message || 'Error en la exportación');
     }
-  };
+  } catch (error) {
+    console.error('Error al exportar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al exportar etiquetas: ' + error.message);
+  } finally {
+    setExportingTags(false);
+  }
+};
   
   // Importar etiquetas
-  const handleImportTags = async (e) => {
-    e.preventDefault();
+const handleImportTags = async (e) => {
+  e.preventDefault();
+  
+  if (!tagFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de etiquetas JSON');
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    setMessage('Importando etiquetas...');
+    setMessageType('info');
     
-    if (!tagFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de etiquetas JSON');
-      return;
+    // Obtener el bucket usando la función específica
+    const targetBucket = getCurrentBucket();
+    
+    if (!targetBucket) {
+      throw new Error('No se pudo determinar el bucket de destino');
     }
     
-    try {
-      setLoading(true);
-      setMessage('Importando etiquetas...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const targetBucket = getCurrentBucket();
-      
-      if (!targetBucket) {
-        throw new Error('No se pudo determinar el bucket de destino');
-      }
-      
-      const formData = new FormData();
-      formData.append('tagsFile', tagFile);
-      formData.append('targetBucket', targetBucket);
-      formData.append('replaceExisting', replaceExistingTags);
-      
-   // URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const importUrl = `${backendUrl}/api/backup/import-tags`;
-
-console.log('Enviando archivo para importar etiquetas a:', importUrl);
-
-// Configuración mejorada para la carga de archivos
-const response = await axios.post(importUrl, formData, {
-  headers: {
-    'Authorization': `Bearer ${authToken}`,
-
-          'Content-Type': 'multipart/form-data'
-        },
-        // Aumentar el timeout para archivos grandes
-        timeout: 180000, // 3 minutos
-        // Mostrar progreso de carga
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setMessage(`Subiendo archivo de etiquetas: ${percentCompleted}% completado...`);
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo de etiquetas: ${currentPercent + 5}% completado...`;
+          }
         }
+        return prevMessage;
       });
-      
-      if (response.data.success) {
-        setMessageType('success');
-        setMessage(`Etiquetas importadas exitosamente: ${response.data.details.success} etiquetas. ${response.data.details.errors || 0} errores.`);
-        setTagFile(null);
-        // Resetear el input de archivo
-        const fileInput = document.getElementById('tagFile');
-        if (fileInput) fileInput.value = '';
-      } else {
-        setMessageType('error');
-        setMessage('Error al importar etiquetas: ' + response.data.message);
-      }
-    } catch (error) {
-      console.error('Error al importar etiquetas:', error);
+    }, 1000);
+    
+    const response = await importTags(tagFile, targetBucket, replaceExistingTags);
+    
+    clearInterval(progressInterval);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage(`Etiquetas importadas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
+      setTagFile(null);
+      // Resetear el input de archivo
+      const fileInput = document.getElementById('tagFile');
+      if (fileInput) fileInput.value = '';
+    } else {
       setMessageType('error');
-      setMessage('Error al importar etiquetas: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setLoading(false);
+      setMessage('Error al importar etiquetas: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al importar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al importar etiquetas: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Restaurar usuarios
-  const handleRestoreUsers = async (e) => {
-    e.preventDefault();
+const handleRestoreUsers = async (e) => {
+  e.preventDefault();
+  
+  if (!selectedFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de backup');
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    setMessage('Restaurando usuarios. Esto puede tardar unos minutos...');
+    setMessageType('info');
     
-    if (!selectedFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de backup');
-      return;
+    // Obtener el bucket usando la función específica
+    const targetBucket = getCurrentBucket();
+    
+    if (!targetBucket) {
+      throw new Error('No se pudo determinar el bucket de destino');
     }
     
-    try {
-      setLoading(true);
-      setMessage('Restaurando usuarios. Esto puede tardar unos minutos...');
-      setMessageType('info');
-      
-      const formData = new FormData();
-      formData.append('backupFile', selectedFile);
-      
-      // Obtener el bucket usando la función específica
-      const targetBucket = getCurrentBucket();
-      
-      if (!targetBucket) {
-        throw new Error('No se pudo determinar el bucket de destino');
-      }
-      
-      formData.append('targetBucket', targetBucket);
-      
-      // URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
-
-console.log('Enviando archivo para restaurar usuarios a:', restoreUsersUrl);
-
-// Endpoint para restaurar usuarios
-const response = await axios.post(restoreUsersUrl, formData, {
-  headers: {
-    'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'multipart/form-data'
-        },
-        timeout: 300000, // 5 minutos
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setMessage(`Subiendo archivo para restaurar usuarios: ${percentCompleted}% completado...`);
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo para restaurar usuarios: ${currentPercent + 5}% completado...`;
+          }
         }
+        return prevMessage;
       });
-      
-      if (response.data.success) {
-        setMessageType('success');
-        setMessage(`Usuarios restaurados exitosamente: ${response.data.details.success} usuarios. ${response.data.details.errors || 0} errores.`);
-      } else {
-        setMessageType('error');
-        setMessage('Error al restaurar usuarios: ' + response.data.message);
-      }
-    } catch (error) {
-      console.error('Error al restaurar usuarios:', error);
+    }, 1000);
+    
+    const response = await restoreUsers(selectedFile, targetBucket);
+    
+    clearInterval(progressInterval);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage(`Usuarios restaurados exitosamente: ${response.details?.success || 0} usuarios. ${response.details?.errors || 0} errores.`);
+    } else {
       setMessageType('error');
-      setMessage('Error al restaurar usuarios: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setLoading(false);
+      setMessage('Error al restaurar usuarios: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al restaurar usuarios:', error);
+    setMessageType('error');
+    setMessage('Error al restaurar usuarios: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Descargar un backup
-  const handleDownloadBackup = async (filename) => {
-    try {
-      setLoading(true);
-      setMessage('Preparando descarga...');
-      setMessageType('info');
-      
-     // URL completa al backend en Railway
-const backendUrl = 'https://master-production-5386.up.railway.app';
-const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
-
-console.log('URL de descarga de backup:', downloadUrl);
-
-// Crear un enlace de descarga
-const link = document.createElement('a');
-link.href = downloadUrl;
-link.setAttribute('download', filename);
-document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
+const handleDownloadBackup = async (filename) => {
+  try {
+    setLoading(true);
+    setMessage('Preparando descarga...');
+    setMessageType('info');
+    
+    const response = await downloadBackup(filename);
+    
+    if (response.success) {
       setMessageType('success');
       setMessage('Descarga iniciada correctamente');
-    } catch (error) {
-      console.error('Error al descargar backup:', error);
-      setMessageType('error');
-      setMessage('Error al descargar backup: ' + (error.response?.data?.message || error.message));
-    } finally {
-      setLoading(false);
+    } else {
+      throw new Error(response.message || 'Error al iniciar la descarga');
     }
-  };
+  } catch (error) {
+    console.error('Error al descargar backup:', error);
+    setMessageType('error');
+    setMessage('Error al descargar backup: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="backup-restore-manager">

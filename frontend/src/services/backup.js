@@ -1,19 +1,14 @@
 // Funciones para manejar copias de seguridad
 
+import { getAuthToken as getAuthTokenFromAuth } from './auth';
+
 /**
  * Obtiene el token de autenticación actual
  * @returns {string} Token de autenticación
  */
 const getAuthToken = () => {
   try {
-    // Recuperar token del localStorage (adapta según cómo almacenas tus tokens)
-    const userAuth = localStorage.getItem('userAuth');
-    
-    if (!userAuth) {
-      throw new Error('No hay sesión activa');
-    }
-    
-    return userAuth;
+    return getAuthTokenFromAuth();
   } catch (error) {
     console.error('Error al obtener token de autenticación:', error);
     throw error;
@@ -186,6 +181,277 @@ export const createBackup = async (bucketName) => {
     return data;
   } catch (error) {
     console.error('Error al crear backup:', error);
+    throw error;
+  }
+};
+
+/**
+ * Descarga un backup específico
+ * @param {string} filename - Nombre del archivo a descargar
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const downloadBackup = async (filename) => {
+  try {
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
+    
+    console.log('Iniciando descarga desde:', downloadUrl);
+    
+    // Crear enlace para descarga
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    return { success: true, message: 'Descarga iniciada' };
+  } catch (error) {
+    console.error('Error al descargar backup:', error);
+    throw error;
+  }
+};
+
+/**
+ * Restaura un backup completo
+ * @param {File} backupFile - Archivo de backup a restaurar
+ * @param {string} targetBucket - Bucket de destino
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const restoreBackup = async (backupFile, targetBucket) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const restoreUrl = `${backendUrl}/api/bridge-restore`;
+    
+    console.log('Intentando restaurar backup en:', restoreUrl);
+    
+    const formData = new FormData();
+    formData.append('backupFile', backupFile);
+    formData.append('targetBucket', targetBucket);
+    
+    const response = await fetch(restoreUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al restaurar backup: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Backup restaurado:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al restaurar backup:', error);
+    throw error;
+  }
+};
+
+/**
+ * Restaura solo las etiquetas de un backup
+ * @param {File} backupFile - Archivo de backup que contiene las etiquetas
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const restoreTags = async (backupFile) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
+    
+    console.log('Intentando restaurar etiquetas desde:', restoreTagsUrl);
+    
+    const formData = new FormData();
+    formData.append('backupFile', backupFile);
+    
+    const response = await fetch(restoreTagsUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al restaurar etiquetas: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Etiquetas restauradas:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al restaurar etiquetas:', error);
+    throw error;
+  }
+};
+
+/**
+ * Verifica las etiquetas contenidas en un backup
+ * @param {File} backupFile - Archivo de backup a verificar
+ * @returns {Promise<Object>} Información sobre las etiquetas encontradas
+ */
+export const checkTags = async (backupFile) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
+    
+    console.log('Verificando etiquetas en backup:', checkTagsUrl);
+    
+    const formData = new FormData();
+    formData.append('backupFile', backupFile);
+    
+    const response = await fetch(checkTagsUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al verificar etiquetas: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Verificación de etiquetas completada:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al verificar etiquetas:', error);
+    throw error;
+  }
+};
+
+/**
+ * Restaura usuarios desde un backup
+ * @param {File} backupFile - Archivo de backup
+ * @param {string} targetBucket - Bucket de destino
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const restoreUsers = async (backupFile, targetBucket) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
+    
+    console.log('Intentando restaurar usuarios desde:', restoreUsersUrl);
+    
+    const formData = new FormData();
+    formData.append('backupFile', backupFile);
+    formData.append('targetBucket', targetBucket);
+    
+    const response = await fetch(restoreUsersUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al restaurar usuarios: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Usuarios restaurados:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al restaurar usuarios:', error);
+    throw error;
+  }
+};
+
+/**
+ * Exporta las etiquetas del bucket actual
+ * @param {string} bucketName - Nombre del bucket
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const exportTags = async (bucketName) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const exportUrl = `${backendUrl}/api/backup/export-tags?bucket=${bucketName}&token=${token}`;
+    
+    console.log('URL de exportación de etiquetas:', exportUrl);
+    
+    // Crear un enlace para descargar el archivo
+    const link = document.createElement('a');
+    link.href = exportUrl;
+    link.setAttribute('download', `tags_export_${bucketName}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    return { success: true, message: 'Exportación de etiquetas iniciada' };
+  } catch (error) {
+    console.error('Error al exportar etiquetas:', error);
+    throw error;
+  }
+};
+
+/**
+ * Importa etiquetas desde un archivo JSON
+ * @param {File} tagsFile - Archivo JSON con las etiquetas
+ * @param {string} targetBucket - Bucket de destino
+ * @param {boolean} replaceExisting - Si se deben reemplazar las etiquetas existentes
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const importTags = async (tagsFile, targetBucket, replaceExisting = true) => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    const importTagsUrl = `${backendUrl}/api/backup/import-tags`;
+    
+    console.log('Importando etiquetas:', importTagsUrl);
+    
+    const formData = new FormData();
+    formData.append('tagsFile', tagsFile);
+    formData.append('targetBucket', targetBucket);
+    formData.append('replaceExisting', replaceExisting);
+    
+    const response = await fetch(importTagsUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al importar etiquetas: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Etiquetas importadas:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al importar etiquetas:', error);
     throw error;
   }
 };
