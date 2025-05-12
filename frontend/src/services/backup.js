@@ -27,8 +27,8 @@ const createFetchOptions = (method, body = null) => {
 // Obtener lista de backups
 export const listBackups = async () => {
   try {
-    // Probamos con una URL diferente según la bitácora
-    const listUrl = `${backendUrl}/api/backup`;
+    // Corregido para usar la ruta implementada en el backend
+    const listUrl = `${backendUrl}/api/backup/list`;
     
     console.log('Intentando obtener backups desde:', listUrl);
     
@@ -62,12 +62,13 @@ export const listBackups = async () => {
 // Crear un nuevo backup
 export const createBackup = async (bucketName) => {
   try {
-    // Cambio en la URL según bitácora
-    const createUrl = `${backendUrl}/api/backup`;
+    // Corregido para usar la ruta y método implementados en el backend
+    const createUrl = `${backendUrl}/api/backup/create/${bucketName}`;
     
     console.log('Intentando crear backup en:', createUrl);
     
-    const response = await fetch(createUrl, createFetchOptions('POST', { bucketName }));
+    // Cambiado a GET según la implementación del backend
+    const response = await fetch(createUrl, createFetchOptions('GET'));
     
     if (!response.ok) {
       throw new Error(`Error HTTP: ${response.status}`);
@@ -87,7 +88,7 @@ export const createBackup = async (bucketName) => {
 export const downloadBackup = async (filename) => {
   try {
     const token = getAuthToken();
-    // URL ajustada según bitácora
+    // URL ya correcta, manteniendo como está
     const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
     
     console.log('Intentando descargar desde:', downloadUrl);
@@ -117,14 +118,14 @@ export const downloadBackup = async (filename) => {
 // Restaurar un backup
 export const restoreBackup = async (file, bucketName) => {
   try {
-    // URL ajustada según bitácora
+    // URL ya correcta, pero ajustada la propiedad del formulario para coincidir con backend
     const restoreUrl = `${backendUrl}/api/backup/restore`;
     
     console.log('Intentando restaurar en:', restoreUrl);
     
     const formData = new FormData();
     formData.append('backupFile', file);
-    formData.append('bucketName', bucketName);
+    formData.append('targetBucket', bucketName); // Cambiado a targetBucket según el backend
     
     const fetchOptions = createFetchOptions('POST', formData);
     // Asegurarnos de no incluir Content-Type cuando usamos FormData
@@ -146,19 +147,21 @@ export const restoreBackup = async (file, bucketName) => {
   }
 };
 
+// Las siguientes funciones dependen de endpoints que aún no están implementados en el backend.
+// Si necesitas usarlas, deberás implementar los endpoints correspondientes en el backend.
+
 // Restaurar solo etiquetas de un backup
 export const restoreTags = async (file) => {
   try {
-    // URL ajustada según bitácora
     const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
     
     console.log('Intentando restaurar etiquetas en:', restoreTagsUrl);
+    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
     
     const formData = new FormData();
     formData.append('backupFile', file);
     
     const fetchOptions = createFetchOptions('POST', formData);
-    // Asegurarnos de no incluir Content-Type cuando usamos FormData
     delete fetchOptions.headers['Content-Type'];
     
     const response = await fetch(restoreTagsUrl, fetchOptions);
@@ -180,16 +183,15 @@ export const restoreTags = async (file) => {
 // Verificar etiquetas en un backup
 export const checkTags = async (file) => {
   try {
-    // URL ajustada según bitácora
     const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
     
     console.log('Verificando etiquetas en:', checkTagsUrl);
+    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
     
     const formData = new FormData();
     formData.append('backupFile', file);
     
     const fetchOptions = createFetchOptions('POST', formData);
-    // Asegurarnos de no incluir Content-Type cuando usamos FormData
     delete fetchOptions.headers['Content-Type'];
     
     const response = await fetch(checkTagsUrl, fetchOptions);
@@ -211,17 +213,16 @@ export const checkTags = async (file) => {
 // Restaurar usuarios desde un backup
 export const restoreUsers = async (file, bucketName) => {
   try {
-    // URL ajustada según bitácora
     const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
     
     console.log('Restaurando usuarios en:', restoreUsersUrl);
+    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
     
     const formData = new FormData();
     formData.append('backupFile', file);
     formData.append('bucketName', bucketName);
     
     const fetchOptions = createFetchOptions('POST', formData);
-    // Asegurarnos de no incluir Content-Type cuando usamos FormData
     delete fetchOptions.headers['Content-Type'];
     
     const response = await fetch(restoreUsersUrl, fetchOptions);
@@ -243,10 +244,10 @@ export const restoreUsers = async (file, bucketName) => {
 // Exportar etiquetas
 export const exportTags = async (bucketName) => {
   try {
-    // URL ajustada según bitácora
     const exportTagsUrl = `${backendUrl}/api/backup/export-tags`;
     
     console.log('Exportando etiquetas desde:', exportTagsUrl);
+    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
     
     const response = await fetch(exportTagsUrl, createFetchOptions('POST', { bucketName }));
     
@@ -279,10 +280,10 @@ export const exportTags = async (bucketName) => {
 // Importar etiquetas
 export const importTags = async (file, bucketName, replaceExisting = true) => {
   try {
-    // URL ajustada según bitácora
     const importTagsUrl = `${backendUrl}/api/backup/import-tags`;
     
     console.log('Importando etiquetas en:', importTagsUrl);
+    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
     
     const formData = new FormData();
     formData.append('tagsFile', file);
@@ -290,7 +291,6 @@ export const importTags = async (file, bucketName, replaceExisting = true) => {
     formData.append('replaceExisting', replaceExisting);
     
     const fetchOptions = createFetchOptions('POST', formData);
-    // Asegurarnos de no incluir Content-Type cuando usamos FormData
     delete fetchOptions.headers['Content-Type'];
     
     const response = await fetch(importTagsUrl, fetchOptions);
