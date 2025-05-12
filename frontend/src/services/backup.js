@@ -28,11 +28,15 @@ export const generateBackup = () => {
     // Obtener token
     const token = getAuthToken();
     
-    // ⚠️ IMPORTANTE: CAMBIA ESTA URL por la de tu backend en Railway ⚠️
-    // Debería verse como: https://tu-app.railway.app
+    // Verificar si estamos en GitHub Pages o en desarrollo
+    const isGitHubPages = window.location.hostname === 'directoryofsites.github.io';
+    console.log('Hostname:', window.location.hostname);
+    console.log('Es GitHub Pages:', isGitHubPages);
+    
+    // Usar la URL de Railway para producción
     const backendUrl = 'https://master-production-5386.up.railway.app';
     
-    const backupUrl = `${backendUrl}/api/admin/backup`;
+    const backupUrl = `${backendUrl}/api/backup/create/contenedor003`;
     
     // Crear un elemento <a> temporal para la descarga
     const downloadLink = document.createElement('a');
@@ -64,11 +68,10 @@ export const checkBackupStatus = async () => {
   try {
     const token = getAuthToken();
     
-    // ⚠️ IMPORTANTE: CAMBIA ESTA URL por la de tu backend en Railway ⚠️
-    // Debe ser la misma URL que arriba
-    const backendUrl = 'https://master-production-5386.up.railway.app'; // ¡MODIFICA ESTA LÍNEA!
+    // Usar la misma URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
     
-    const statusUrl = `${backendUrl}/api/admin/backup-status`;
+    const statusUrl = `${backendUrl}/api/backup/list`;
     
     const response = await fetch(statusUrl, {
       method: 'GET',
@@ -88,5 +91,101 @@ export const checkBackupStatus = async () => {
       success: false,
       error: error.message
     };
+  }
+};
+
+/**
+ * Lista las copias de seguridad disponibles
+ * @returns {Promise<Array>} Lista de copias de seguridad
+ */
+export const listBackups = async () => {
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    
+    const listUrl = `${backendUrl}/api/backup/list`;
+    
+    console.log('Intentando listar backups desde:', listUrl);
+    
+    const response = await fetch(listUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al listar backups: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Backups obtenidos:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al listar backups:', error);
+    throw error;
+  }
+};
+
+/**
+ * Crea una nueva copia de seguridad
+ * @param {string} bucketName - Nombre del bucket a respaldar
+ * @returns {Promise<Object>} Resultado de la operación
+ */
+export const createBackup = async (bucketName) => {
+  // Si no se proporciona un nombre de bucket, intentamos obtenerlo del token
+  if (!bucketName) {
+    try {
+      const token = getAuthToken();
+      // Intentar extraer el bucket del token si está en formato JWT
+      const tokenParts = token.split('.');
+      if (tokenParts.length === 3) {
+        const payload = JSON.parse(atob(tokenParts[1]));
+        bucketName = payload.bucket || 'default';
+      } else {
+        // Si no es un JWT, intentar decodificar directamente
+        const tokenData = JSON.parse(atob(token));
+        bucketName = tokenData.bucket || 'default';
+      }
+      console.log('Bucket obtenido del token:', bucketName);
+    } catch (error) {
+      console.error('Error al obtener bucket del token:', error);
+      bucketName = 'default';
+    }
+  }
+  
+  try {
+    const token = getAuthToken();
+    
+    // Usar la URL del backend de Railway
+    const backendUrl = 'https://master-production-5386.up.railway.app';
+    
+    const createUrl = `${backendUrl}/api/backup/create/${bucketName}`;
+    
+    console.log('Intentando crear backup desde:', createUrl);
+    
+    const response = await fetch(createUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error en respuesta:', errorText);
+      throw new Error(`Error al crear backup: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Backup creado:', data);
+    return data;
+  } catch (error) {
+    console.error('Error al crear backup:', error);
+    throw error;
   }
 };
