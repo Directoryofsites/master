@@ -5,8 +5,26 @@ const { spawn } = require('child_process');
 const multer = require('multer');
 const router = express.Router();
 
+// Determinar directorio temporal adecuado para el entorno
+const os = require('os');
+let tempUploadsDir;
+
+// En Railway, usar /tmp que siempre está disponible
+if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_PROJECT_ID) {
+  tempUploadsDir = '/tmp/docubox-uploads';
+} else {
+  // En desarrollo local, usar un directorio local
+  tempUploadsDir = path.join(__dirname, '..', 'temp_uploads');
+}
+
+// Asegurar que el directorio existe
+if (!fs.existsSync(tempUploadsDir)) {
+  fs.mkdirSync(tempUploadsDir, { recursive: true });
+  console.log(`[BACKUP] Directorio temporal creado: ${tempUploadsDir}`);
+}
+
 // Configuración de multer para archivos de backup
-const upload = multer({ dest: path.join(__dirname, '..', 'temp_uploads') });
+const upload = multer({ dest: tempUploadsDir });
 
 // Asegurar que existe el directorio de backups
 const backupsDir = path.join(__dirname, '..', 'backups');

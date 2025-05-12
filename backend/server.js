@@ -303,6 +303,71 @@ if (!fs.existsSync(localStorageDir)) {
   console.log(`[LOCAL] Directorio de almacenamiento local creado: ${localStorageDir}`);
 }
 
+// Asegurar que los directorios temporales necesarios para backup/restore existan
+// Esto es especialmente importante en Railway
+const tempDirsToCreate = [
+  path.join(os.tmpdir(), 'docubox'),
+  path.join(os.tmpdir(), 'docubox-backup'),
+  path.join(os.tmpdir(), 'docubox-restore'),
+  '/tmp/docubox',
+  '/tmp/backups',
+  '/tmp/uploads'
+];
+
+console.log('[STARTUP] Verificando directorios temporales...');
+tempDirsToCreate.forEach(dir => {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`[STARTUP] Directorio temporal creado: ${dir}`);
+    } else {
+      console.log(`[STARTUP] Directorio temporal ya existe: ${dir}`);
+    }
+  } catch (err) {
+    console.error(`[STARTUP] Error al crear directorio temporal ${dir}:`, err);
+  }
+});
+
+// Función para obtener el directorio temporal adecuado según el entorno
+function getTempDir(subdir = '') {
+  // En Railway, usar /tmp que siempre está disponible
+  if (isRailway) {
+    const baseDir = '/tmp/docubox';
+    if (subdir) {
+      const fullPath = path.join(baseDir, subdir);
+      if (!fs.existsSync(fullPath)) {
+        try {
+          fs.mkdirSync(fullPath, { recursive: true });
+        } catch (err) {
+          console.error(`[TEMP] Error al crear subdirectorio ${fullPath}:`, err);
+        }
+      }
+      return fullPath;
+    }
+    return baseDir;
+  }
+  
+  // En desarrollo local, usar el directorio temporal del sistema
+  const baseDir = path.join(os.tmpdir(), 'docubox');
+  if (subdir) {
+    const fullPath = path.join(baseDir, subdir);
+    if (!fs.existsSync(fullPath)) {
+      try {
+        fs.mkdirSync(fullPath, { recursive: true });
+      } catch (err) {
+        console.error(`[TEMP] Error al crear subdirectorio ${fullPath}:`, err);
+      }
+    }
+    return fullPath;
+  }
+  return baseDir;
+}
+
+// Exportar la función para que esté disponible en otros módulos
+module.exports.getTempDir = getTempDir;
+
+console.log(`[STARTUP] Directorio temporal base: ${getTempDir()}`);
+
 const mammoth = require('mammoth');
 
 const pdfParse = require('pdf-parse');
@@ -351,10 +416,35 @@ app.use((err, req, res, next) => {
 });
 
 // Rutas para backup y restore
+// Primero regístrar ruta restore-bridge para asegurar prioridad correcta
 app.use('/api', require('./routes/restore-bridge'));
 
 // Rutas para backup
 app.use('/api/admin', require('./routes/backup'));
+
+// Log de confirmación de rutas registradas
+console.log('[STARTUP] Rutas de API registradas correctamente:');
+console.log('[STARTUP] - /api/* -> ./routes/restore-bridge.js');
+console.log('[STARTUP] - /api/admin/* -> ./routes/backup.js');
+
+// Mostrar todas las rutas registradas para diagnóstico
+setTimeout(() => {
+  console.log('\n[ROUTES] Listado completo de rutas registradas:');
+  app._router.stack.forEach(middleware => {
+    if (middleware.route) {
+      // Rutas simples
+      console.log(`[ROUTES] ${middleware.route.stack[0].method.toUpperCase()} ${middleware.route.path}`);
+    } else if (middleware.name === 'router' && middleware.handle.stack) {
+      // Router middleware
+      middleware.handle.stack.forEach(handler => {
+        if (handler.route) {
+          const baseRoute = handler.route.path;
+          console.log(`[ROUTES] ${handler.route.stack[0].method.toUpperCase()} ${baseRoute}`);
+        }
+      });
+    }
+  });
+}, 1000);
 
 // Configuración de Supabase (sin valores predeterminados para garantizar separación)
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -11980,10 +12070,56 @@ app.post('/api/simple-restore', upload.single('backupFile'), async (req, res) =>
   }
 });
 
-// Iniciar el servidor  
-app.listen(PORT, () => {
+// Iniciar el servidor
+const server = app.listen(PORT, () => {
   console.log(`Servidor iniciado en el puerto ${PORT}`);
   console.log(`Bucket configurado: ${defaultBucketName}`);
   console.log(`Supabase URL: ${supabaseUrl}`);
   console.log(`Supabase Key configurada: ${!!supabaseKey}`);
+});
+
+// Manejo de señales para cierre gracioso
+process.on('SIGTERM', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGTERM, cerrando graciosamente...');
+  server.close(() => {
+    console.log('[SHUTDOWN] Servidor HTTP cerrado.');
+    
+    // Cerrar otras conexiones (si las hay)
+    if (supabase) {
+      console.log('[SHUTDOWN] Cerrando conexión con Supabase...');
+      // No hay un método específico de cierre para el cliente de Supabase
+    }
+    
+    console.log('[SHUTDOWN] Proceso terminado correctamente.');
+    process.exit(0);
+  });
+  
+  // Si el servidor no cierra en 10s, forzar salida
+  setTimeout(() => {
+    console.error('[SHUTDOWN] No se pudo cerrar graciosamente en 10s, forzando salida.');
+    process.exit(1);
+  }, 10000);
+});
+
+process.on('SIGINT', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGINT, cerrando graciosamente...');
+  server.close(() => {
+    console.log('[SHUTDOWN] Servidor HTTP cerrado.');
+    process.exit(0);
+  });
+});
+
+// Manejo de excepciones no capturadas
+process.on('uncaughtException', (error) => {
+  console.error('[ERROR] Excepción no capturada:', error);
+  // No terminar el proceso en producción, solo registrar el error
+  if (!isProduction) {
+    process.exit(1);
+  }
+});
+
+// Manejo de promesas rechazadas no capturadas
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[ERROR] Promesa rechazada no capturada:', reason);
+  // No terminar el proceso en producción, solo registrar el error
 });

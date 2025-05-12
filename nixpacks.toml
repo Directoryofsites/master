@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs", "gcc"]
+nixPkgs = ["nodejs", "gcc", "python3"]
 
 [phases.install]
 cmds = ["cd backend && npm install"]
 
 [start]
-cmd = "cd backend && node server.js"
+cmd = "cd backend && NODE_ENV=production node server.js"

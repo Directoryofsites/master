@@ -11,6 +11,14 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+// Detectar si estamos en Railway
+const isRailway = process.env.RAILWAY_PROJECT_ID !== undefined;
+const isProduction = process.env.NODE_ENV === 'production' || isRailway;
+
+console.log(`Entorno detectado: ${isProduction ? 'Producción' : 'Desarrollo'} ${isRailway ? '(Railway)' : ''}`);
+console.log(`SUPABASE_URL configurada: ${!!supabaseUrl}`);
+console.log(`SUPABASE_KEY configurada: ${!!supabaseKey}`);
+
 // Obtener argumentos de línea de comandos
 const sourceBucket = process.argv[2];
 const outputPath = process.argv[3] || `backup-${sourceBucket}-${new Date().toISOString().split('T')[0]}.zip`;
@@ -28,7 +36,11 @@ console.log(`Archivo de salida: ${outputPath}`);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Directorio temporal para los archivos
-const tempDir = path.join(os.tmpdir(), `backup-${Date.now()}`);
+const tempDir = process.env.NODE_ENV === 'production' || process.env.RAILWAY_PROJECT_ID
+  ? path.join('/tmp', `backup-${Date.now()}`)
+  : path.join(os.tmpdir(), `backup-${Date.now()}`);
+
+console.log(`Usando directorio temporal: ${tempDir}`);
 
 // Mapeo de admins a buckets (similar al del servidor)
 const adminBucketMap = {
@@ -81,17 +93,92 @@ async function checkBucketExists(bucket) {
   }
 }
 
+console.log(`INICIANDO COPIA DE SEGURIDAD del bucket: ${sourceBucket}`);
+    
+    // Verificar permisos de escritura en directorios críticos
+    console.log('Verificando permisos de escritura en directorios críticos...');
+    const criticalDirs = [
+      tempDir,
+      '/tmp',
+      process.cwd()
+    ];
+    
+    for (const dir of criticalDirs) {
+      try {
+        // Verificar si el directorio existe
+        if (!fs.existsSync(dir)) {
+          console.log(`Creando directorio ${dir}...`);
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        
+        // Verificar permisos de escritura
+        const testFile = path.join(dir, `test-write-${Date.now()}.tmp`);
+        fs.writeFileSync(testFile, 'test');
+        fs.unlinkSync(testFile);
+        console.log(`✓ Directorio ${dir} tiene permisos de escritura`);
+      } catch (error) {
+        console.error(`✗ Error de permisos en ${dir}:`, error.message);
+        
+        if (dir === tempDir) {
+          console.log('Intentando usar directorio alternativo /tmp...');
+          tempDir = '/tmp';
+        }
+      }
+    }
+    
+    console.log(`Directorio temporal final: ${tempDir}`);
+
 async function main() {
   try {
+
     console.log(`INICIANDO COPIA DE SEGURIDAD del bucket: ${sourceBucket}`);
+    
+    // Información de diagnóstico del entorno
+    console.log('==== INFORMACIÓN DEL ENTORNO ====');
+    console.log(`Fecha y hora: ${new Date().toISOString()}`);
+    console.log(`Node.js versión: ${process.version}`);
+    console.log(`Plataforma: ${process.platform}`);
+    console.log(`Directorio de trabajo: ${process.cwd()}`);
+    console.log(`Directorio de ejecución: ${__dirname}`);
+    console.log(`Variables de entorno disponibles: ${Object.keys(process.env).filter(k => !k.includes('KEY') && !k.includes('SECRET')).join(', ')}`);
+    console.log(`Railway detectado: ${isRailway ? 'Sí' : 'No'}`);
+    console.log(`Modo de ejecución: ${isProduction ? 'Producción' : 'Desarrollo'}`);
+    console.log('================================');
+    
+    // Verificar las dependencias
+    try {
+      const archiverVersion = require('archiver/package.json').version;
+      const supabaseVersion = require('@supabase/supabase-js/package.json').version;
+      console.log(`Versiones de dependencias: archiver@${archiverVersion}, supabase-js@${supabaseVersion}`);
+    } catch (err) {
+      console.log('No se pudieron determinar las versiones de las dependencias');
+    }
     
     // Verificar que el bucket existe
     await checkBucketExists(sourceBucket);
     
-    // Asegurar que existe el directorio temporal
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+ // Verificar y crear directorios temporales necesarios
+console.log('Verificando directorios temporales necesarios...');
+const tempDirsToCreate = [
+  tempDir,
+  '/tmp/docubox',
+  '/tmp/docubox-backup',
+  '/tmp/backups',
+  '/tmp/uploads'
+];
+
+tempDirsToCreate.forEach(dir => {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`Directorio temporal creado: ${dir}`);
+    } else {
+      console.log(`Directorio temporal ya existe: ${dir}`);
     }
+  } catch (err) {
+    console.error(`Error al crear directorio temporal ${dir}:`, err);
+  }
+});
     
     // Crear archivo ZIP
     const output = fs.createWriteStream(outputPath);
@@ -498,8 +585,17 @@ try {
           continue;
         }
         
-        // Guardar el archivo temporalmente a disco
-        const tempFilePath = path.join(tempDir, `temp_file_${processedFiles}`);
+       // Guardar el archivo temporalmente a disco con manejo robusto para Railway
+let tempFilePath;
+if (isRailway) {
+  // En Railway, usar /tmp directamente
+  tempFilePath = path.join('/tmp', `docubox-backup-${processedFiles}`);
+} else {
+  // En desarrollo, usar el directorio temporal normal
+  tempFilePath = path.join(tempDir, `temp_file_${processedFiles}`);
+}
+
+console.log(`Archivo temporal: ${tempFilePath} para ${file.path}`);
         
         // Convertir a buffer y guardar a disco
         const buffer = await data.arrayBuffer();
@@ -537,6 +633,41 @@ try {
     process.exit(1);
   }
 }
+
+// Manejo de señales para cierre gracioso
+process.on('SIGTERM', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGTERM, cerrando graciosamente...');
+  
+  // Limpiar recursos temporales
+  try {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log('[SHUTDOWN] Directorio temporal eliminado');
+    }
+  } catch (cleanupError) {
+    console.error('[SHUTDOWN] Error al limpiar directorio temporal:', cleanupError);
+  }
+  
+  console.log('[SHUTDOWN] Proceso terminado correctamente.');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGINT, cerrando graciosamente...');
+  
+  // Limpiar recursos temporales
+  try {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log('[SHUTDOWN] Directorio temporal eliminado');
+    }
+  } catch (cleanupError) {
+    console.error('[SHUTDOWN] Error al limpiar directorio temporal:', cleanupError);
+  }
+  
+  console.log('[SHUTDOWN] Proceso terminado correctamente.');
+  process.exit(0);
+});
 
 // Ejecutar script principal
 main();

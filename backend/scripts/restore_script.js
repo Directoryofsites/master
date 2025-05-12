@@ -13,6 +13,14 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+// Detectar si estamos en Railway
+const isRailway = process.env.RAILWAY_PROJECT_ID !== undefined;
+const isProduction = process.env.NODE_ENV === 'production' || isRailway;
+
+console.log(`Entorno detectado: ${isProduction ? 'Producción' : 'Desarrollo'} ${isRailway ? '(Railway)' : ''}`);
+console.log(`SUPABASE_URL configurada: ${!!supabaseUrl}`);
+console.log(`SUPABASE_KEY configurada: ${!!supabaseKey}`);
+
 // Obtener argumentos de línea de comandos
 const backupPath = process.argv[2];
 const targetBucket = process.argv[3];
@@ -30,7 +38,11 @@ console.log(`Bucket destino: ${targetBucket}`);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Directorio temporal para descomprimir los archivos
-const tempDir = path.join(os.tmpdir(), `restore-${Date.now()}`);
+const tempDir = process.env.NODE_ENV === 'production' || process.env.RAILWAY_PROJECT_ID
+  ? path.join('/tmp', `restore-${Date.now()}`)
+  : path.join(os.tmpdir(), `restore-${Date.now()}`);
+
+console.log(`Usando directorio temporal para restauración: ${tempDir}`);
 
 // Estructura para el informe de restauración
 const restorationReport = {
@@ -80,6 +92,84 @@ async function main() {
   try {
     console.log(`INICIANDO RESTAURACIÓN desde el archivo: ${backupPath} al bucket: ${targetBucket}`);
     
+    // Información de diagnóstico del entorno
+    console.log('==== INFORMACIÓN DEL ENTORNO ====');
+    console.log(`Fecha y hora: ${new Date().toISOString()}`);
+    console.log(`Node.js versión: ${process.version}`);
+    console.log(`Plataforma: ${process.platform}`);
+    console.log(`Directorio de trabajo: ${process.cwd()}`);
+    console.log(`Directorio de ejecución: ${__dirname}`);
+    console.log(`Variables de entorno disponibles: ${Object.keys(process.env).filter(k => !k.includes('KEY') && !k.includes('SECRET')).join(', ')}`);
+    console.log(`Railway detectado: ${isRailway ? 'Sí' : 'No'}`);
+    console.log(`Modo de ejecución: ${isProduction ? 'Producción' : 'Desarrollo'}`);
+    console.log('================================');
+    
+    // Verificar las dependencias
+    try {
+      const admZipVersion = require('adm-zip/package.json').version;
+      const supabaseVersion = require('@supabase/supabase-js/package.json').version;
+      const uuidVersion = require('uuid/package.json').version;
+      console.log(`Versiones de dependencias: adm-zip@${admZipVersion}, supabase-js@${supabaseVersion}, uuid@${uuidVersion}`);
+    } catch (err) {
+      console.log('No se pudieron determinar las versiones de las dependencias');
+    }
+
+    // Verificar permisos de escritura en directorios críticos
+    console.log('Verificando permisos de escritura en directorios críticos...');
+    const criticalDirs = [
+      tempDir,
+      '/tmp',
+      process.cwd()
+    ];
+    
+    for (const dir of criticalDirs) {
+      try {
+        // Verificar si el directorio existe
+        if (!fs.existsSync(dir)) {
+          console.log(`Creando directorio ${dir}...`);
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        
+        // Verificar permisos de escritura
+        const testFile = path.join(dir, `test-write-${Date.now()}.tmp`);
+        fs.writeFileSync(testFile, 'test');
+        fs.unlinkSync(testFile);
+        console.log(`✓ Directorio ${dir} tiene permisos de escritura`);
+      } catch (error) {
+        console.error(`✗ Error de permisos en ${dir}:`, error.message);
+        
+        if (dir === tempDir) {
+          console.log('Intentando usar directorio alternativo /tmp...');
+          tempDir = '/tmp';
+        }
+      }
+    }
+    
+    console.log(`Directorio temporal final: ${tempDir}`);
+
+    // Verificar y crear directorios temporales necesarios
+console.log('Verificando directorios temporales necesarios...');
+const tempDirsToCreate = [
+  tempDir,
+  '/tmp/docubox',
+  '/tmp/docubox-restore',
+  '/tmp/backups',
+  '/tmp/uploads'
+];
+
+tempDirsToCreate.forEach(dir => {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`Directorio temporal creado: ${dir}`);
+    } else {
+      console.log(`Directorio temporal ya existe: ${dir}`);
+    }
+  } catch (err) {
+    console.error(`Error al crear directorio temporal ${dir}:`, err);
+  }
+});
+    
     // Verificar que el archivo de backup exista
     if (!fs.existsSync(backupPath)) {
       throw new Error(`El archivo de backup no existe: ${backupPath}`);
@@ -90,10 +180,43 @@ async function main() {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Descomprimir el archivo de backup
-    console.log('Descomprimiendo archivo de backup...');
-    const zip = new AdmZip(backupPath);
-    zip.extractAllTo(tempDir, true);
+    // Descomprimir el archivo de backup con manejo explícito de errores
+console.log('Descomprimiendo archivo de backup...');
+try {
+  console.log(`Verificando archivo de backup: ${backupPath} (tamaño: ${fs.statSync(backupPath).size} bytes)`);
+  const zip = new AdmZip(backupPath);
+  
+  // Verificar contenido del zip antes de extraer
+  const zipEntries = zip.getEntries();
+  console.log(`El archivo ZIP contiene ${zipEntries.length} entradas`);
+  
+  // Mostrar algunas entradas para debug
+  zipEntries.slice(0, 5).forEach(entry => {
+    console.log(`- Entrada: ${entry.entryName} (${entry.header.size} bytes)`);
+  });
+  
+  // Extraer con manejo de errores
+  console.log(`Extrayendo a: ${tempDir}`);
+  zip.extractAllTo(tempDir, true);
+  console.log('Extracción completada correctamente');
+} catch (extractError) {
+  console.error('Error al descomprimir archivo de backup:', extractError);
+  
+  // Intentar acceder directamente al archivo para diagnóstico
+  try {
+    const stats = fs.statSync(backupPath);
+    console.error(`Información del archivo: tamaño=${stats.size}, último acceso=${stats.atime}, modificación=${stats.mtime}`);
+    
+    // Si es muy pequeño, podría estar corrupto
+    if (stats.size < 1000) {
+      console.error('El archivo parece estar corrupto o incompleto (tamaño muy pequeño)');
+    }
+  } catch (statsError) {
+    console.error('No se pudo acceder a la información del archivo:', statsError);
+  }
+  
+  throw new Error(`Error al descomprimir: ${extractError.message}`);
+}
     
     // Listar contenido del directorio temporal para debug
     console.log('Contenido del archivo ZIP:');
@@ -1229,54 +1352,77 @@ for (const [specialFile, targetTable] of Object.entries(specialFileMapping)) {
           contentType = 'application/json';
         }
         
-        // Subir archivo a Supabase
-        const { error } = await supabase.storage
-          .from(targetBucket)
-          .upload(file.storagePath, fileBuffer, {
-            contentType: contentType,
-            upsert: true
-          });
-        
-        if (error) {
-          console.error(`Error al subir ${file.storagePath}:`, error);
-          failedFiles++;
-          restorationReport.errors.push(`Error al subir archivo ${file.storagePath}: ${error.message}`);
-          
-          // Si falla, intentar esperar y reintentar
-          if (!file.retried) {
-            console.log(`Reintentando subida de ${file.storagePath} después de 1 segundo...`);
-            
-            // Esperar 1 segundo
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            const { error: retryError } = await supabase.storage
-              .from(targetBucket)
-              .upload(file.storagePath, fileBuffer, {
-                contentType: contentType,
-                upsert: true
-              });
-            
-            if (!retryError) {
-              console.log(`¡Éxito en reintento! Archivo ${file.storagePath} subido correctamente`);
-              successFiles++;
-              if (file.isFolder) {
-                folderFiles++;
-              } else if (file.isMetadata) {
-                metadataFiles++;
-              }
-              continue;
-            } else {
-              console.error(`Error en reintento de ${file.storagePath}:`, retryError);
-            }
-          }
-        } else {
-          successFiles++;
-          if (file.isFolder) {
-            folderFiles++;
-          } else if (file.isMetadata) {
-            metadataFiles++;
-          }
-        }
+       // Subir archivo a Supabase con manejo robusto para Railway
+let uploadError = null;
+let uploadResult = null;
+
+// Intentar la carga con manejo explícito de tiempo de espera
+try {
+  const uploadPromise = supabase.storage
+    .from(targetBucket)
+    .upload(file.storagePath, fileBuffer, {
+      contentType: contentType,
+      upsert: true
+    });
+  
+  // Configurar un timeout para Railway (30 segundos)
+  const timeout = isRailway ? 30000 : 60000;
+  
+  // Esperar a que termine o expire el tiempo
+  uploadResult = await Promise.race([
+    uploadPromise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error(`Timeout después de ${timeout/1000} segundos`)), timeout)
+    )
+  ]);
+  
+  if (uploadResult.error) {
+    uploadError = uploadResult.error;
+  }
+} catch (error) {
+  console.error(`Error al subir ${file.storagePath}:`, error);
+  uploadError = error;
+}
+
+if (uploadError) {
+  console.error(`Error al subir ${file.storagePath}:`, uploadError);
+  failedFiles++;
+  restorationReport.errors.push(`Error al subir archivo ${file.storagePath}: ${uploadError.message}`);
+  
+  // Si falla, intentar esperar y reintentar
+  if (!file.retried) {
+    console.log(`Reintentando subida de ${file.storagePath} después de 1 segundo...`);
+    
+    // Esperar 1 segundo
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const { error: retryError } = await supabase.storage
+      .from(targetBucket)
+      .upload(file.storagePath, fileBuffer, {
+        contentType: contentType,
+        upsert: true
+      });
+    
+    if (!retryError) {
+      console.log(`¡Éxito en reintento! Archivo ${file.storagePath} subido correctamente`);
+      successFiles++;
+      if (file.isFolder) {
+        folderFiles++;
+      } else if (file.isMetadata) {
+        metadataFiles++;
+      }
+    } else {
+      console.error(`Error en reintento de ${file.storagePath}:`, retryError);
+    }
+  }
+} else {
+  successFiles++;
+  if (file.isFolder) {
+    folderFiles++;
+  } else if (file.isMetadata) {
+    metadataFiles++;
+  }
+}
       } catch (error) {
         console.error(`Error al procesar archivo ${file.storagePath}:`, error);
         failedFiles++;
@@ -1343,7 +1489,77 @@ for (const [specialFile, targetTable] of Object.entries(specialFileMapping)) {
   }
 }
 
-// Verificar si se está ejecutando en modo script principal o como módulo
+// Manejo de señales para cierre gracioso
+process.on('SIGTERM', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGTERM, cerrando graciosamente...');
+  
+  // Limpiar recursos temporales
+  try {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log('[SHUTDOWN] Directorio temporal eliminado');
+    }
+    
+    // Eliminar archivo de señalización si existe
+    const runningFilePath = path.join(process.cwd(), `restauration-running-${targetBucket}.flag`);
+    if (fs.existsSync(runningFilePath)) {
+      fs.unlinkSync(runningFilePath);
+      console.log('[SHUTDOWN] Archivo de señalización eliminado');
+    }
+  } catch (cleanupError) {
+    console.error('[SHUTDOWN] Error al limpiar recursos temporales:', cleanupError);
+  }
+  
+  console.log('[SHUTDOWN] Proceso terminado correctamente.');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('\n[SHUTDOWN] Recibido SIGINT, cerrando graciosamente...');
+  
+  // Limpiar recursos temporales
+  try {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log('[SHUTDOWN] Directorio temporal eliminado');
+    }
+    
+    // Eliminar archivo de señalización si existe
+    const runningFilePath = path.join(process.cwd(), `restauration-running-${targetBucket}.flag`);
+    if (fs.existsSync(runningFilePath)) {
+      fs.unlinkSync(runningFilePath);
+      console.log('[SHUTDOWN] Archivo de señalización eliminado');
+    }
+  } catch (cleanupError) {
+    console.error('[SHUTDOWN] Error al limpiar recursos temporales:', cleanupError);
+  }
+  
+  console.log('[SHUTDOWN] Proceso terminado correctamente.');
+  process.exit(0);
+});
+
+// Manejo de excepciones no capturadas
+process.on('uncaughtException', (error) => {
+  console.error('[ERROR] Excepción no capturada:', error);
+  
+  // Limpiar recursos en caso de error
+  try {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    
+    const runningFilePath = path.join(process.cwd(), `restauration-running-${targetBucket}.flag`);
+    if (fs.existsSync(runningFilePath)) {
+      fs.unlinkSync(runningFilePath);
+    }
+  } catch (cleanupError) {
+    console.error('[SHUTDOWN] Error al limpiar recursos temporales:', cleanupError);
+  }
+  
+  process.exit(1);
+});
+
+  // Verificar si se está ejecutando en modo script principal o como módulo
 if (require.main === module) {
   // Crear un archivo de señalización para indicar que se está ejecutando
   const runningFilePath = path.join(process.cwd(), `restauration-running-${targetBucket}.flag`);

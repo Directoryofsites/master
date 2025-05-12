@@ -12,18 +12,43 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Configurar multer para manejar la carga de archivos
+
 const storage = multer.diskStorage({
   destination: function(req, file, cb) {
-    // Usar una carpeta temporal para los archivos subidos
-    const tempDir = path.join(__dirname, '..', 'temp_uploads');
+    // Determinar directorio temporal adecuado para el entorno
+    const os = require('os');
+    let tempDir;
+    
+    // En Railway, usar /tmp que siempre está disponible
+    if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_PROJECT_ID) {
+      tempDir = '/tmp/docubox-restore';
+      console.log(`[RESTORE] Usando directorio temporal de Railway: ${tempDir}`);
+    } else {
+      // En desarrollo local, usar un directorio local
+      tempDir = path.join(__dirname, '..', 'temp_uploads');
+      console.log(`[RESTORE] Usando directorio temporal local: ${tempDir}`);
+    }
     
     // Crear el directorio si no existe
     if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+      try {
+        fs.mkdirSync(tempDir, { recursive: true });
+        console.log(`[RESTORE] Directorio temporal creado: ${tempDir}`);
+      } catch (err) {
+        console.error(`[RESTORE] Error al crear directorio temporal ${tempDir}:`, err);
+        // Intentar usar /tmp como fallback en caso de error
+        if (tempDir !== '/tmp' && process.env.NODE_ENV === 'production') {
+          tempDir = '/tmp';
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+        }
+      }
     }
     
     cb(null, tempDir);
   },
+  
   filename: function(req, file, cb) {
     // Generar un nombre de archivo único
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
