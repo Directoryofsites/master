@@ -353,6 +353,9 @@ app.use((err, req, res, next) => {
 // Ruta para restauración mediante script independiente
 app.use('/api', require('./routes/restore-bridge'));
 
+// Ruta para backup
+app.use('/api/backup', require('./routes/backup'));
+
 // Configuración de Supabase (sin valores predeterminados para garantizar separación)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
