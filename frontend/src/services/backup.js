@@ -30,6 +30,7 @@ export const listBackups = async () => {
     // Corregido para usar la ruta implementada en el backend
     const listUrl = `${backendUrl}/api/backup/list`;
     
+    console.log('URL de lista de backups:', listUrl);    
     console.log('Intentando obtener backups desde:', listUrl);
     
     const response = await fetch(listUrl, createFetchOptions('GET'));
@@ -62,13 +63,19 @@ export const listBackups = async () => {
 // Crear un nuevo backup
 export const createBackup = async (bucketName) => {
   try {
-    // Corregido para usar la ruta y método implementados en el backend
-    const createUrl = `${backendUrl}/api/backup/create/${bucketName}`;
+    // Usar la ruta correcta según el backend
+    const createUrl = `${backendUrl}/api/backup/create/${encodeURIComponent(bucketName)}`;
     
     console.log('Intentando crear backup en:', createUrl);
     
-    // Cambiado a GET según la implementación del backend
+    // Usar método GET según la implementación del backend
     const response = await fetch(createUrl, createFetchOptions('GET'));
+    
+    // Mostrar detalle de la respuesta para depuración
+    if (!response.ok) {
+      console.error('Error en la respuesta del servidor:', response.status, response.statusText);
+      throw new Error(`Error HTTP: ${response.status}`);
+    }
     
     if (!response.ok) {
       throw new Error(`Error HTTP: ${response.status}`);
@@ -89,23 +96,32 @@ export const downloadBackup = async (filename) => {
   try {
     const token = getAuthToken();
     // URL ya correcta, manteniendo como está
-    const downloadUrl = `${backendUrl}/api/backup/download/${filename}`;
+    const downloadUrl = `${backendUrl}/api/backup/download/${encodeURIComponent(filename)}`;
     
     console.log('Intentando descargar desde:', downloadUrl);
     
     // Para descargas, enviamos el token como parámetro de URL
     // ya que es una redirección directa al navegador
     const link = document.createElement('a');
-    link.href = `${downloadUrl}?token=${encodeURIComponent(token)}`;
+    const finalUrl = `${downloadUrl}?token=${encodeURIComponent(token)}`;
+    link.href = finalUrl;
     link.target = '_blank';
     link.download = filename;
+    
+    console.log('URL final de descarga:', finalUrl);
     
     // Añadir el enlace al DOM, hacer clic y luego eliminarlo
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     
-    return { success: true, message: 'Descarga iniciada' };
+    // Verificar que la descarga se ha iniciado
+    setTimeout(() => {
+      console.log('Descarga iniciada para:', filename);
+    }, 500);
+    
+    return { success: true, message: 'Descarga iniciada' };  
+  
   } catch (error) {
     console.error('Error al descargar backup:', error);
     return {

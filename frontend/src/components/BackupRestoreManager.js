@@ -33,24 +33,38 @@ const BackupRestoreManager = () => {
   const [replaceExistingTags, setReplaceExistingTags] = useState(true);
   const [restoreUsers, setRestoreUsers] = useState(true);
   
-  // Cargar la lista de backups al montar el componente
-  useEffect(() => {
+ // Cargar la lista de backups al montar el componente y actualizarla periódicamente
+useEffect(() => {
+  // Cargar la lista inicialmente
+  fetchBackupList();
+  
+  // Configurar un temporizador para actualizar la lista cada 30 segundos
+  const intervalId = setInterval(() => {
+    console.log("Actualizando lista de backups automáticamente...");
     fetchBackupList();
-  }, []);
+  }, 30000);
+  
+  // Limpiar el temporizador cuando el componente se desmonte
+  return () => clearInterval(intervalId);
+}, []);
 
   // Función para obtener la lista de backups
-
 const fetchBackupList = async () => {
   try {
     setLoadingList(true);
+    console.log('Solicitando lista de backups...');
     
     const response = await listBackups();
+    console.log('Respuesta de backups:', response);
       
     if (response.success) {
       setBackupList(response.backups || []);
       if (response.backups && response.backups.length === 0) {
         setMessageType('info');
         setMessage('No hay backups disponibles en el servidor');
+      } else {
+        setMessageType('success');
+        setMessage(`Se encontraron ${response.backups.length} backups disponibles`);
       }
     } else {
       console.error('Error al obtener lista de backups:', response);
@@ -82,7 +96,7 @@ const fetchBackupList = async () => {
   };
 
   // Crear un nuevo backup
-  const handleCreateBackup = async () => {
+const handleCreateBackup = async () => {
   try {
     setLoading(true);
     setMessage('Creando backup. Esto puede tardar unos minutos...');
@@ -98,8 +112,46 @@ const fetchBackupList = async () => {
     const response = await createBackup(bucketName);
     
     if (response.success) {
+      // Crear mensaje de éxito con botón de descarga
       setMessageType('success');
       setMessage('Backup creado exitosamente: ' + response.filename);
+      
+      // Limpiar contenedor anterior si existe
+      const dynamicContainer = document.getElementById('dynamic-message-container');
+      if (dynamicContainer) {
+        dynamicContainer.innerHTML = '';
+        
+        // Crear contenedor para el botón
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'backup-success-message';
+        
+        // Crear botón de descarga
+        const downloadButton = document.createElement('button');
+        downloadButton.className = 'download-button';
+        downloadButton.textContent = 'Descargar Backup';
+        downloadButton.onclick = () => {
+          console.log("Descargando backup:", response.filename);
+          handleDownloadBackup(response.filename);
+        };
+        
+        // Agregar instrucción
+        const instruction = document.createElement('span');
+        instruction.textContent = 'Haz clic aquí para descargar el backup:';
+        
+        // Agregar elementos al contenedor
+        buttonContainer.appendChild(instruction);
+        buttonContainer.appendChild(downloadButton);
+        dynamicContainer.appendChild(buttonContainer);
+      }
+      
+      // Actualizar la lista de backups y cambiar a la pestaña de lista
+      fetchBackupList(); 
+      
+      // Después de un breve retraso, cambiar a la pestaña de lista para mostrar los backups
+      setTimeout(() => {
+        setActiveTab('list');
+      }, 1500);
+
       fetchBackupList(); // Actualizar lista
     } else {
       setMessageType('error');
@@ -113,6 +165,7 @@ const fetchBackupList = async () => {
     setLoading(false);
   }
 };
+
 
   // Restaurar un backup
 
@@ -451,14 +504,23 @@ const handleRestoreUsers = async (e) => {
 const handleDownloadBackup = async (filename) => {
   try {
     setLoading(true);
-    setMessage('Preparando descarga...');
+    setMessage('Preparando descarga de ' + filename + '...');
     setMessageType('info');
     
+    console.log('Iniciando descarga de backup:', filename);
     const response = await downloadBackup(filename);
+    console.log('Respuesta de descarga:', response);
     
     if (response.success) {
       setMessageType('success');
-      setMessage('Descarga iniciada correctamente');
+      setMessage('Descarga de ' + filename + ' iniciada correctamente. Revisa tu carpeta de descargas.');
+      
+      // Esperar un poco y luego ocultar el mensaje
+      setTimeout(() => {
+        if (message.includes(filename)) {
+          setMessage('');
+        }
+      }, 5000);
     } else {
       throw new Error(response.message || 'Error al iniciar la descarga');
     }
@@ -537,13 +599,16 @@ const handleDownloadBackup = async (filename) => {
                         <td>{new Date(backup.createdAt).toLocaleString()}</td>
                         <td>{(backup.size / (1024 * 1024)).toFixed(2)} MB</td>
                         <td>
+
                           <button 
                             onClick={() => handleDownloadBackup(backup.filename)}
                             disabled={loading}
                             className="download-button"
+                            title="Descargar este archivo de backup"
                           >
                             Descargar
                           </button>
+
                         </td>
                       </tr>
                     ))}
@@ -735,14 +800,50 @@ const handleDownloadBackup = async (filename) => {
         </div>
       )}
       
-      {/* Mensajes */}
+    {/* Mensajes */}
       {message && (
-        <div className={`message ${messageType}`}>
+        <div id="main-message" className={`message ${messageType}`}>
           {message}
         </div>
       )}
+      
+      {/* Contenedor para mensajes dinámicos como el botón de descarga */}
+      <div id="dynamic-message-container"></div>
+
     </div>
   );
 };
 
 export default BackupRestoreManager;
+
+// Agregar estilos dinámicamente para el contenedor del mensaje de backup
+const style = document.createElement('style');
+style.textContent = `
+  .backup-success-message {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 15px;
+    margin: 10px 0;
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    color: #155724;
+  }
+  
+  .backup-success-message button {
+    margin-left: 15px;
+    background-color: #28a745;
+    border: none;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+  }
+  
+  .backup-success-message button:hover {
+    background-color: #218838;
+  }
+`;
+document.head.appendChild(style);
