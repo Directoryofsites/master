@@ -105,8 +105,8 @@ if (!data.success) {
     
 console.log('Backup creado exitosamente:', data);
     
-// CAMBIO PARA PRODUCCIÓN: Usar backendUrl en lugar de localhost
-const downloadUrl = `${backendUrl}/api/backup/download/${data.filename}?token=${encodeURIComponent(token)}`;
+// CAMBIO PARA PRODUCCIÓN: Usar la ruta correcta para la descarga
+const downloadUrl = `${backendUrl}/api/admin/download/${data.filename}?token=${encodeURIComponent(token)}&bucketName=${encodeURIComponent(bucketName)}`;
     
 // Abrir la URL de descarga en una nueva ventana
 window.open(downloadUrl, '_blank');
