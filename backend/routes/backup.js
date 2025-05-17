@@ -381,21 +381,28 @@ const backupProcess = spawn('node', [
   }
 });
 
-
 // Ruta para descargar un backup
 router.get('/download/:filename', (req, res) => {
   const { filename } = req.params;
-  const { token } = req.query;
+  const { token, bucketName } = req.query;
   const filePath = path.join(backupsDir, filename);
+  
+  console.log(`[BACKUP] Solicitud de descarga para: ${filename}`);
+  console.log(`[BACKUP] Token recibido: ${token ? 'Sí' : 'No'}`);
+  console.log(`[BACKUP] Bucket solicitado: ${bucketName || 'No especificado'}`);
+  console.log(`[BACKUP] Comprobando existencia de archivo: ${filePath}`);
   
   // Verificar que el archivo existe
   if (!fs.existsSync(filePath)) {
+    console.log(`[BACKUP] Error: Archivo no encontrado: ${filePath}`);
     return res.status(404).json({ success: false, message: 'Archivo no encontrado' });
+  } else {
+    console.log(`[BACKUP] Archivo encontrado: ${filePath}`);
   }
   
   // Verificar token (básico, solo para asegurar que hay algún tipo de autenticación)
   if (!token) {
-    console.log('[BACKUP] Intento de descarga sin token');
+    console.log('[BACKUP] Error: Intento de descarga sin token');
     return res.status(401).json({ success: false, message: 'No autorizado: Token requerido' });
   }
   
@@ -549,9 +556,10 @@ const cleanupBackupFiles = () => {
         try {
           const stats = fs.statSync(filePath);
           
-          // Eliminar archivos que tienen más de 10 segundos de antigüedad
-          const fileAgeSeconds = (Date.now() - stats.birthtimeMs) / 1000;
-          if (fileAgeSeconds > 10) {
+          // Eliminar archivos que tienen más de 2 minutos de antigüedad
+const fileAgeSeconds = (Date.now() - stats.birthtimeMs) / 1000;
+if (fileAgeSeconds > 120) { // 2 minutos
+
             console.log(`[BACKUP] Eliminando archivo antiguo (${fileAgeSeconds.toFixed(2)} segundos): ${file}`);
             fs.unlinkSync(filePath);
             removedCount++;
