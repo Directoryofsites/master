@@ -498,7 +498,7 @@ frontendCompatRouter.get('/backup/list', (req, res) => {
   }
 });
 
-// Ruta para crear backup con descarga inmediata
+// Ruta para crear backup
 frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
   const { bucketName } = req.params;
   console.log(`[SERVER] Petición recibida en /api/backup/create/${bucketName}`);
@@ -540,14 +540,37 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
     console.log(`[SERVER] Script de backup: ${scriptPath}`);
     console.log(`[SERVER] Ruta del archivo de backup: ${backupPath}`);
     
-    // Ejecutar el script de forma síncrona para poder enviar el archivo inmediatamente
-    const { execSync } = require('child_process');
+    // Ejecutar el script directamente
+    const backupProcess = spawn('node', [
+      scriptPath,
+      bucketName,
+      backupPath
+    ]);
     
-    try {
-      console.log(`[SERVER] Ejecutando comando de backup de forma síncrona`);
-      execSync(`node "${scriptPath}" "${bucketName}" "${backupPath}"`);
+    let output = '';
+    
+    backupProcess.stdout.on('data', (data) => {
+      const dataStr = data.toString();
+      console.log(`[SERVER BACKUP STDOUT] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.stderr.on('data', (data) => {
+      const dataStr = data.toString();
+      console.error(`[SERVER BACKUP STDERR] ${dataStr}`);
+      output += dataStr;
+    });
+    
+    backupProcess.on('close', (code) => {
+      console.log(`[SERVER] Proceso de backup terminado con código: ${code}`);
       
-      console.log(`[SERVER] Backup completado, verificando archivo: ${backupPath}`);
+      if (code !== 0) {
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de backup terminó con código ${code}`,
+          output
+        });
+      }
       
       // Verificar que el archivo existe
       if (!fs.existsSync(backupPath)) {
@@ -557,35 +580,26 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
         });
       }
       
-      const stats = fs.statSync(backupPath);
-      console.log(`[SERVER] Archivo de backup generado: ${backupFileName} (${stats.size} bytes)`);
-      
-      // Configurar cabeceras para forzar la descarga
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${backupFileName}"`);
-      res.setHeader('Cache-Control', 'no-cache');
-      
-      // Enviar el archivo directamente como respuesta
-      console.log(`[SERVER] Enviando archivo para descarga inmediata`);
-      return res.sendFile(backupPath, (err) => {
-        if (err) {
-          console.error(`[SERVER] Error al enviar archivo: ${err}`);
-        } else {
-          console.log(`[SERVER] Archivo enviado correctamente`);
-        }
+      res.json({
+        success: true,
+        message: 'Backup completado correctamente',
+        filename: backupFileName,
+        path: backupPath,
+        output
       });
-      
-    } catch (execError) {
-      console.error(`[SERVER] Error al ejecutar script de backup: ${execError.message}`);
-      return res.status(500).json({
+    });
+    
+    backupProcess.on('error', (error) => {
+      console.error(`[SERVER] Error al iniciar proceso de backup: ${error.message}`);
+      res.status(500).json({
         success: false,
-        error: 'Error al ejecutar script de backup',
-        details: execError.message
+        error: 'Error al iniciar proceso de backup',
+        details: error.message
       });
-    }
+    });
+    
   } catch (error) {
     console.error('[SERVER] Error general en proceso de backup:', error);
-    
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
@@ -594,217 +608,10 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
   }
 });
 
+
 // Registrar el router de compatibilidad
 app.use('/api', frontendCompatRouter);
 console.log('[SERVER] Rutas de compatibilidad frontend registradas en /api');
-
-// Nueva ruta para descargar directamente el último backup generado
-app.get('/api/backup/download-latest/:bucketName', async (req, res) => {
-  try {
-    const { bucketName } = req.params;
-    if (!bucketName) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Nombre del bucket no proporcionado' 
-      });
-    }
-    
-    console.log(`[BACKUP] Iniciando descarga directa del último backup para bucket: ${bucketName}`);
-    
-    // Configurar directorio de backups
-    const backupsDir = path.join(__dirname, 'backups');
-    if (!fs.existsSync(backupsDir)) {
-      return res.status(404).json({
-        success: false,
-        message: 'No hay directorio de backups'
-      });
-    }
-    
-    // Buscar los archivos de backup para este bucket específico
-    const files = fs.readdirSync(backupsDir)
-      .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}`))
-      .map(file => {
-        const filePath = path.join(backupsDir, file);
-        const stats = fs.statSync(filePath);
-        return {
-          filename: file,
-          path: filePath,
-          created: stats.mtime || stats.birthtime
-        };
-      })
-      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
-    
-    if (files.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `No se encontraron backups para el bucket ${bucketName}`
-      });
-    }
-    
-    // Usar el backup más reciente
-    const latestBackup = files[0];
-    console.log(`[BACKUP] Descargando el backup más reciente: ${latestBackup.filename}`);
-    
-    // Configurar cabeceras para forzar la descarga
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${latestBackup.filename}"`);
-    res.setHeader('Cache-Control', 'no-cache');
-    
-    // Enviar el archivo
-    res.sendFile(latestBackup.path, (err) => {
-      if (err) {
-        console.error(`[BACKUP] Error al enviar archivo: ${err.message}`);
-        // Si ya enviamos cabeceras, no podemos enviar otro error
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            message: `Error al enviar archivo: ${err.message}`
-          });
-        }
-      }
-    });
-  } catch (error) {
-    console.error('[BACKUP] Error al descargar backup:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: `Error al descargar backup: ${error.message}` 
-    });
-  }
-});
-
-// Endpoint específico para descargar un archivo de backup
-app.get('/api/admin/download-backup/:fileName', (req, res) => {
-  try {
-    const { fileName } = req.params;
-    
-    // Validar el nombre del archivo para prevenir atravesar directorios
-    if (!fileName || fileName.includes('/') || fileName.includes('..')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nombre de archivo inválido'
-      });
-    }
-    
-    // Construir la ruta al archivo
-    const backupsDir = path.join(__dirname, 'backups');
-    const filePath = path.join(backupsDir, fileName);
-    
-    console.log(`[DOWNLOAD_BACKUP] Descargando archivo: ${filePath}`);
-    
-    // Verificar que el archivo existe
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({
-        success: false,
-        message: 'Archivo de backup no encontrado'
-      });
-    }
-    
-    // Configurar cabeceras para forzar la descarga
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.setHeader('Cache-Control', 'no-cache');
-    
-    // Enviar el archivo como descarga
-    res.sendFile(filePath, (err) => {
-      if (err) {
-        console.error(`[DOWNLOAD_BACKUP] Error al enviar archivo: ${err}`);
-      } else {
-        console.log(`[DOWNLOAD_BACKUP] Archivo enviado correctamente: ${fileName}`);
-      }
-    });
-  } catch (error) {
-    console.error('[DOWNLOAD_BACKUP] Error:', error);
-    res.status(500).json({
-      success: false,
-      message: `Error al descargar backup: ${error.message}`
-    });
-  }
-});
-
-// Nueva ruta específica para la descarga de backups
-app.get('/api/admin/create/:bucketName', async (req, res) => {
-  try {
-    const { bucketName } = req.params;
-    console.log(`[ADMIN_BACKUP] Iniciando backup para bucket: ${bucketName}`);
-    
-    // Verificar que el bucket es válido
-    if (!bucketName) {
-      return res.status(400).json({ success: false, message: 'Nombre del bucket no proporcionado' });
-    }
-    
-    // Crear directorio de backups si no existe
-    const backupsDir = path.join(__dirname, 'backups');
-    if (!fs.existsSync(backupsDir)) {
-      fs.mkdirSync(backupsDir, { recursive: true });
-      console.log(`[ADMIN_BACKUP] Directorio de backups creado: ${backupsDir}`);
-    }
-    
-    // Crear nombre de archivo para el backup
-    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
-    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
-    const backupPath = path.join(backupsDir, backupFileName);
-    
-    console.log(`[ADMIN_BACKUP] Generando backup: ${backupPath}`);
-    
-    // Ejecutar el script de backup de forma síncrona
-    const { execSync } = require('child_process');
-    const scriptPath = path.join(__dirname, 'backup_script.js');
-    
-    try {
-      execSync(`node "${scriptPath}" "${bucketName}" "${backupPath}"`, {
-        timeout: 300000 // 5 minutos máximo
-      });
-      
-      console.log(`[ADMIN_BACKUP] Backup generado correctamente: ${backupPath}`);
-      
-      // Verificar que el archivo existe
-      if (!fs.existsSync(backupPath)) {
-        return res.status(500).json({
-          success: false,
-          message: 'El archivo de backup no se generó correctamente'
-        });
-      }
-      
-   // Configurar las cabeceras para forzar la descarga del archivo
-      res.attachment(backupFileName); // Esto configura Content-Disposition: attachment
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      
-      // Enviar el archivo como un stream
-      const fileStream = fs.createReadStream(backupPath);
-      fileStream.pipe(res);
-      
-      fileStream.on('error', (err) => {
-        console.error(`[ADMIN_BACKUP] Error al enviar archivo: ${err.message}`);
-        // Si no hemos enviado la respuesta aún
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            message: `Error al enviar archivo: ${err.message}`
-          });
-        } else {
-          // Si ya enviamos cabeceras, cerramos la conexión
-          res.end();
-        }
-      });
-      
-    } catch (execError) {
-      console.error(`[ADMIN_BACKUP] Error al ejecutar script de backup: ${execError.message}`);
-      return res.status(500).json({
-        success: false,
-        message: `Error al generar backup: ${execError.message}`
-      });
-    }
-  } catch (error) {
-    console.error(`[ADMIN_BACKUP] Error general: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      message: `Error general: ${error.message}`
-    });
-  }
-});
 
 // Ruta de prueba específica para verificar que el sistema de backup está funcionando
 app.get('/api/backup-test', (req, res) => {
@@ -860,8 +667,6 @@ app.get('/api/backup-test', (req, res) => {
       results.tempDirectories[dir] = `error: ${error.message}`;
     }
   });
-
-
   
   // Listar rutas registradas
   const routesToCheck = [
@@ -10425,84 +10230,9 @@ const backupProcess = spawn('node', [
         output
       });
     });
-    
   } catch (error) {
     console.error('[BACKUP] Error al iniciar el proceso de backup:', error);
     res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Nueva ruta para descargar directamente el último backup generado
-app.get('/api/backup/download-latest/:bucketName', async (req, res) => {
-  try {
-    const { bucketName } = req.params;
-    if (!bucketName) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Nombre del bucket no proporcionado' 
-      });
-    }
-    
-    console.log(`[BACKUP] Iniciando descarga directa del último backup para bucket: ${bucketName}`);
-    
-    // Configurar directorio de backups
-    const backupsDir = path.join(__dirname, 'backups');
-    if (!fs.existsSync(backupsDir)) {
-      return res.status(404).json({
-        success: false,
-        message: 'No hay directorio de backups'
-      });
-    }
-    
-    // Buscar los archivos de backup para este bucket específico
-    const files = fs.readdirSync(backupsDir)
-      .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}`))
-      .map(file => {
-        const filePath = path.join(backupsDir, file);
-        const stats = fs.statSync(filePath);
-        return {
-          filename: file,
-          path: filePath,
-          created: stats.mtime || stats.birthtime
-        };
-      })
-      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
-    
-    if (files.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `No se encontraron backups para el bucket ${bucketName}`
-      });
-    }
-    
-    // Usar el backup más reciente
-    const latestBackup = files[0];
-    console.log(`[BACKUP] Descargando el backup más reciente: ${latestBackup.filename}`);
-    
-    // Configurar cabeceras para forzar la descarga
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${latestBackup.filename}"`);
-    res.setHeader('Cache-Control', 'no-cache');
-    
-    // Enviar el archivo
-    res.sendFile(latestBackup.path, (err) => {
-      if (err) {
-        console.error(`[BACKUP] Error al enviar archivo: ${err.message}`);
-        // Si ya enviamos cabeceras, no podemos enviar otro error
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            message: `Error al enviar archivo: ${err.message}`
-          });
-        }
-      }
-    });
-  } catch (error) {
-    console.error('[BACKUP] Error al descargar backup:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: `Error al descargar backup: ${error.message}` 
-    });
   }
 });
 

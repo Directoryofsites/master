@@ -23,7 +23,7 @@ const BackupRestoreManager = () => {
   const [loadingList, setLoadingList] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('info');
-  const [activeTab, setActiveTab] = useState('upload'); // Cambiado a 'upload' como pestaña por defecto
+  const [activeTab, setActiveTab] = useState('list'); // 'list', 'upload', 'restore', 'tags'
   
   // Estado para tags
   const [tagFile, setTagFile] = useState(null);
@@ -33,51 +33,64 @@ const BackupRestoreManager = () => {
   const [replaceExistingTags, setReplaceExistingTags] = useState(true);
   const [restoreUsers, setRestoreUsers] = useState(true);
   // Estado para mantener nombres originales de usuarios
-  const [keepOriginalUsernames, setKeepOriginalUsernames] = useState(false);
+const [keepOriginalUsernames, setKeepOriginalUsernames] = useState(false);
 
-  // Cargar la lista de backups al montar el componente y actualizarla periódicamente
-  useEffect(() => {
-    // Cargar la lista inicialmente
+
+ // Cargar la lista de backups al montar el componente y actualizarla periódicamente
+useEffect(() => {
+  // Cargar la lista inicialmente
+  fetchBackupList();
+  
+  // Configurar un temporizador para actualizar la lista cada 30 segundos
+  const intervalId = setInterval(() => {
+    console.log("Actualizando lista de backups automáticamente...");
     fetchBackupList();
-    
-    // Configurar un temporizador para actualizar la lista cada 30 segundos
-    const intervalId = setInterval(() => {
-      console.log("Actualizando lista de backups en proceso automáticamente...");
-      fetchBackupList();
-    }, 30000);
-    
-    // Limpiar el temporizador cuando el componente se desmonte
-    return () => clearInterval(intervalId);
-  }, []);
+  }, 30000);
+  
+  // Limpiar el temporizador cuando el componente se desmonte
+  return () => clearInterval(intervalId);
+}, []);
 
-  // Función para obtener la lista de backups en proceso
-  const fetchBackupList = async () => {
-    try {
-      setLoadingList(true);
-      console.log('Solicitando lista de backups en proceso...');
+  // Función para obtener la lista de backups
+
+const fetchBackupList = async () => {
+  try {
+    setLoadingList(true);
+    
+    // Obtener el bucket actual
+    const currentBucket = getCurrentBucket();
+    
+    if (!currentBucket) {
+      setMessageType('error');
+      setMessage('No se pudo determinar el bucket actual. Por favor, seleccione un bucket antes de listar backups.');
+      setBackupList([]);
+      return;
+    }
+    
+    console.log(`Solicitando lista de backups para bucket: ${currentBucket}...`);
+    
+    const response = await listBackups();
+    console.log('Respuesta de backups:', response);
       
-      const response = await listBackups();
-      console.log('Respuesta de backups en proceso:', response);
-        
-      if (response.success) {
-        setBackupList(response.backups || []);
-        if (response.backups && response.backups.length === 0) {
-          setMessageType('info');
-          setMessage('No hay backups en proceso actualmente');
-        } else {
-          setMessageType('success');
-          setMessage(`Se encontraron ${response.backups.length} backups en proceso`);
-        }
+    if (response.success) {
+      setBackupList(response.backups || []);
+      if (response.backups && response.backups.length === 0) {
+        setMessageType('info');
+        setMessage('No hay backups disponibles en el servidor');
       } else {
-        console.error('Error al obtener lista de backups en proceso:', response);
-        setMessageType('error');
-        setMessage('Error al obtener lista de backups en proceso: ' + response.message);
+        setMessageType('success');
+        setMessage(`Se encontraron ${response.backups.length} backups disponibles`);
       }
+    } else {
+      console.error('Error al obtener lista de backups:', response);
+      setMessageType('error');
+      setMessage('Error al obtener lista de backups: ' + response.message);
+    }
 
     } catch (error) {
-      console.error('Error al obtener lista de backups en proceso:', error);
+      console.error('Error al obtener lista de backups:', error);
       setMessageType('error');
-      setMessage('Error al obtener lista de backups en proceso: ' + (error.response?.data?.message || error.message));
+      setMessage('Error al obtener lista de backups: ' + (error.response?.data?.message || error.message));
     } finally {
       setLoadingList(false);
     }
@@ -97,407 +110,444 @@ const BackupRestoreManager = () => {
     setMessage('');
   };
 
-  // Crear un nuevo backup (se descarga automáticamente)
-  const handleCreateBackup = async () => {
-    try {
-      setLoading(true);
-      setMessage('Iniciando proceso de backup. Se descargará automáticamente cuando esté listo...');
-      setMessageType('info');
-      
-      // Obtener el bucket actual
-      const bucketName = getCurrentBucket();
-      
-      if (!bucketName) {
-        throw new Error('No se pudo determinar el bucket para el backup');
-      }
-      
-      // Llamar al servicio para iniciar el backup y la descarga
-      const response = await createBackup(bucketName);
-      
-      if (response.success) {
-        setMessageType('success');
-        setMessage('El proceso de backup ha iniciado. La descarga comenzará automáticamente cuando esté listo. ' +
-                  'El archivo se eliminará del servidor después de la descarga.');
-                  
-        // Actualizar la lista de backups después de unos segundos para mostrar el progreso
-        setTimeout(() => {
-          fetchBackupList();
-        }, 3000);
-      } else {
-        throw new Error(response.message || 'Error desconocido');
-      }
-    } catch (error) {
-      console.error('Error al crear backup:', error);
-      setMessageType('error');
-      setMessage('Error al crear backup: ' + error.message);
-    } finally {
-      setLoading(false);
+  // Crear un nuevo backup
+const handleCreateBackup = async () => {
+  try {
+    setLoading(true);
+    setMessage('Creando backup. Esto puede tardar unos minutos...');
+    setMessageType('info');
+    
+    // Obtener el bucket usando la función específica
+    const bucketName = getCurrentBucket();
+    
+    if (!bucketName) {
+      throw new Error('No se pudo determinar el bucket para el backup');
     }
-  };
+    
+    const response = await createBackup(bucketName);
+    
+    if (response.success) {
+      // Crear mensaje de éxito con botón de descarga
+      setMessageType('success');
+      setMessage('Backup creado exitosamente: ' + response.filename);
+      
+      // Limpiar contenedor anterior si existe
+      const dynamicContainer = document.getElementById('dynamic-message-container');
+      if (dynamicContainer) {
+        dynamicContainer.innerHTML = '';
+        
+        // Crear contenedor para el botón
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'backup-success-message';
+        
+        // Crear botón de descarga
+        const downloadButton = document.createElement('button');
+        downloadButton.className = 'download-button';
+        downloadButton.textContent = 'Descargar Backup';
+        downloadButton.onclick = () => {
+          console.log("Descargando backup:", response.filename);
+          handleDownloadBackup(response.filename);
+        };
+        
+        // Agregar instrucción
+        const instruction = document.createElement('span');
+        instruction.textContent = 'Haz clic aquí para descargar el backup:';
+        
+        // Agregar elementos al contenedor
+        buttonContainer.appendChild(instruction);
+        buttonContainer.appendChild(downloadButton);
+        dynamicContainer.appendChild(buttonContainer);
+      }
+      
+      // Actualizar la lista de backups y cambiar a la pestaña de lista
+      fetchBackupList(); 
+      
+      // Después de un breve retraso, cambiar a la pestaña de lista para mostrar los backups
+      setTimeout(() => {
+        setActiveTab('list');
+      }, 1500);
+
+      fetchBackupList(); // Actualizar lista
+    } else {
+      setMessageType('error');
+      setMessage('Error al crear backup: ' + response.message);
+    }
+  } catch (error) {
+    console.error('Error al crear backup:', error);
+    setMessageType('error');
+    setMessage('Error al crear backup: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Restaurar un backup
+
   const handleRestoreBackup = async (e) => {
-    e.preventDefault();
-    if (!selectedFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de backup');
-      return;
+  e.preventDefault();
+  if (!selectedFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de backup');
+    return;
+  }
+
+  try {
+    setLoading(true);
+    setMessage('Preparando restauración...');
+    setMessageType('info');
+
+    // Obtener el bucket actual
+    const currentBucket = getCurrentBucket();
+    if (!currentBucket) {
+      throw new Error('No se pudo determinar el bucket de destino');
     }
 
-    try {
-      setLoading(true);
-      setMessage('Preparando restauración...');
-      setMessageType('info');
-
-      // Obtener el bucket actual
-      const currentBucket = getCurrentBucket();
-      if (!currentBucket) {
-        throw new Error('No se pudo determinar el bucket de destino');
-      }
-
-      setMessage('Enviando archivo al servicio de restauración...');
-      
-      // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
-      const progressInterval = setInterval(() => {
-        setMessage(prevMessage => {
-          if (prevMessage.includes('%')) {
-            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
-            if (currentPercent < 95) {
-              return `Subiendo archivo: ${currentPercent + 5}% completado...`;
-            }
+    setMessage('Enviando archivo al servicio de restauración...');
+    
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo: ${currentPercent + 5}% completado...`;
           }
-          return prevMessage;
-        });
-      }, 1000);
-      
-      const response = await restoreBackup(selectedFile, currentBucket);
-      
-      clearInterval(progressInterval);
+        }
+        return prevMessage;
+      });
+    }, 1000);
+    
+    const response = await restoreBackup(selectedFile, currentBucket);
+    
+    clearInterval(progressInterval);
 
-      if (response.success || response.status === 'success') {
-        setMessageType('success');
-        setMessage(`Restauración completada: ${response.fileCount || 'múltiples'} archivos restaurados`);
-        setSelectedFile(null);
-        
-        // Limpiar input de archivo
-        const fileInput = document.getElementById('restoreFile');
-        if (fileInput) fileInput.value = '';
-        
-        // Registrar detalles para debug
-        console.log('Detalles de restauración:', response);
-      } else {
-        throw new Error(response.message || 'Error desconocido');
-      }
-    } catch (error) {
-      console.error('Error en la restauración:', error);
-      setMessageType('error');
-      setMessage(`Error: ${error.message}`);
-    } finally {
-      setLoading(false);
+    if (response.success || response.status === 'success') {
+      setMessageType('success');
+      setMessage(`Restauración completada: ${response.fileCount || 'múltiples'} archivos restaurados`);
+      setSelectedFile(null);
+      
+      // Limpiar input de archivo
+      const fileInput = document.getElementById('restoreFile');
+      if (fileInput) fileInput.value = '';
+      
+      // Registrar detalles para debug
+      console.log('Detalles de restauración:', response);
+    } else {
+      throw new Error(response.message || 'Error desconocido');
     }
-  };
+  } catch (error) {
+    console.error('Error en la restauración:', error);
+    setMessageType('error');
+    setMessage(`Error: ${error.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Restaurar solo etiquetas de un backup
-  const handleRestoreTags = async (e, silent = false) => {
-    if (e && !silent) e.preventDefault();
-    
-    if (!selectedFile) {
-      if (!silent) {
-        setMessageType('error');
-        setMessage('Por favor seleccione un archivo de backup');
-      }
-      return;
+const handleRestoreTags = async (e, silent = false) => {
+  if (e && !silent) e.preventDefault();
+  
+  if (!selectedFile) {
+    if (!silent) {
+      setMessageType('error');
+      setMessage('Por favor seleccione un archivo de backup');
+    }
+    return;
+  }
+  
+  try {
+    if (!silent) {
+      setLoading(true);
+      setMessage('Restaurando etiquetas. Esto puede tardar unos minutos...');
+      setMessageType('info');
     }
     
-    try {
-      if (!silent) {
-        setLoading(true);
-        setMessage('Restaurando etiquetas. Esto puede tardar unos minutos...');
-        setMessageType('info');
-      }
-      
-      // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
-      let progressInterval;
-      
-      if (!silent) {
-        progressInterval = setInterval(() => {
-          setMessage(prevMessage => {
-            if (prevMessage.includes('%')) {
-              const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
-              if (currentPercent < 95) {
-                return `Subiendo archivo para restaurar etiquetas: ${currentPercent + 5}% completado...`;
-              }
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    let progressInterval;
+    
+    if (!silent) {
+      progressInterval = setInterval(() => {
+        setMessage(prevMessage => {
+          if (prevMessage.includes('%')) {
+            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+            if (currentPercent < 95) {
+              return `Subiendo archivo para restaurar etiquetas: ${currentPercent + 5}% completado...`;
             }
-            return prevMessage;
-          });
-        }, 1000);
+          }
+          return prevMessage;
+        });
+      }, 1000);
+    }
+    
+    const response = await restoreTags(selectedFile);
+    
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+    
+    if (response.success) {
+      if (!silent) {
+        setMessageType('success');
+        setMessage(`Etiquetas restauradas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
       }
-      
-      const response = await restoreTags(selectedFile);
-      
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
-      
-      if (response.success) {
-        if (!silent) {
-          setMessageType('success');
-          setMessage(`Etiquetas restauradas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
-        }
-        return true;
-      } else {
-        if (!silent) {
-          setMessageType('error');
-          setMessage('Error al restaurar etiquetas: ' + response.message);
-        }
-        return false;
-      }
-    } catch (error) {
-      console.error('Error al restaurar etiquetas:', error);
+      return true;
+    } else {
       if (!silent) {
         setMessageType('error');
-        setMessage('Error al restaurar etiquetas: ' + error.message);
+        setMessage('Error al restaurar etiquetas: ' + response.message);
       }
       return false;
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
     }
-  };
+  } catch (error) {
+    console.error('Error al restaurar etiquetas:', error);
+    if (!silent) {
+      setMessageType('error');
+      setMessage('Error al restaurar etiquetas: ' + error.message);
+    }
+    return false;
+  } finally {
+    if (!silent) {
+      setLoading(false);
+    }
+  }
+};
   
   // Verificar etiquetas en un backup
-  const handleCheckTags = async (e) => {
-    e.preventDefault();
+const handleCheckTags = async (e) => {
+  e.preventDefault();
+  
+  if (!selectedFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de backup');
+    return;
+  }
+  
+  try {
+    setCheckingTags(true);
+    setMessage('Verificando etiquetas en el backup...');
+    setMessageType('info');
     
-    if (!selectedFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de backup');
-      return;
-    }
-    
-    try {
-      setCheckingTags(true);
-      setMessage('Verificando etiquetas en el backup...');
-      setMessageType('info');
-      
-      // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
-      const progressInterval = setInterval(() => {
-        setMessage(prevMessage => {
-          if (prevMessage.includes('%')) {
-            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
-            if (currentPercent < 95) {
-              return `Subiendo archivo: ${currentPercent + 5}% completado...`;
-            }
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo: ${currentPercent + 5}% completado...`;
           }
-          return prevMessage;
-        });
-      }, 1000);
-      
-      const response = await checkTags(selectedFile);
-      
-      clearInterval(progressInterval);
-      
-      if (response.success) {
-        if (response.hasTags) {
-          setTagsFound(response);
-          setMessageType('success');
-          setMessage(`Se encontraron ${response.tagCount} etiquetas en ${response.categories.length} categorías.`);
-        } else {
-          setTagsFound(null);
-          setMessageType('warning');
-          setMessage('No se encontraron etiquetas en el archivo de backup.');
         }
+        return prevMessage;
+      });
+    }, 1000);
+    
+    const response = await checkTags(selectedFile);
+    
+    clearInterval(progressInterval);
+    
+    if (response.success) {
+      if (response.hasTags) {
+        setTagsFound(response);
+        setMessageType('success');
+        setMessage(`Se encontraron ${response.tagCount} etiquetas en ${response.categories.length} categorías.`);
       } else {
         setTagsFound(null);
-        setMessageType('error');
-        setMessage('Error al verificar etiquetas: ' + response.message);
+        setMessageType('warning');
+        setMessage('No se encontraron etiquetas en el archivo de backup.');
       }
-    } catch (error) {
-      console.error('Error al verificar etiquetas:', error);
+    } else {
+      setTagsFound(null);
       setMessageType('error');
-      setMessage('Error al verificar etiquetas: ' + error.message);
-    } finally {
-      setCheckingTags(false);
+      setMessage('Error al verificar etiquetas: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al verificar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al verificar etiquetas: ' + error.message);
+  } finally {
+    setCheckingTags(false);
+  }
+};
   
   // Exportar etiquetas
-  const handleExportTags = async () => {
-    try {
-      setExportingTags(true);
-      setMessage('Exportando etiquetas. Se iniciará una descarga automáticamente...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const bucketName = getCurrentBucket();
-      
-      if (!bucketName) {
-        throw new Error('No se pudo determinar el bucket para exportar etiquetas');
-      }
-      
-      const response = await exportTags(bucketName);
-      
-      if (response.success) {
-        setMessageType('success');
-        setMessage('Exportación de etiquetas iniciada correctamente');
-      } else {
-        throw new Error(response.message || 'Error en la exportación');
-      }
-    } catch (error) {
-      console.error('Error al exportar etiquetas:', error);
-      setMessageType('error');
-      setMessage('Error al exportar etiquetas: ' + error.message);
-    } finally {
-      setExportingTags(false);
+const handleExportTags = async () => {
+  try {
+    setExportingTags(true);
+    setMessage('Exportando etiquetas. Se iniciará una descarga automáticamente...');
+    setMessageType('info');
+    
+    // Obtener el bucket usando la función específica
+    const bucketName = getCurrentBucket();
+    
+    if (!bucketName) {
+      throw new Error('No se pudo determinar el bucket para exportar etiquetas');
     }
-  };
+    
+    const response = await exportTags(bucketName);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage('Exportación de etiquetas iniciada correctamente');
+    } else {
+      throw new Error(response.message || 'Error en la exportación');
+    }
+  } catch (error) {
+    console.error('Error al exportar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al exportar etiquetas: ' + error.message);
+  } finally {
+    setExportingTags(false);
+  }
+};
   
   // Importar etiquetas
-  const handleImportTags = async (e) => {
-    e.preventDefault();
+const handleImportTags = async (e) => {
+  e.preventDefault();
+  
+  if (!tagFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de etiquetas JSON');
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    setMessage('Importando etiquetas...');
+    setMessageType('info');
     
-    if (!tagFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de etiquetas JSON');
-      return;
+    // Obtener el bucket usando la función específica
+    const targetBucket = getCurrentBucket();
+    
+    if (!targetBucket) {
+      throw new Error('No se pudo determinar el bucket de destino');
     }
     
-    try {
-      setLoading(true);
-      setMessage('Importando etiquetas...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const targetBucket = getCurrentBucket();
-      
-      if (!targetBucket) {
-        throw new Error('No se pudo determinar el bucket de destino');
-      }
-      
-      // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
-      const progressInterval = setInterval(() => {
-        setMessage(prevMessage => {
-          if (prevMessage.includes('%')) {
-            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
-            if (currentPercent < 95) {
-              return `Subiendo archivo de etiquetas: ${currentPercent + 5}% completado...`;
-            }
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo de etiquetas: ${currentPercent + 5}% completado...`;
           }
-          return prevMessage;
-        });
-      }, 1000);
-      
-      const response = await importTags(tagFile, targetBucket, replaceExistingTags);
-      
-      clearInterval(progressInterval);
-      
-      if (response.success) {
-        setMessageType('success');
-        setMessage(`Etiquetas importadas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
-        setTagFile(null);
-        // Resetear el input de archivo
-        const fileInput = document.getElementById('tagFile');
-        if (fileInput) fileInput.value = '';
-      } else {
-        setMessageType('error');
-        setMessage('Error al importar etiquetas: ' + response.message);
-      }
-    } catch (error) {
-      console.error('Error al importar etiquetas:', error);
+        }
+        return prevMessage;
+      });
+    }, 1000);
+    
+    const response = await importTags(tagFile, targetBucket, replaceExistingTags);
+    
+    clearInterval(progressInterval);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage(`Etiquetas importadas exitosamente: ${response.details?.success || 0} etiquetas. ${response.details?.errors || 0} errores.`);
+      setTagFile(null);
+      // Resetear el input de archivo
+      const fileInput = document.getElementById('tagFile');
+      if (fileInput) fileInput.value = '';
+    } else {
       setMessageType('error');
-      setMessage('Error al importar etiquetas: ' + error.message);
-    } finally {
-      setLoading(false);
+      setMessage('Error al importar etiquetas: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al importar etiquetas:', error);
+    setMessageType('error');
+    setMessage('Error al importar etiquetas: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Restaurar usuarios
-  const handleRestoreUsers = async (e) => {
-    e.preventDefault();
+const handleRestoreUsers = async (e) => {
+  e.preventDefault();
+  
+  if (!selectedFile) {
+    setMessageType('error');
+    setMessage('Por favor seleccione un archivo de backup');
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    setMessage('Restaurando usuarios. Esto puede tardar unos minutos...');
+    setMessageType('info');
     
-    if (!selectedFile) {
-      setMessageType('error');
-      setMessage('Por favor seleccione un archivo de backup');
-      return;
+    // Obtener el bucket usando la función específica
+    const targetBucket = getCurrentBucket();
+    
+    if (!targetBucket) {
+      throw new Error('No se pudo determinar el bucket de destino');
     }
     
-    try {
-      setLoading(true);
-      setMessage('Restaurando usuarios. Esto puede tardar unos minutos...');
-      setMessageType('info');
-      
-      // Obtener el bucket usando la función específica
-      const targetBucket = getCurrentBucket();
-      
-      if (!targetBucket) {
-        throw new Error('No se pudo determinar el bucket de destino');
-      }
-      
-      // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
-      const progressInterval = setInterval(() => {
-        setMessage(prevMessage => {
-          if (prevMessage.includes('%')) {
-            const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
-            if (currentPercent < 95) {
-              return `Subiendo archivo para restaurar usuarios: ${currentPercent + 5}% completado...`;
-            }
+    // Mostrar progreso de carga (simulado ya que fetch no soporta onUploadProgress)
+    const progressInterval = setInterval(() => {
+      setMessage(prevMessage => {
+        if (prevMessage.includes('%')) {
+          const currentPercent = parseInt(prevMessage.match(/\d+/)[0]);
+          if (currentPercent < 95) {
+            return `Subiendo archivo para restaurar usuarios: ${currentPercent + 5}% completado...`;
           }
-          return prevMessage;
-        });
-      }, 1000);
-      
-      // Pasar el parámetro keepOriginalUsernames al servicio
-      const response = await restoreUsers(selectedFile, targetBucket, keepOriginalUsernames);
-      
-      clearInterval(progressInterval);
-      
-      if (response.success) {
-        setMessageType('success');
-        setMessage(`Usuarios restaurados exitosamente: ${response.details?.success || 0} usuarios. ${response.details?.errors || 0} errores.`);
-      } else {
-        setMessageType('error');
-        setMessage('Error al restaurar usuarios: ' + response.message);
-      }
-    } catch (error) {
-      console.error('Error al restaurar usuarios:', error);
+        }
+        return prevMessage;
+      });
+    }, 1000);
+    
+   // Pasar el parámetro keepOriginalUsernames al servicio
+const response = await restoreUsers(selectedFile, targetBucket, keepOriginalUsernames);
+    
+clearInterval(progressInterval);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage(`Usuarios restaurados exitosamente: ${response.details?.success || 0} usuarios. ${response.details?.errors || 0} errores.`);
+    } else {
       setMessageType('error');
-      setMessage('Error al restaurar usuarios: ' + error.message);
-    } finally {
-      setLoading(false);
+      setMessage('Error al restaurar usuarios: ' + response.message);
     }
-  };
+  } catch (error) {
+    console.error('Error al restaurar usuarios:', error);
+    setMessageType('error');
+    setMessage('Error al restaurar usuarios: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
-  // Descargar un backup en proceso
-  const handleDownloadBackup = async (filename) => {
-    try {
-      setLoading(true);
-      setMessage('Iniciando descarga de ' + filename + '...');
-      setMessageType('info');
+  // Descargar un backup
+const handleDownloadBackup = async (filename) => {
+  try {
+    setLoading(true);
+    setMessage('Preparando descarga de ' + filename + '...');
+    setMessageType('info');
+    
+    console.log('Iniciando descarga de backup:', filename);
+    const response = await downloadBackup(filename);
+    console.log('Respuesta de descarga:', response);
+    
+    if (response.success) {
+      setMessageType('success');
+      setMessage('Descarga de ' + filename + ' iniciada correctamente. Revisa tu carpeta de descargas.');
       
-      console.log('Iniciando descarga de backup en proceso:', filename);
-      const response = await downloadBackup(filename);
-      console.log('Respuesta de descarga:', response);
-      
-      if (response.success) {
-        setMessageType('success');
-        setMessage('Descarga de ' + filename + ' iniciada. ' + response.note);
-        
-        // Actualizar la lista de backups después de unos segundos
-        setTimeout(() => {
-          fetchBackupList();
-        }, 3000);
-      } else {
-        throw new Error(response.message || 'Error al iniciar la descarga');
-      }
-    } catch (error) {
-      console.error('Error al descargar backup:', error);
-      setMessageType('error');
-      setMessage('Error al descargar backup: ' + error.message);
-    } finally {
-      setLoading(false);
+      // Esperar un poco y luego ocultar el mensaje
+      setTimeout(() => {
+        if (message.includes(filename)) {
+          setMessage('');
+        }
+      }, 5000);
+    } else {
+      throw new Error(response.message || 'Error al iniciar la descarga');
     }
-  };
+  } catch (error) {
+    console.error('Error al descargar backup:', error);
+    setMessageType('error');
+    setMessage('Error al descargar backup: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="backup-restore-manager">
@@ -505,19 +555,16 @@ const BackupRestoreManager = () => {
       
       <div className="tabs">
         <button 
+          className={`tab-button ${activeTab === 'list' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('list')}
+        >
+          Lista de Backups
+        </button>
+        <button 
           className={`tab-button ${activeTab === 'upload' ? 'active' : ''}`} 
           onClick={() => setActiveTab('upload')}
         >
           Crear Backup
-        </button>
-        <button 
-          className={`tab-button ${activeTab === 'list' ? 'active' : ''}`} 
-          onClick={() => {
-            setActiveTab('list');
-            fetchBackupList(); // Actualizar lista al cambiar a esta pestaña
-          }}
-        >
-          Backups en Proceso
         </button>
         <button 
           className={`tab-button ${activeTab === 'restore' ? 'active' : ''}`} 
@@ -533,45 +580,10 @@ const BackupRestoreManager = () => {
         </button>
       </div>
       
-      {/* Pestaña de Crear Backup */}
-      {activeTab === 'upload' && (
-        <div className="tab-content">
-          <h3>Crear Nuevo Backup</h3>
-          <p className="instructions">
-            Esta acción creará una copia de seguridad completa del bucket actual, incluyendo archivos, etiquetas y usuarios.
-            El proceso puede tardar varios minutos dependiendo del tamaño de los datos.
-            <strong>El archivo se descargará automáticamente cuando esté listo y se eliminará del servidor después de la descarga.</strong>
-          </p>
-          
-          <button 
-            onClick={handleCreateBackup} 
-            disabled={loading}
-            className="primary-button"
-          >
-            {loading ? 'Iniciando Backup...' : 'Crear y Descargar Backup'}
-          </button>
-          
-          <div className="backup-info-box">
-            <h4>Información Importante</h4>
-            <ul>
-              <li>Los backups ahora se descargan automáticamente y no se almacenan permanentemente en el servidor.</li>
-              <li>Una vez descargado, el archivo se eliminará automáticamente del servidor.</li>
-              <li>Cada bucket solo puede ver y acceder a sus propios backups.</li>
-              <li>Guarde los archivos de backup en un lugar seguro, ya que no podrá volver a descargarlos del servidor.</li>
-            </ul>
-          </div>
-        </div>
-      )}
-      
-      {/* Pestaña de Lista de Backups en Proceso */}
+      {/* Pestaña de Lista de Backups */}
       {activeTab === 'list' && (
         <div className="tab-content">
-          <h3>Backups en Proceso</h3>
-          <p className="instructions">
-            Los archivos de backup ahora se descargan automáticamente y se eliminan del servidor después de la descarga.
-            Solo se muestran backups en proceso que aún no han sido descargados completamente.
-          </p>
-          
+          <h3>Backups Disponibles</h3>
           <button 
             className="refresh-button" 
             onClick={fetchBackupList} 
@@ -581,11 +593,11 @@ const BackupRestoreManager = () => {
           </button>
           
           {loadingList ? (
-            <p>Cargando backups en proceso...</p>
+            <p>Cargando backups...</p>
           ) : (
             <div className="backup-list">
               {backupList.length === 0 ? (
-                <p>No hay backups en proceso actualmente. Los backups que ya se han descargado se eliminan automáticamente del servidor.</p>
+                <p>No hay backups disponibles.</p>
               ) : (
                 <table className="backup-table">
                   <thead>
@@ -593,8 +605,6 @@ const BackupRestoreManager = () => {
                       <th>Nombre</th>
                       <th>Fecha</th>
                       <th>Tamaño</th>
-                      <th>Estado</th>
-                      <th>Tiempo Restante</th>
                       <th>Acciones</th>
                     </tr>
                   </thead>
@@ -604,17 +614,17 @@ const BackupRestoreManager = () => {
                         <td>{backup.filename}</td>
                         <td>{new Date(backup.createdAt).toLocaleString()}</td>
                         <td>{(backup.size / (1024 * 1024)).toFixed(2)} MB</td>
-                        <td>{backup.status === 'en_proceso' ? 'En proceso' : 'Listo para descargar'}</td>
-                        <td>{backup.timeRemaining || 'Eliminación inminente'}</td>
                         <td>
+
                           <button 
                             onClick={() => handleDownloadBackup(backup.filename)}
                             disabled={loading}
                             className="download-button"
-                            title="Descargar este archivo de backup (se eliminará automáticamente después)"
+                            title="Descargar este archivo de backup"
                           >
                             Descargar
                           </button>
+
                         </td>
                       </tr>
                     ))}
@@ -623,11 +633,25 @@ const BackupRestoreManager = () => {
               )}
             </div>
           )}
+        </div>
+      )}
+      
+      {/* Pestaña de Crear Backup */}
+      {activeTab === 'upload' && (
+        <div className="tab-content">
+          <h3>Crear Nuevo Backup</h3>
+          <p className="instructions">
+            Esta acción creará una copia de seguridad completa del bucket actual, incluyendo archivos, etiquetas y usuarios.
+            El proceso puede tardar varios minutos dependiendo del tamaño de los datos.
+          </p>
           
-          <div className="backup-info-box">
-            <h4>Nota sobre Backups</h4>
-            <p>Los archivos de backup solo permanecen en el servidor temporalmente durante la descarga y se eliminan automáticamente después. Si necesita mantener copias de seguridad, asegúrese de guardarlas localmente después de descargarlas.</p>
-          </div>
+          <button 
+            onClick={handleCreateBackup} 
+            disabled={loading}
+            className="primary-button"
+          >
+            {loading ? 'Creando Backup...' : 'Crear Backup'}
+          </button>
         </div>
       )}
       
@@ -667,14 +691,14 @@ const BackupRestoreManager = () => {
                 </label>
               </div>
               <label className="checkbox-label">
-                <input 
-                  type="checkbox" 
-                  checked={keepOriginalUsernames} 
-                  onChange={(e) => setKeepOriginalUsernames(e.target.checked)}
-                  disabled={loading}
-                />
-                Mantener nombres de usuario originales (sin añadir sufijos)
-              </label>
+  <input 
+    type="checkbox" 
+    checked={keepOriginalUsernames} 
+    onChange={(e) => setKeepOriginalUsernames(e.target.checked)}
+    disabled={loading}
+  />
+  Mantener nombres de usuario originales (sin añadir sufijos)
+</label>
               
               <div className="restore-buttons">
                 <button 
@@ -801,7 +825,7 @@ const BackupRestoreManager = () => {
         </div>
       )}
       
-      {/* Mensajes */}
+    {/* Mensajes */}
       {message && (
         <div id="main-message" className={`message ${messageType}`}>
           {message}
@@ -840,16 +864,6 @@ style.textContent = `
     padding: 5px 10px;
     border-radius: 4px;
     cursor: pointer;
-    transition: background-
-
-    .backup-success-message button {
-    margin-left: 15px;
-    background-color: #28a745;
-    border: none;
-    color: white;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
     transition: background-color 0.3s;
   }
   
@@ -858,29 +872,3 @@ style.textContent = `
   }
 `;
 document.head.appendChild(style);
-
-// Agregar estilo para la caja de información
-const infoBoxStyle = document.createElement('style');
-infoBoxStyle.textContent = `
-  .backup-info-box {
-    margin-top: 20px;
-    padding: 15px;
-    background-color: #f8f9fa;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-  }
-  
-  .backup-info-box h4 {
-    margin-top: 0;
-    color: #333;
-  }
-  
-  .backup-info-box ul {
-    margin-bottom: 0;
-  }
-  
-  .backup-info-box li {
-    margin-bottom: 5px;
-  }
-`;
-document.head.appendChild(infoBoxStyle);

@@ -4,7 +4,6 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const multer = require('multer');
 const router = express.Router();
-const crypto = require('crypto'); // Para generar IDs únicos
 
 // Middleware para CORS específico para este router
 router.use((req, res, next) => {
@@ -60,9 +59,15 @@ if (!fs.existsSync(backupsDir)) {
   console.log(`[BACKUP] Directorio de backups creado: ${backupsDir}`);
 }
 
-// Almacén en memoria para los backups en progreso
-// Esto permite seguir el estado de los backups y evitar accesos no autorizados
-const pendingBackups = new Map();
+// Ruta de prueba para verificar que el router funciona
+router.get('/test', (req, res) => {
+  console.log('[BACKUP] Ruta de prueba de backup accedida');
+  res.json({
+    success: true,
+    message: 'API de backup funcionando correctamente',
+    serverTime: new Date().toISOString()
+  });
+});
 
 // Ruta de prueba para verificar que el router funciona
 router.get('/test', (req, res) => {
@@ -73,6 +78,8 @@ router.get('/test', (req, res) => {
     serverTime: new Date().toISOString()
   });
 });
+
+// AÑADIR ESTE CÓDIGO AQUÍ
 
 // Ruta para restaurar solo usuarios desde un backup
 router.post('/restore-users', upload.single('backupFile'), async (req, res) => {
@@ -182,33 +189,22 @@ router.post('/restore-users', upload.single('backupFile'), async (req, res) => {
   }
 });
 
-// Ruta para listar backups disponibles (solo muestra backups en proceso)
+// Ruta para listar backups disponibles
 router.get('/list', (req, res) => {
   try {
     // Verificar token de autorización (opcional, dependiendo de tu configuración)
     const authHeader = req.headers.authorization;
-    const { bucketName } = req.query;
-    
     if (!authHeader && !req.query.token) {
       console.log('[BACKUP] Intento de listar backups sin autenticación');
-      // Si quieres implementar autenticación estricta, descomenta estas líneas
+      // Dependiendo de tu configuración, puedes bloquear o permitir
       // return res.status(401).json({ 
       //   success: false, 
       //   message: 'No autorizado', 
       //   backups: [] 
       // });
-    }    
-    // Verificar que se proporcionó un bucket
-    if (!bucketName) {
-      console.log('[BACKUP] Intento de listar backups sin especificar bucket');
-      return res.json({
-        success: false,
-        message: 'Se requiere especificar el bucket',
-        backups: []
-      });
     }
     
-    console.log(`[BACKUP] Listando backups temporales para bucket: ${bucketName}`);
+    console.log('[BACKUP] Listando backups disponibles');
     
     // Verificar que el directorio exista
     if (!fs.existsSync(backupsDir)) {
@@ -218,70 +214,59 @@ router.get('/list', (req, res) => {
       // Si acabamos de crear el directorio, estará vacío
       return res.json({
         success: true,
-        message: 'No hay backups en proceso actualmente.',
+        message: 'Directorio de backups creado. No hay backups disponibles.',
         backups: []
       });
     }
     
-    // Filtrar backups pendientes por el bucket actual
-    const bucketPendingBackups = Array.from(pendingBackups.entries())
-      .filter(([_, backup]) => backup.bucketName === bucketName)
-      .map(([id, backup]) => {
-        return {
-          id: id,
-          filename: backup.filename,
-          status: backup.status,
-          progress: backup.progress,
-          createdAt: backup.createdAt,
-          size: backup.size || 0,
-          remainingTime: Math.max(0, Math.floor((5 * 60 * 1000 - (Date.now() - backup.createdAt.getTime())) / 1000))
-        };
-      })
-      .filter(backup => backup.remainingTime > 0);
-    
-    // Solo listar backups en proceso (menos de 2 minutos de antigüedad)
-    let files = [];
-    try {
-      // Verificar si hay archivos temporales en proceso
-      files = fs.readdirSync(backupsDir)
-        .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}-`))
-        .map(file => {
+// Obtener lista de archivos
+let files = [];
+// Obtener el bucketName del query si existe
+const { bucketName } = req.query;
+
+console.log(`[BACKUP] Filtro de bucket recibido: ${bucketName}`);
+
+// Listar todos los archivos en el directorio para depuración
+try {
+  const allFiles = fs.readdirSync(backupsDir)
+    .filter(file => file.endsWith('.zip'));
+  console.log(`[BACKUP] Todos los archivos de backup: ${allFiles.join(', ')}`);
+} catch (e) {
+  console.error(`[BACKUP] Error al listar todos los archivos: ${e.message}`);
+}
+
+if (!bucketName) {
+  console.log('[BACKUP] Error: No se proporcionó nombre de bucket para listar backups');
+  return res.json({
+    success: false,
+    message: 'Es necesario especificar un bucket para listar los backups',
+    backups: []
+  });
+}
+
+console.log(`[BACKUP] Listando backups para el bucket: ${bucketName}`);
+
+try {
+files = fs.readdirSync(backupsDir)
+  .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}-`))
+  .map(file => {
+
           try {
             const filePath = path.join(backupsDir, file);
             const stats = fs.statSync(filePath);
-            // Solo incluir archivos creados en los últimos 2 minutos (backups en proceso)
-            const fileAge = (Date.now() - stats.birthtimeMs) / 1000 / 60; // edad en minutos
-            if (fileAge <= 2) {
-              return {
-                filename: file,
-                path: filePath,
-                size: stats.size,
-                createdAt: stats.birthtime || stats.mtime,
-                status: 'en_proceso',
-                ageMinutes: fileAge.toFixed(2),
-                timeRemaining: Math.max(0, (2 - fileAge) * 60).toFixed(0) + ' segundos'
-              };
-            }        
-            // Si el archivo es más antiguo que 5 minutos, intentar eliminarlo
-            // ya que debería haberse descargado y eliminado automáticamente
-            try {
-              if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-                console.log(`[BACKUP] Archivo antiguo eliminado durante listado: ${filePath}`);
-              }
-            } catch (cleanupErr) {
-              console.error(`[BACKUP] Error al limpiar archivo antiguo: ${cleanupErr.message}`);
-            }
-            
-            return null;
+            return {
+              filename: file,
+              path: filePath,
+              size: stats.size,
+              createdAt: stats.birthtime || stats.mtime
+            };
           } catch (fileErr) {
             console.error(`[BACKUP] Error al procesar archivo ${file}:`, fileErr);
             return null;
           }
         })
-        .filter(file => file !== null) // Eliminar archivos que dieron error o son antiguos
+        .filter(file => file !== null) // Eliminar archivos que dieron error
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // Ordenar por fecha más reciente
-
     } catch (readErr) {
       console.error('[BACKUP] Error al leer directorio de backups:', readErr);
       return res.json({
@@ -291,15 +276,13 @@ router.get('/list', (req, res) => {
       });
     }
     
-    // Combinar backups del sistema de archivos con los pendientes en memoria
-    const allBackups = [...bucketPendingBackups, ...files];
-    
-    console.log(`[BACKUP] Encontrados ${allBackups.length} backups en proceso`);
+    console.log(`[BACKUP] Encontrados ${files.length} archivos de backup`);
+    console.log('[BACKUP] Lista de backups:', files.map(f => f.filename).join(', '));
     
     res.json({
       success: true,
-      message: allBackups.length > 0 ? 'Backups en proceso obtenidos correctamente' : 'No hay backups en proceso actualmente',
-      backups: allBackups
+      message: files.length > 0 ? 'Backups obtenidos correctamente' : 'No hay backups disponibles',
+      backups: files
     });
   } catch (error) {
     console.error('[BACKUP] Error al listar backups:', error);
@@ -311,379 +294,90 @@ router.get('/list', (req, res) => {
   }
 });
 
-// NUEVA RUTA: Iniciar el proceso de backup sin descarga inmediata
-router.get('/initiate/:bucketName', async (req, res) => {
+// Ruta para crear backup
+router.get('/create/:bucketName', async (req, res) => {
   try {
     const { bucketName } = req.params;
-    const { token } = req.query;
     
     if (!bucketName) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Nombre del bucket no proporcionado' 
-      });
-    }
-    
-    if (!token) {
-      console.log('[BACKUP] Intento de iniciar backup sin token');
-      return res.status(401).json({ 
-        success: false, 
-        message: 'No autorizado: Token requerido' 
-      });
+      return res.status(400).json({ success: false, message: 'Nombre del bucket no proporcionado' });
     }
     
     console.log(`[BACKUP] Iniciando backup para bucket: ${bucketName}`);
-    
-    // Crear un ID único para este backup
-    const backupId = crypto.randomUUID();
     
     // Crear nombre de archivo para el backup
     const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
     const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
     const backupPath = path.join(backupsDir, backupFileName);
     
-    // Registrar este backup en el mapa de pendientes
-    pendingBackups.set(backupId, {
-      id: backupId,
-      bucketName: bucketName,
-      filename: backupFileName,
-      path: backupPath,
-      status: 'iniciando',
-      progress: 0,
-      createdAt: new Date(),
-      token: token // Almacenar el token para verificación posterior
-    });
-    
-    // Verificar script de backup (buscar en múltiples ubicaciones)
-    let scriptPath = path.join(__dirname, '..', 'scripts', 'backup_script.js');
-    if (!fs.existsSync(scriptPath)) {
-      scriptPath = path.join(__dirname, '..', 'backup_script.js');
-    }
-    console.log(`[BACKUP] Verificando script: ${scriptPath} - Existe: ${fs.existsSync(scriptPath)}`);
+  // Ejecutar el script de backup como un proceso separado
+const scriptPath = path.join(__dirname, '..', 'backup_script.js');
+console.log(`[BACKUP] Ruta al script de backup: ${scriptPath}`);
+console.log(`[BACKUP] Verificando existencia del script: ${fs.existsSync(scriptPath) ? 'EXISTE' : 'NO EXISTE'}`);
 
-    if (!fs.existsSync(scriptPath)) {
-      // Eliminar el backup del mapa de pendientes si falla
-      pendingBackups.delete(backupId);
-      
-      return res.status(500).json({
-        success: false,
-        message: 'Script de backup no encontrado',
-        details: `El archivo ${scriptPath} no existe`
-      });
-    }
-    
-    // Enviar respuesta inmediata con el ID del backup
-    res.json({
-      success: true,
-      message: 'Proceso de backup iniciado correctamente',
-      backupId: backupId,
-      status: 'iniciando',
-      expiresIn: '5 minutos'
-    });
-    
-    // Ejecutar el script de backup como un proceso separado (asíncrono, después de enviar la respuesta)
-    console.log(`[BACKUP] Ejecutando script: node "${scriptPath}" ${bucketName} "${backupPath}"`);
-    
-    const backupProcess = spawn('node', [
-      scriptPath,
-      bucketName,
-      backupPath
-    ]);
+const backupProcess = spawn('node', [
+  scriptPath,
+  bucketName,
+  backupPath
+]);
     
     let output = '';
-    let errorOutput = '';
     
     backupProcess.stdout.on('data', (data) => {
       const dataStr = data.toString();
       console.log(`[BACKUP STDOUT] ${dataStr}`);
       output += dataStr;
-      
-      // Actualizar el estado del backup en el mapa de pendientes
-      const pendingBackup = pendingBackups.get(backupId);
-      if (pendingBackup) {
-        pendingBackup.status = 'en_proceso';
-        pendingBackup.progress = 50; // Valor aproximado
-        pendingBackups.set(backupId, pendingBackup);
-      }
     });
     
     backupProcess.stderr.on('data', (data) => {
       const dataStr = data.toString();
       console.error(`[BACKUP STDERR] ${dataStr}`);
-      errorOutput += dataStr;
-      
-      // Actualizar el estado del backup en el mapa de pendientes
-      const pendingBackup = pendingBackups.get(backupId);
-      if (pendingBackup) {
-        pendingBackup.lastError = dataStr;
-        pendingBackups.set(backupId, pendingBackup);
-      }
+      output += dataStr;
     });
     
-    // Manejar la finalización del proceso
     backupProcess.on('close', (code) => {
       console.log(`[BACKUP] Proceso terminado con código: ${code}`);
       
-      // Actualizar el estado del backup en el mapa de pendientes
       if (code !== 0) {
-        const pendingBackup = pendingBackups.get(backupId);
-        if (pendingBackup) {
-          pendingBackup.status = 'error';
-          pendingBackup.error = `El proceso de backup terminó con código ${code}`;
-          pendingBackups.set(backupId, pendingBackup);
-        }
-        
-        console.error(`[BACKUP] Error en el proceso de backup: ${code}`);
-        console.error(`[BACKUP] Output: ${output}`);
-        console.error(`[BACKUP] Error Output: ${errorOutput}`);
-        return;
+        return res.status(500).json({
+          success: false,
+          message: `El proceso de backup terminó con código ${code}`,
+          output
+        });
       }
       
       // Verificar que el archivo existe
       if (!fs.existsSync(backupPath)) {
-        const pendingBackup = pendingBackups.get(backupId);
-        if (pendingBackup) {
-          pendingBackup.status = 'error';
-          pendingBackup.error = 'El archivo de backup no se generó correctamente';
-          pendingBackups.set(backupId, pendingBackup);
-        }
-        
-        console.error('[BACKUP] Error: El archivo de backup no se generó correctamente');
-        return;
+        return res.status(500).json({
+          success: false,
+          message: 'El archivo de backup no se generó correctamente'
+        });
       }
       
-      // Obtener información del archivo
-      try {
-        const stats = fs.statSync(backupPath);
-        const pendingBackup = pendingBackups.get(backupId);
-        if (pendingBackup) {
-          pendingBackup.status = 'completado';
-          pendingBackup.progress = 100;
-          pendingBackup.size = stats.size;
-          pendingBackup.completedAt = new Date();
-          pendingBackups.set(backupId, pendingBackup);
-        }
-        console.log(`[BACKUP] Backup completado con éxito: ${backupPath} (${stats.size} bytes)`);
-      } catch (statErr) {
-        console.error(`[BACKUP] Error al obtener información del archivo: ${statErr.message}`);
-      }
+      res.json({
+        success: true,
+        message: 'Backup completado correctamente',
+        filename: backupFileName,
+        path: backupPath,
+        output
+      });
     });
-    
-    // Manejar errores del proceso
-    backupProcess.on('error', (err) => {
-      console.error(`[BACKUP] Error al iniciar proceso: ${err.message}`);
-      
-      // Actualizar el estado del backup en el mapa de pendientes
-      const pendingBackup = pendingBackups.get(backupId);
-      if (pendingBackup) {
-        pendingBackup.status = 'error';
-        pendingBackup.error = `Error al iniciar proceso de backup: ${err.message}`;
-        pendingBackups.set(backupId, pendingBackup);
-      }
-    });
-    
-    // Configurar eliminación automática del backup después de 5 minutos
-    setTimeout(() => {
-      const pendingBackup = pendingBackups.get(backupId);
-      
-      // Si el backup todavía está en el mapa y no se ha descargado
-      if (pendingBackup && pendingBackup.status !== 'descargado') {
-        console.log(`[BACKUP] Limpiando backup no descargado: ${backupId}`);
-        
-        // Eliminar el archivo si existe
-        try {
-          if (fs.existsSync(pendingBackup.path)) {
-            fs.unlinkSync(pendingBackup.path);
-            console.log(`[BACKUP] Archivo eliminado por timeout: ${pendingBackup.path}`);
-          }
-        } catch (cleanupErr) {
-          console.error(`[BACKUP] Error al eliminar archivo por timeout: ${cleanupErr.message}`);
-        }
-        
-        // Eliminar el backup del mapa de pendientes
-        pendingBackups.delete(backupId);
-      }
-    }, 5 * 60 * 1000); // 5 minutos
-    
   } catch (error) {
-    console.error('[BACKUP] Error general:', error);
+    console.error('[BACKUP] Error al iniciar el proceso de backup:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// NUEVA RUTA: Verificar estado de un backup
-router.get('/status/:backupId', (req, res) => {
-  try {
-    const { backupId } = req.params;
-    const { token, bucketName } = req.query;
-    
-    // Verificar token (básico, solo para asegurar que hay algún tipo de autenticación)
-    if (!token) {
-      console.log('[BACKUP] Intento de verificar estado sin token');
-      return res.status(401).json({ success: false, message: 'No autorizado: Token requerido' });
-    }
-    
-    // Verificar que el backup existe en el mapa de pendientes
-    if (!pendingBackups.has(backupId)) {
-      console.log(`[BACKUP] Backup no encontrado: ${backupId}`);
-      return res.status(404).json({ success: false, message: 'Backup no encontrado' });
-    }
-    
-    // Obtener información del backup
-    const backup = pendingBackups.get(backupId);
-    
-    // Verificar que el backup pertenece al bucket del usuario
-    if (bucketName && backup.bucketName !== bucketName) {
-      console.log(`[BACKUP] Intento de acceso a backup de otro bucket: ${backup.bucketName} por usuario de ${bucketName}`);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'No autorizado: El backup no pertenece a tu bucket' 
-      });
-    }
-    
-    // Verificar si el archivo existe
-    const fileExists = fs.existsSync(backup.path);
-    
-    // Calcular tiempo restante antes de la expiración (5 minutos desde la creación)
-    const remainingTime = Math.max(0, Math.floor((5 * 60 * 1000 - (Date.now() - backup.createdAt.getTime())) / 1000));
-    
-    // Enviar información del backup
-    res.json({
-      success: true,
-      message: 'Estado del backup obtenido correctamente',
-      backup: {
-        id: backup.id,
-        filename: backup.filename,
-        status: backup.status,
-        progress: backup.progress,
-        size: backup.size || 0,
-        createdAt: backup.createdAt,
-        completedAt: backup.completedAt,
-        fileExists: fileExists,
-        remainingSeconds: remainingTime,
-        error: backup.error || null
-      }
-    });
-  } catch (error) {
-    console.error('[BACKUP] Error al verificar estado del backup:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// NUEVA RUTA: Descargar un backup por ID (modificación de la ruta original de descarga)
-router.get('/download-by-id/:backupId', (req, res) => {
-  try {
-    const { backupId } = req.params;
-    const { token, bucketName } = req.query;
-    
-    // Verificar token (básico, solo para asegurar que hay algún tipo de autenticación)
-    if (!token) {
-      console.log('[BACKUP] Intento de descarga sin token');
-      return res.status(401).json({ success: false, message: 'No autorizado: Token requerido' });
-    }
-    
-    // Verificar que el backup existe en el mapa de pendientes
-    if (!pendingBackups.has(backupId)) {
-      console.log(`[BACKUP] Backup no encontrado para descarga: ${backupId}`);
-      return res.status(404).json({ success: false, message: 'Backup no encontrado' });
-    }
-    
-    // Obtener información del backup
-    const backup = pendingBackups.get(backupId);
-    
-    // Verificar que el backup pertenece al bucket del usuario
-    if (bucketName && backup.bucketName !== bucketName) {
-      console.log(`[BACKUP] Intento de acceso a backup de otro bucket: ${backup.bucketName} por usuario de ${bucketName}`);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'No autorizado: El backup no pertenece a tu bucket' 
-      });
-    }
-    
-    // Verificar que el backup está completado
-    if (backup.status !== 'completado' && backup.status !== 'en_proceso') {
-      console.log(`[BACKUP] Intento de descarga de backup no completado: ${backupId} (estado: ${backup.status})`);
-      return res.status(400).json({ 
-        success: false, 
-        message: `El backup no está listo para descarga. Estado actual: ${backup.status}` 
-      });
-    }
-    
-    // Verificar que el archivo existe
-    if (!fs.existsSync(backup.path)) {
-      console.log(`[BACKUP] Archivo no encontrado: ${backup.path}`);
-      return res.status(404).json({ success: false, message: 'Archivo de backup no encontrado' });
-    }
-    
-    console.log(`[BACKUP] Enviando archivo para descarga: ${backup.path} (${backup.size || 'desconocido'} bytes)`);
-    
-    // Configurar cabeceras para forzar descarga
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${backup.filename}"`);
-    
-    // Si conocemos el tamaño del archivo, establecer el encabezado Content-Length
-    if (backup.size) {
-      res.setHeader('Content-Length', backup.size);
-    }
-    
-    res.setHeader('X-Accel-Buffering', 'no'); // Evitar buffering en Nginx
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    
-    // Marcar el backup como descargado
-    backup.status = 'descargado';
-    pendingBackups.set(backupId, backup);
-    
-    // Configurar limpieza al terminar la descarga
-    res.on('finish', () => {
-      console.log(`[BACKUP] Descarga completada, eliminando archivo: ${backup.path}`);
-      try {
-        if (fs.existsSync(backup.path)) {
-          fs.unlinkSync(backup.path);
-          console.log(`[BACKUP] Archivo eliminado: ${backup.path}`);
-        }
-      } catch (cleanupErr) {
-        console.error(`[BACKUP] Error al eliminar archivo: ${cleanupErr.message}`);
-      }
-      
-      // Eliminar el backup del mapa de pendientes
-      pendingBackups.delete(backupId);
-    });
-    
-    // También limpiar si la conexión se cierra
-    res.on('close', () => {
-      console.log(`[BACKUP] Conexión cerrada, eliminando archivo: ${backup.path}`);
-      try {
-        if (fs.existsSync(backup.path)) {
-          fs.unlinkSync(backup.path);
-          console.log(`[BACKUP] Archivo eliminado después de cierre: ${backup.path}`);
-        }
-      } catch (cleanupErr) {
-        console.error(`[BACKUP] Error al eliminar archivo: ${cleanupErr.message}`);
-      }
-      
-      // Eliminar el backup del mapa de pendientes
-      pendingBackups.delete(backupId);
-    });
-    
-    // Enviar el archivo
-    const fileStream = fs.createReadStream(backup.path);
-    fileStream.pipe(res);
-  } catch (error) {
-    console.error('[BACKUP] Error general durante la descarga:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Mantener la ruta original de descarga por nombre de archivo para compatibilidad
+// Ruta para descargar un backup
 router.get('/download/:filename', (req, res) => {
   const { filename } = req.params;
-  const { token, bucketName } = req.query;
+  const { token } = req.query;
   const filePath = path.join(backupsDir, filename);
   
-  console.log(`[BACKUP] Solicitud de descarga para archivo: ${filename}`);
-  console.log(`[BACKUP] Bucket solicitante: ${bucketName || 'No especificado'}`);
+  // Verificar que el archivo existe
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, message: 'Archivo no encontrado' });
+  }
   
   // Verificar token (básico, solo para asegurar que hay algún tipo de autenticación)
   if (!token) {
@@ -691,59 +385,15 @@ router.get('/download/:filename', (req, res) => {
     return res.status(401).json({ success: false, message: 'No autorizado: Token requerido' });
   }
   
-  // Verificar que el archivo existe
-  if (!fs.existsSync(filePath)) {
-    console.log(`[BACKUP] Archivo no encontrado: ${filePath}`);
-    return res.status(404).json({ success: false, message: 'Archivo no encontrado' });
-  }
-  
-  // Verificar que el archivo solicitado corresponde al bucket del usuario
-  if (bucketName && !filename.includes(`backup-${bucketName}-`)) {
-    console.log(`[BACKUP] Intento de acceso a backup de otro bucket: ${filename} por usuario de ${bucketName}`);
-    return res.status(403).json({ 
-      success: false, 
-      message: 'No autorizado: El archivo no pertenece a tu bucket' 
-    });
-  }
-  
-  // Configurar cabeceras para forzar descarga
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Length', fs.statSync(filePath).size);
-  res.setHeader('X-Accel-Buffering', 'no'); // Evitar buffering en Nginx
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  
-  // Configurar limpieza al terminar la descarga
-  res.on('finish', () => {
-    console.log(`[BACKUP] Descarga completada, eliminando archivo: ${filePath}`);
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log(`[BACKUP] Archivo eliminado: ${filePath}`);
+  res.download(filePath, filename, (err) => {
+    if (err) {
+      console.error(`[BACKUP] Error al descargar archivo ${filename}:`, err);
+      // Si ya se envió la cabecera, no podemos enviar otro error
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
       }
-    } catch (cleanupErr) {
-      console.error(`[BACKUP] Error al eliminar archivo: ${cleanupErr.message}`);
     }
   });
-  
-  // También limpiar si la conexión se cierra
-  res.on('close', () => {
-    console.log(`[BACKUP] Conexión cerrada, eliminando archivo: ${filePath}`);
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log(`[BACKUP] Archivo eliminado después de cierre: ${filePath}`);
-      }
-    } catch (cleanupErr) {
-      console.error(`[BACKUP] Error al eliminar archivo: ${cleanupErr.message}`);
-    }
-  });
-  
-  // Enviar el archivo
-  const fileStream = fs.createReadStream(filePath);
-  fileStream.pipe(res);
 });
 
 // Ruta para restaurar desde un backup
@@ -778,18 +428,18 @@ router.post('/restore', upload.single('backupFile'), async (req, res) => {
     console.log(`[RESTORE] Ruta del archivo subido: ${uploadedFilePath}`);
     
     // Determinar la ruta del script de restauración
-    const simplePath = path.join(__dirname, '..', 'restore_script_simple.js');
-    const standardPath = path.join(__dirname, '..', 'restore_script.js');
+const simplePath = path.join(__dirname, '..', 'restore_script_simple.js');
+const standardPath = path.join(__dirname, '..', 'restore_script.js');
 
-    console.log(`[RESTORE] Verificando scripts de restauración:`);
-    console.log(`- Script simple (${simplePath}): ${fs.existsSync(simplePath) ? 'EXISTE' : 'NO EXISTE'}`);
-    console.log(`- Script estándar (${standardPath}): ${fs.existsSync(standardPath) ? 'EXISTE' : 'NO EXISTE'}`);
+console.log(`[RESTORE] Verificando scripts de restauración:`);
+console.log(`- Script simple (${simplePath}): ${fs.existsSync(simplePath) ? 'EXISTE' : 'NO EXISTE'}`);
+console.log(`- Script estándar (${standardPath}): ${fs.existsSync(standardPath) ? 'EXISTE' : 'NO EXISTE'}`);
 
-    const scriptPath = fs.existsSync(simplePath) 
-      ? simplePath
-      : standardPath;
+const scriptPath = fs.existsSync(simplePath) 
+  ? simplePath
+  : standardPath;
 
-    console.log(`[RESTORE] Utilizando script de restauración: ${scriptPath}`);
+console.log(`[RESTORE] Utilizando script de restauración: ${scriptPath}`);
     
     const restoreProcess = spawn('node', [
       scriptPath,
@@ -854,81 +504,5 @@ router.post('/restore', upload.single('backupFile'), async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
-// Función de limpieza periódica para eliminar archivos de backup antiguos
-const cleanupBackupFiles = () => {
-  console.log('[BACKUP] Iniciando limpieza periódica de archivos de backup antiguos');
-  
-  try {
-    if (!fs.existsSync(backupsDir)) {
-      console.log(`[BACKUP] Directorio de backups no existe: ${backupsDir}`);
-      return;
-    }
-    
-    const files = fs.readdirSync(backupsDir);
-    let removedCount = 0;
-    
-    for (const file of files) {
-      if (file.endsWith('.zip') && file.includes('backup-')) {
-        const filePath = path.join(backupsDir, file);
-        
-        try {
-          const stats = fs.statSync(filePath);
-          // Eliminar archivos que tienen más de 10 minutos de antigüedad
-          const fileAgeMinutes = (Date.now() - stats.birthtimeMs) / 1000 / 60;
-          
-          if (fileAgeMinutes > 10) {
-            console.log(`[BACKUP] Eliminando archivo antiguo (${fileAgeMinutes.toFixed(2)} minutos): ${file}`);
-            fs.unlinkSync(filePath);
-            removedCount++;
-          }
-        } catch (err) {
-          console.error(`[BACKUP] Error al procesar archivo ${file}:`, err);
-        }
-      }
-    }
-    
-    console.log(`[BACKUP] Limpieza completada, ${removedCount} archivos eliminados`);
-    
-    // También limpiar backups pendientes antiguos
-    const now = Date.now();
-    let pendingRemoved = 0;
-    
-    for (const [id, backup] of pendingBackups.entries()) {
-      const backupAgeMinutes = (now - backup.createdAt.getTime()) / 1000 / 60;
-      
-      if (backupAgeMinutes > 10) {
-        console.log(`[BACKUP] Eliminando backup pendiente antiguo (${backupAgeMinutes.toFixed(2)} minutos): ${id}`);
-        
-        // Eliminar el archivo si existe
-        try {
-          if (fs.existsSync(backup.path)) {
-            fs.unlinkSync(backup.path);
-            console.log(`[BACKUP] Archivo de backup pendiente eliminado: ${backup.path}`);
-          }
-        } catch (err) {
-          console.error(`[BACKUP] Error al eliminar archivo de backup pendiente: ${err.message}`);
-        }
-        
-        // Eliminar del mapa
-        pendingBackups.delete(id);
-        pendingRemoved++;
-      }
-    }
-    
-    if (pendingRemoved > 0) {
-      console.log(`[BACKUP] Limpieza de backups pendientes completada, ${pendingRemoved} backups eliminados`);
-    }
-  } catch (error) {
-    console.error('[BACKUP] Error durante limpieza periódica:', error);
-  }
-};
-
-// Programar limpieza periódica cada 30 minutos
-const cleanupInterval = 30 * 60 * 1000; // 30 minutos en milisegundos
-setInterval(cleanupBackupFiles, cleanupInterval);
-
-// Ejecutar una limpieza inicial al iniciar el servidor
-setTimeout(cleanupBackupFiles, 5000);
 
 module.exports = router;
