@@ -406,18 +406,6 @@ router.get('/download/:filename', (req, res) => {
       if (!res.headersSent) {
         res.status(500).json({ success: false, message: err.message });
       }
-    } else {
-      // Si no hay error, programar eliminación después de 5 segundos
-      setTimeout(() => {
-        try {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            console.log(`[BACKUP] Archivo eliminado después de descarga: ${filePath}`);
-          }
-        } catch (cleanupErr) {
-          console.error(`[BACKUP] Error al eliminar archivo después de descarga: ${cleanupErr.message}`);
-        }
-      }, 5000); // 5 segundos
     }
   });
 });
@@ -530,51 +518,5 @@ console.log(`[RESTORE] Utilizando script de restauración: ${scriptPath}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
-// Función de limpieza periódica para eliminar archivos de backup antiguos
-const cleanupBackupFiles = () => {
-  console.log('[BACKUP] Iniciando limpieza periódica de archivos de backup antiguos');
-  try {
-    if (!fs.existsSync(backupsDir)) {
-      console.log(`[BACKUP] Directorio de backups no existe: ${backupsDir}`);
-      return;
-    }
-
-    const files = fs.readdirSync(backupsDir);
-    let removedCount = 0;
-
-    for (const file of files) {
-      if (file.endsWith('.zip') && file.includes('backup-')) {
-        const filePath = path.join(backupsDir, file);
-        try {
-          const stats = fs.statSync(filePath);
-          
-          // Eliminar archivos que tienen más de 10 segundos de antigüedad
-          const fileAgeSeconds = (Date.now() - stats.birthtimeMs) / 1000;
-          if (fileAgeSeconds > 10) {
-            console.log(`[BACKUP] Eliminando archivo antiguo (${fileAgeSeconds.toFixed(2)} segundos): ${file}`);
-            fs.unlinkSync(filePath);
-            removedCount++;
-          }
-        } catch (err) {
-          console.error(`[BACKUP] Error al procesar archivo ${file}:`, err);
-        }
-      }
-    }
-
-    console.log(`[BACKUP] Limpieza completada, ${removedCount} archivos eliminados`);
-  } catch (error) {
-    console.error('[BACKUP] Error durante limpieza periódica:', error);
-  }
-};
-
-// Programar limpieza periódica cada 30 segundos
-const cleanupInterval = 30 * 1000; // 30 segundos
-setInterval(cleanupBackupFiles, cleanupInterval);
-
-// Ejecutar una limpieza inicial al iniciar el servidor
-setTimeout(cleanupBackupFiles, 5000);
-
-module.exports = router;
 
 module.exports = router;
