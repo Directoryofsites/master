@@ -82,42 +82,43 @@ export const createBackup = async (bucketName) => {
     console.log(`Iniciando backup para bucket: ${bucketName}`);
     
     // Crear URL con token de autenticación para el primer paso (crear el backup)
-    const token = getAuthToken();
+const token = getAuthToken();
     
-    // Aquí usamos tu servidor local en puerto 3001 en lugar de la URL de Railway
-    const localBackendUrl = 'http://localhost:3001';
-    const createUrl = `${localBackendUrl}/api/admin/create/${encodeURIComponent(bucketName)}?token=${encodeURIComponent(token)}`;
+// CAMBIO PARA PRODUCCIÓN: Usar backendUrl en lugar de localhost
+const createUrl = `${backendUrl}/api/admin/create/${encodeURIComponent(bucketName)}?token=${encodeURIComponent(token)}`;
     
-    console.log('Paso 1: Creando backup en:', createUrl);
+console.log('Paso 1: Creando backup en:', createUrl);
     
-    // Hacer petición para crear el backup
-    const response = await fetch(createUrl, createFetchOptions('GET'));
+// Hacer petición para crear el backup
+const response = await fetch(createUrl, createFetchOptions('GET'));
     
-    if (!response.ok) {
-      throw new Error(`Error HTTP: ${response.status}`);
-    }
+if (!response.ok) {
+  throw new Error(`Error HTTP: ${response.status}`);
+}
     
-    // Obtener información del backup creado
-    const data = await response.json();
+// Obtener información del backup creado
+const data = await response.json();
     
-    if (!data.success) {
-      throw new Error(data.message || 'Error al crear backup');
-    }
+if (!data.success) {
+  throw new Error(data.message || 'Error al crear backup');
+}
     
-    console.log('Backup creado exitosamente:', data);
+console.log('Backup creado exitosamente:', data);
     
-    // Usar la ruta del archivo para crear una descarga
-    const backupPath = data.path;
+// CAMBIO PARA PRODUCCIÓN: Usar backendUrl en lugar de localhost
+const downloadUrl = `${backendUrl}/api/backup/download/${data.filename}?token=${encodeURIComponent(token)}`;
     
-    alert(`Backup creado correctamente: ${data.filename}\n\nPara descargar el archivo, ve a la barra de direcciones de tu navegador y visita:\n\nhttp://localhost:3001/api/backup/download/${data.filename}\n\nEsto iniciará la descarga automáticamente.`);
-    
-    return {
-      success: true,
-      message: 'Backup creado correctamente. Por favor sigue las instrucciones para descargarlo.',
-      note: 'El archivo se eliminará automáticamente del servidor después de la descarga. Solo se guarda en tu dispositivo local.',
-      backupInfo: data,
-      downloadUrl: `http://localhost:3001/api/backup/download/${data.filename}`
-    };
+// Abrir la URL de descarga en una nueva ventana
+window.open(downloadUrl, '_blank');
+
+  return {
+  success: true,
+  message: 'Backup creado correctamente. La descarga debería iniciarse en una nueva ventana.',
+  note: 'El archivo se eliminará automáticamente del servidor después de la descarga. Solo se guarda en tu dispositivo local.',
+  backupInfo: data,
+  downloadUrl: downloadUrl
+};
+
   } catch (error) {
     console.error('Error al crear y descargar backup:', error);
     return {
