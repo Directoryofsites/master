@@ -354,19 +354,7 @@ const backupProcess = spawn('node', [
         });
       }
       
-      // Programar eliminación del archivo después de 5 segundos
-      setTimeout(() => {
-        try {
-          if (fs.existsSync(backupPath)) {
-            fs.unlinkSync(backupPath);
-            console.log(`[BACKUP] Archivo eliminado automáticamente después de 5 segundos: ${backupPath}`);
-          }
-        } catch (cleanupErr) {
-          console.error(`[BACKUP] Error al eliminar archivo automáticamente: ${cleanupErr.message}`);
-        }
-      }, 5000); // 5 segundos
-
-      res.json({
+            res.json({
         success: true,
         message: 'Backup completado correctamente. El archivo será eliminado automáticamente en 5 segundos.',
         filename: backupFileName,
@@ -556,9 +544,9 @@ const cleanupBackupFiles = () => {
         try {
           const stats = fs.statSync(filePath);
           
-          // Eliminar archivos que tienen más de 2 minutos de antigüedad
+       // Eliminar archivos que tienen más de 5 minutos de antigüedad
 const fileAgeSeconds = (Date.now() - stats.birthtimeMs) / 1000;
-if (fileAgeSeconds > 120) { // 2 minutos
+if (fileAgeSeconds > 300) { // 5 minutos
 
             console.log(`[BACKUP] Eliminando archivo antiguo (${fileAgeSeconds.toFixed(2)} segundos): ${file}`);
             fs.unlinkSync(filePath);

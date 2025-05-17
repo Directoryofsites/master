@@ -109,35 +109,18 @@ export const createBackup = async (bucketName) => {
 export const downloadBackup = async (filename) => {
   try {
     const token = getAuthToken();
-    // URL ya correcta, manteniendo como está
-    const downloadUrl = `${backendUrl}/api/backup/download/${encodeURIComponent(filename)}`;
     
-    console.log('Intentando descargar desde:', downloadUrl);
+    // URL con token incluido
+    const downloadUrl = `${backendUrl}/api/backup/download/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
     
-    // Para descargas, enviamos el token como parámetro de URL
-    // ya que es una redirección directa al navegador
-    const link = document.createElement('a');
-    const finalUrl = `${downloadUrl}?token=${encodeURIComponent(token)}`;
-    link.href = finalUrl;
-    link.target = '_blank';
-    link.download = filename;
+    console.log('Iniciando descarga desde:', downloadUrl);
     
-    console.log('URL final de descarga:', finalUrl);
+    // Abrir en nueva ventana para descargar
+    window.open(downloadUrl, '_blank');
     
-    // Añadir el enlace al DOM, hacer clic y luego eliminarlo
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    // Verificar que la descarga se ha iniciado
-    setTimeout(() => {
-      console.log('Descarga iniciada para:', filename);
-    }, 500);
-    
-    return { success: true, message: 'Descarga iniciada' };  
-  
+    return { success: true, message: 'Descarga iniciada. Por favor, revisa tu navegador.' };
   } catch (error) {
-    console.error('Error al descargar backup:', error);
+    console.error('Error al iniciar descarga de backup:', error);
     return {
       success: false,
       message: `Error al descargar backup: ${error.message}`
