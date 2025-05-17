@@ -108,8 +108,26 @@ console.log('Backup creado exitosamente:', data);
 // CAMBIO PARA PRODUCCIÓN: Usar la ruta correcta para la descarga
 const downloadUrl = `${backendUrl}/api/admin/download/${data.filename}?token=${encodeURIComponent(token)}&bucketName=${encodeURIComponent(bucketName)}`;
     
-// Abrir la URL de descarga en una nueva ventana
-window.open(downloadUrl, '_blank');
+// Imprimir la URL en la consola para facilitar la depuración
+console.log('URL de descarga:', downloadUrl);
+
+// Intentar abrir la URL de descarga en una nueva ventana
+const downloadWindow = window.open(downloadUrl, '_blank');
+
+// Verificar si la ventana se abrió correctamente (podría ser bloqueada por el navegador)
+if (!downloadWindow || downloadWindow.closed || typeof downloadWindow.closed === 'undefined') {
+  // La ventana emergente fue bloqueada por el navegador
+  console.warn('No se pudo abrir una ventana para la descarga. Mostrando instrucciones alternativas.');
+  
+  // Mostrar instrucciones alternativas al usuario
+  alert(`El backup se ha creado correctamente, pero no se pudo iniciar la descarga automáticamente.
+  
+Para descargar tu backup, sigue estos pasos:
+1. Haz clic en este enlace o copia la siguiente URL en tu navegador:
+${downloadUrl}
+
+El archivo se eliminará automáticamente del servidor después de varios minutos si no se descarga.`);
+}
 
   return {
   success: true,
