@@ -1,14 +1,15 @@
 import React, { useState, useRef } from 'react';
+import { restoreUsers } from '../services/backup';
 
 /**
- * Componente de botón para restaurar copias de seguridad
- * Permite al usuario seleccionar un archivo de backup para restaurarlo
+ * Componente que permite restaurar solo los usuarios desde un backup
+ * con la opción de mantener nombres originales
  */
-const RestoreBackupButton = () => {
+const RestoreUsersButton = ({ bucketName }) => {
   const [status, setStatus] = useState('idle'); // idle, uploading, success, error
   const [message, setMessage] = useState('');
   const fileInputRef = useRef(null);
-  const [keepOriginalUsernames, setKeepOriginalUsernames] = useState(true); // Nueva opción para mantener nombres originales
+  const [keepOriginalUsernames, setKeepOriginalUsernames] = useState(true);
 
   /**
    * Maneja la selección del archivo de backup
@@ -34,55 +35,24 @@ const RestoreBackupButton = () => {
     try {
       // Cambiar estado a cargando
       setStatus('uploading');
-      setMessage('Cargando archivo de copia de seguridad...');
+      setMessage(`Restaurando usuarios${keepOriginalUsernames ? ' con nombres originales' : ' con nombres modificados'}...`);
 
-      // Importar auth para obtener el token
-      const auth = await import('../services/auth');
-      const token = auth.getAuthToken();
+      // Restaurar solo los usuarios
+      const result = await restoreUsers(file, bucketName, keepOriginalUsernames);
 
-     // Crear FormData para enviar el archivo
-      const formData = new FormData();
-      formData.append('backup', file);
-      // Agregar parámetro para mantener nombres originales
-      formData.append('keepOriginalUsernames', keepOriginalUsernames.toString());
-      
-      console.log(`Restaurando con la opción de mantener nombres originales: ${keepOriginalUsernames}`);
-      // Incluir el parámetro para mantener nombres originales
-      formData.append('keepOriginalUsernames', keepOriginalUsernames.toString());
-
-      // URL completa al endpoint de restauración
-const backendUrl = "https://master-production-5386.up.railway.app"; // URL de tu backend
-const restoreUrl = `${backendUrl}/api/backup/restore`;
-
-     // Enviar el archivo al servidor
-      // Asegurarnos de que se incluya el parámetro keepOriginalUsernames
-      console.log(`Enviando restauración con mantener nombres originales: ${keepOriginalUsernames}`);
-      formData.append('keepOriginalUsernames', keepOriginalUsernames.toString());
-      
-      const response = await fetch(restoreUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error en el servidor: ${response.status} ${response.statusText}`);
+      if (result.success) {
+        setStatus('success');
+        setMessage(`Usuarios restaurados correctamente. ${result.message || ''}`);
+        
+        // Recargar la página después de 3 segundos para mostrar los cambios
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+      } else {
+        throw new Error(result.message || 'Error desconocido al restaurar usuarios');
       }
-
-      const result = await response.json();
-
-      // Mostrar mensaje de éxito
-      setStatus('success');
-      setMessage('Restauración completada con éxito. El sistema se actualizará en breve.');
-
-      // Recargar la página después de 3 segundos para mostrar los cambios
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
     } catch (error) {
-      console.error('Error en proceso de restauración:', error);
+      console.error('Error en proceso de restauración de usuarios:', error);
       setStatus('error');
       setMessage(`Error: ${error.message}`);
 
@@ -94,8 +64,8 @@ const restoreUrl = `${backendUrl}/api/backup/restore`;
     }
   };
 
-return (
-    <div className="restore-container">
+  return (
+    <div className="restore-users-container">
       {/* Opción para mantener nombres de usuario originales */}
       <div className="option-container">
         <label className="option-label">
@@ -121,31 +91,15 @@ return (
         onChange={handleFileChange}
       />
       
-    {/* Opción para mantener nombres de usuario originales */}
-      <div className="option-container">
-        <label className="option-label">
-          <input
-            type="checkbox"
-            checked={keepOriginalUsernames}
-            onChange={(e) => setKeepOriginalUsernames(e.target.checked)}
-          />
-          Mantener nombres de usuario originales
-        </label>
-        <div className="option-description">
-          Si está marcado, los usuarios restaurados mantendrán sus nombres originales.
-          Si no está marcado, se añadirá un sufijo al nombre de usuario para evitar conflictos.
-        </div>
-      </div>
-      
       {/* Botón visible para iniciar la restauración */}
       <button 
-        className={`restore-button ${status}`}
+        className={`restore-users-button ${status}`}
         onClick={handleFileSelect}
         disabled={status === 'uploading'}
       >
-        {status === 'uploading' ? 'Restaurando...' : 
-         status === 'success' ? 'Restauración exitosa' : 
-         'Restaurar Copia de Seguridad'}
+        {status === 'uploading' ? 'Restaurando usuarios...' : 
+         status === 'success' ? 'Usuarios restaurados' : 
+         'Restaurar Solo Usuarios'}
       </button>
       
       {/* Indicador visual del estado de la opción */}
@@ -165,13 +119,16 @@ return (
       )}
       
       <style jsx>{`
-        .restore-container {
+        .restore-users-container {
           margin: 15px 0;
           padding: 10px;
+          border: 1px solid #e0e0e0;
+          border-radius: 4px;
+          background-color: #fafafa;
         }
         
-        .restore-button {
-          background-color: #2196F3;
+        .restore-users-button {
+          background-color: #9C27B0;
           color: white;
           padding: 10px 15px;
           border: none;
@@ -181,46 +138,25 @@ return (
           transition: background-color 0.3s;
         }
         
-        .restore-button:hover {
-          background-color: #0b7dda;
+        .restore-users-button:hover {
+          background-color: #7B1FA2;
         }
         
-        .restore-button:disabled {
+        .restore-users-button:disabled {
           background-color: #cccccc;
           cursor: not-allowed;
         }
         
-        .restore-button.uploading {
+        .restore-users-button.uploading {
           background-color: #FF9800;
         }
         
-        .restore-button.success {
+        .restore-users-button.success {
           background-color: #4CAF50;
         }
         
-        .restore-button.error {
+        .restore-users-button.error {
           background-color: #f44336;
-        }
-        
-        .message {
-          margin-top: 10px;
-          padding: 8px;
-          border-radius: 4px;
-        }
-        
-        .message.uploading {
-          color: #E65100;
-          background-color: #FFF3E0;
-        }
-        
-        .message.success {
-          color: #1B5E20;
-          background-color: #E8F5E9;
-        }
-        
-        .message.error {
-          color: #B71C1C;
-          background-color: #FFEBEE;
         }
         
         .option-container {
@@ -241,10 +177,6 @@ return (
           margin-top: 5px;
           font-size: 12px;
           color: #666666;
-        }
-        
-       input[type="checkbox"] {
-          margin-right: 8px;
         }
         
         .option-indicator {
@@ -268,10 +200,34 @@ return (
         .indicator-dot.disabled {
           background-color: #FFA000;
         }
+        
+        .message {
+          margin-top: 10px;
+          padding: 8px;
+          border-radius: 4px;
+        }
+        
+        .message.uploading {
+          color: #E65100;
+          background-color: #FFF3E0;
+        }
+        
+        .message.success {
+          color: #1B5E20;
+          background-color: #E8F5E9;
+        }
+        
+        .message.error {
+          color: #B71C1C;
+          background-color: #FFEBEE;
+        }
+        
+        input[type="checkbox"] {
+          margin-right: 8px;
+        }
       `}</style>
-
     </div>
   );
 };
 
-export default RestoreBackupButton;
+export default RestoreUsersButton;

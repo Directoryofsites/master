@@ -498,7 +498,7 @@ frontendCompatRouter.get('/backup/list', (req, res) => {
   }
 });
 
-// Ruta para crear backup
+// Ruta para crear backup con descarga inmediata
 frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
   const { bucketName } = req.params;
   console.log(`[SERVER] Petición recibida en /api/backup/create/${bucketName}`);
@@ -540,37 +540,14 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
     console.log(`[SERVER] Script de backup: ${scriptPath}`);
     console.log(`[SERVER] Ruta del archivo de backup: ${backupPath}`);
     
-    // Ejecutar el script directamente
-    const backupProcess = spawn('node', [
-      scriptPath,
-      bucketName,
-      backupPath
-    ]);
+    // Ejecutar el script de forma síncrona para poder enviar el archivo inmediatamente
+    const { execSync } = require('child_process');
     
-    let output = '';
-    
-    backupProcess.stdout.on('data', (data) => {
-      const dataStr = data.toString();
-      console.log(`[SERVER BACKUP STDOUT] ${dataStr}`);
-      output += dataStr;
-    });
-    
-    backupProcess.stderr.on('data', (data) => {
-      const dataStr = data.toString();
-      console.error(`[SERVER BACKUP STDERR] ${dataStr}`);
-      output += dataStr;
-    });
-    
-    backupProcess.on('close', (code) => {
-      console.log(`[SERVER] Proceso de backup terminado con código: ${code}`);
+    try {
+      console.log(`[SERVER] Ejecutando comando de backup de forma síncrona`);
+      execSync(`node "${scriptPath}" "${bucketName}" "${backupPath}"`);
       
-      if (code !== 0) {
-        return res.status(500).json({
-          success: false,
-          message: `El proceso de backup terminó con código ${code}`,
-          output
-        });
-      }
+      console.log(`[SERVER] Backup completado, verificando archivo: ${backupPath}`);
       
       // Verificar que el archivo existe
       if (!fs.existsSync(backupPath)) {
@@ -580,26 +557,35 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
         });
       }
       
-      res.json({
-        success: true,
-        message: 'Backup completado correctamente',
-        filename: backupFileName,
-        path: backupPath,
-        output
+      const stats = fs.statSync(backupPath);
+      console.log(`[SERVER] Archivo de backup generado: ${backupFileName} (${stats.size} bytes)`);
+      
+      // Configurar cabeceras para forzar la descarga
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${backupFileName}"`);
+      res.setHeader('Cache-Control', 'no-cache');
+      
+      // Enviar el archivo directamente como respuesta
+      console.log(`[SERVER] Enviando archivo para descarga inmediata`);
+      return res.sendFile(backupPath, (err) => {
+        if (err) {
+          console.error(`[SERVER] Error al enviar archivo: ${err}`);
+        } else {
+          console.log(`[SERVER] Archivo enviado correctamente`);
+        }
       });
-    });
-    
-    backupProcess.on('error', (error) => {
-      console.error(`[SERVER] Error al iniciar proceso de backup: ${error.message}`);
-      res.status(500).json({
+      
+    } catch (execError) {
+      console.error(`[SERVER] Error al ejecutar script de backup: ${execError.message}`);
+      return res.status(500).json({
         success: false,
-        error: 'Error al iniciar proceso de backup',
-        details: error.message
+        error: 'Error al ejecutar script de backup',
+        details: execError.message
       });
-    });
-    
+    }
   } catch (error) {
     console.error('[SERVER] Error general en proceso de backup:', error);
+    
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
@@ -611,6 +597,214 @@ frontendCompatRouter.get('/backup/create/:bucketName', (req, res, next) => {
 // Registrar el router de compatibilidad
 app.use('/api', frontendCompatRouter);
 console.log('[SERVER] Rutas de compatibilidad frontend registradas en /api');
+
+// Nueva ruta para descargar directamente el último backup generado
+app.get('/api/backup/download-latest/:bucketName', async (req, res) => {
+  try {
+    const { bucketName } = req.params;
+    if (!bucketName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre del bucket no proporcionado' 
+      });
+    }
+    
+    console.log(`[BACKUP] Iniciando descarga directa del último backup para bucket: ${bucketName}`);
+    
+    // Configurar directorio de backups
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      return res.status(404).json({
+        success: false,
+        message: 'No hay directorio de backups'
+      });
+    }
+    
+    // Buscar los archivos de backup para este bucket específico
+    const files = fs.readdirSync(backupsDir)
+      .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}`))
+      .map(file => {
+        const filePath = path.join(backupsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          filename: file,
+          path: filePath,
+          created: stats.mtime || stats.birthtime
+        };
+      })
+      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
+    
+    if (files.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `No se encontraron backups para el bucket ${bucketName}`
+      });
+    }
+    
+    // Usar el backup más reciente
+    const latestBackup = files[0];
+    console.log(`[BACKUP] Descargando el backup más reciente: ${latestBackup.filename}`);
+    
+    // Configurar cabeceras para forzar la descarga
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${latestBackup.filename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Enviar el archivo
+    res.sendFile(latestBackup.path, (err) => {
+      if (err) {
+        console.error(`[BACKUP] Error al enviar archivo: ${err.message}`);
+        // Si ya enviamos cabeceras, no podemos enviar otro error
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: `Error al enviar archivo: ${err.message}`
+          });
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al descargar backup:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: `Error al descargar backup: ${error.message}` 
+    });
+  }
+});
+
+// Endpoint específico para descargar un archivo de backup
+app.get('/api/admin/download-backup/:fileName', (req, res) => {
+  try {
+    const { fileName } = req.params;
+    
+    // Validar el nombre del archivo para prevenir atravesar directorios
+    if (!fileName || fileName.includes('/') || fileName.includes('..')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre de archivo inválido'
+      });
+    }
+    
+    // Construir la ruta al archivo
+    const backupsDir = path.join(__dirname, 'backups');
+    const filePath = path.join(backupsDir, fileName);
+    
+    console.log(`[DOWNLOAD_BACKUP] Descargando archivo: ${filePath}`);
+    
+    // Verificar que el archivo existe
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Archivo de backup no encontrado'
+      });
+    }
+    
+    // Configurar cabeceras para forzar la descarga
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Enviar el archivo como descarga
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error(`[DOWNLOAD_BACKUP] Error al enviar archivo: ${err}`);
+      } else {
+        console.log(`[DOWNLOAD_BACKUP] Archivo enviado correctamente: ${fileName}`);
+      }
+    });
+  } catch (error) {
+    console.error('[DOWNLOAD_BACKUP] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: `Error al descargar backup: ${error.message}`
+    });
+  }
+});
+
+// Nueva ruta específica para la descarga de backups
+app.get('/api/admin/create/:bucketName', async (req, res) => {
+  try {
+    const { bucketName } = req.params;
+    console.log(`[ADMIN_BACKUP] Iniciando backup para bucket: ${bucketName}`);
+    
+    // Verificar que el bucket es válido
+    if (!bucketName) {
+      return res.status(400).json({ success: false, message: 'Nombre del bucket no proporcionado' });
+    }
+    
+    // Crear directorio de backups si no existe
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+      console.log(`[ADMIN_BACKUP] Directorio de backups creado: ${backupsDir}`);
+    }
+    
+    // Crear nombre de archivo para el backup
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    const backupFileName = `backup-${bucketName}-${timestamp}.zip`;
+    const backupPath = path.join(backupsDir, backupFileName);
+    
+    console.log(`[ADMIN_BACKUP] Generando backup: ${backupPath}`);
+    
+    // Ejecutar el script de backup de forma síncrona
+    const { execSync } = require('child_process');
+    const scriptPath = path.join(__dirname, 'backup_script.js');
+    
+    try {
+      execSync(`node "${scriptPath}" "${bucketName}" "${backupPath}"`, {
+        timeout: 300000 // 5 minutos máximo
+      });
+      
+      console.log(`[ADMIN_BACKUP] Backup generado correctamente: ${backupPath}`);
+      
+      // Verificar que el archivo existe
+      if (!fs.existsSync(backupPath)) {
+        return res.status(500).json({
+          success: false,
+          message: 'El archivo de backup no se generó correctamente'
+        });
+      }
+      
+   // Configurar las cabeceras para forzar la descarga del archivo
+      res.attachment(backupFileName); // Esto configura Content-Disposition: attachment
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
+      // Enviar el archivo como un stream
+      const fileStream = fs.createReadStream(backupPath);
+      fileStream.pipe(res);
+      
+      fileStream.on('error', (err) => {
+        console.error(`[ADMIN_BACKUP] Error al enviar archivo: ${err.message}`);
+        // Si no hemos enviado la respuesta aún
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: `Error al enviar archivo: ${err.message}`
+          });
+        } else {
+          // Si ya enviamos cabeceras, cerramos la conexión
+          res.end();
+        }
+      });
+      
+    } catch (execError) {
+      console.error(`[ADMIN_BACKUP] Error al ejecutar script de backup: ${execError.message}`);
+      return res.status(500).json({
+        success: false,
+        message: `Error al generar backup: ${execError.message}`
+      });
+    }
+  } catch (error) {
+    console.error(`[ADMIN_BACKUP] Error general: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: `Error general: ${error.message}`
+    });
+  }
+});
 
 // Ruta de prueba específica para verificar que el sistema de backup está funcionando
 app.get('/api/backup-test', (req, res) => {
@@ -666,6 +860,8 @@ app.get('/api/backup-test', (req, res) => {
       results.tempDirectories[dir] = `error: ${error.message}`;
     }
   });
+
+
   
   // Listar rutas registradas
   const routesToCheck = [
@@ -1102,6 +1298,80 @@ async function deleteUser(userId, permanent = false) {
 // ENDPOINTS PARA GESTIÓN DE USUARIOS DINÁMICOS
 // ========================================================
 
+// Ruta para arreglar usuarios problemáticos (restaurados)
+app.post('/api/admin/users/:userId/fix', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Verificar permisos (asumiendo que ya tienes middleware de auth)
+    if (!req.username || req.userRole !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'No tienes permisos suficientes para realizar esta acción' 
+      });
+    }
+    
+    console.log(`[ADMIN] Intento de arreglar usuario ${userId} por ${req.username}`);
+    
+    // Buscar el usuario en la base de datos
+    const { data: user, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError) {
+      console.error(`[ADMIN] Error al buscar usuario ${userId}:`, userError);
+      return res.status(404).json({ 
+        success: false, 
+        message: `No se encontró el usuario: ${userError.message}` 
+      });
+    }
+    
+    // Verificar que el usuario pertenece al bucket del administrador
+    if (user.bucket !== req.bucketName) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'No puedes modificar usuarios de otros buckets' 
+      });
+    }
+    
+    // Actualizar el usuario para solucionar los problemas típicos de usuarios restaurados
+    const { error: updateError } = await supabase
+      .from('user_accounts')
+      .update({
+        fixed: true,          // Marcar como arreglado
+        fixed_by: req.username,
+        fixed_at: new Date().toISOString(),
+        // Otras correcciones que puedas necesitar
+        password_hash: user.password_hash || 'placeholder_hash'  // Asegurar que tiene hash
+      })
+      .eq('id', userId);
+    
+    if (updateError) {
+      console.error(`[ADMIN] Error al actualizar usuario ${userId}:`, updateError);
+      return res.status(500).json({ 
+        success: false, 
+        message: `Error al actualizar usuario: ${updateError.message}` 
+      });
+    }
+    
+    console.log(`[ADMIN] Usuario ${userId} arreglado correctamente`);
+    
+    return res.json({ 
+      success: true, 
+      message: 'Usuario arreglado correctamente. Ahora debería poder ser desactivado o eliminado.'
+    });
+    
+  } catch (error) {
+    console.error('[ADMIN] Error general en fix-user:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: `Error: ${error.message}` 
+    });
+  }
+});
+
 // Middleware para verificar si el usuario es administrador
 const isAdmin = (req, res, next) => {
   if (req.userRole === 'admin') {
@@ -1225,6 +1495,68 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 336 * 1024 * 1024, // Límite de 336MB
+  }
+});
+
+// Ruta para restaurar solo usuarios desde un backup
+app.post('/api/backup/restore-users', upload.single('backupFile'), async (req, res) => {
+  try {
+    // Verificar que se ha subido un archivo
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No se ha proporcionado un archivo de backup' });
+    }
+    
+    // Como estamos usando memoryStorage, necesitamos guardar el buffer a un archivo temporal
+    const tempFileName = `temp_uploaded_backup_${Date.now()}.zip`;
+    const tempFilePath = path.join(os.tmpdir(), tempFileName);
+    
+    // Escribir el buffer a un archivo temporal
+    fs.writeFileSync(tempFilePath, req.file.buffer);
+    
+    const bucketName = req.body.bucketName || req.bucketName || '';
+    
+    // Obtener el parámetro para mantener nombres originales
+    const keepOriginalNames = req.body.keepOriginalNames === 'true';
+    
+    console.log(`[BACKUP] Restaurando usuarios desde ${req.file.originalname} al bucket ${bucketName}`);
+    console.log(`[BACKUP] Mantener nombres originales: ${keepOriginalNames ? 'Sí' : 'No'}`);
+    
+    // Ejecutar script de restauración con parámetro adicional
+    const scriptPath = path.join(__dirname, 'scripts', 'restore_script.js');
+    
+    // Ejecutar el script con el parámetro adicional
+    const { exec } = require('child_process');
+    const cmd = `node "${scriptPath}" "${tempFilePath}" "${bucketName}" "${keepOriginalNames}"`;
+    
+    exec(cmd, (error, stdout, stderr) => {
+      // Limpiar el archivo temporal independientemente del resultado
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+          console.log(`[BACKUP] Archivo temporal eliminado: ${tempFilePath}`);
+        }
+      } catch (cleanupError) {
+        console.error(`[BACKUP] Error al eliminar archivo temporal: ${cleanupError.message}`);
+      }
+      
+      if (error) {
+        console.error(`[BACKUP] Error al restaurar usuarios: ${error.message}`);
+        console.error(`[BACKUP] Salida de error: ${stderr}`);
+        return res.status(500).json({ success: false, message: `Error al restaurar usuarios: ${error.message}` });
+      }
+      
+      console.log(`[BACKUP] Restauración de usuarios completada`);
+      console.log(`[BACKUP] Salida del script: ${stdout}`);
+      
+      return res.json({ 
+        success: true, 
+        message: 'Usuarios restaurados correctamente',
+        keepOriginalNames: keepOriginalNames
+      });
+    });
+  } catch (error) {
+    console.error(`[BACKUP] Error general en restauración de usuarios: ${error.message}`);
+    return res.status(500).json({ success: false, message: `Error en restauración de usuarios: ${error.message}` });
   }
 });
 
@@ -10093,9 +10425,84 @@ const backupProcess = spawn('node', [
         output
       });
     });
+    
   } catch (error) {
     console.error('[BACKUP] Error al iniciar el proceso de backup:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Nueva ruta para descargar directamente el último backup generado
+app.get('/api/backup/download-latest/:bucketName', async (req, res) => {
+  try {
+    const { bucketName } = req.params;
+    if (!bucketName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Nombre del bucket no proporcionado' 
+      });
+    }
+    
+    console.log(`[BACKUP] Iniciando descarga directa del último backup para bucket: ${bucketName}`);
+    
+    // Configurar directorio de backups
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      return res.status(404).json({
+        success: false,
+        message: 'No hay directorio de backups'
+      });
+    }
+    
+    // Buscar los archivos de backup para este bucket específico
+    const files = fs.readdirSync(backupsDir)
+      .filter(file => file.endsWith('.zip') && file.includes(`backup-${bucketName}`))
+      .map(file => {
+        const filePath = path.join(backupsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          filename: file,
+          path: filePath,
+          created: stats.mtime || stats.birthtime
+        };
+      })
+      .sort((a, b) => new Date(b.created) - new Date(a.created)); // Ordenar por fecha más reciente
+    
+    if (files.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `No se encontraron backups para el bucket ${bucketName}`
+      });
+    }
+    
+    // Usar el backup más reciente
+    const latestBackup = files[0];
+    console.log(`[BACKUP] Descargando el backup más reciente: ${latestBackup.filename}`);
+    
+    // Configurar cabeceras para forzar la descarga
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${latestBackup.filename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Enviar el archivo
+    res.sendFile(latestBackup.path, (err) => {
+      if (err) {
+        console.error(`[BACKUP] Error al enviar archivo: ${err.message}`);
+        // Si ya enviamos cabeceras, no podemos enviar otro error
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: `Error al enviar archivo: ${err.message}`
+          });
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[BACKUP] Error al descargar backup:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: `Error al descargar backup: ${error.message}` 
+    });
   }
 });
 
@@ -10261,6 +10668,431 @@ restoreProcess.stderr.on('data', (data) => {
     }
     
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Endpoint para restaurar solo los usuarios de un backup
+app.post('/api/backup/restore-users', upload.single('backupFile'), async (req, res) => {
+  console.log('[RESTORE_USERS] Iniciando proceso de restauración de usuarios');
+  
+  try {
+    // Verificar si el usuario tiene permisos administrativos
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden restaurar usuarios'
+      });
+    }
+
+    // Verificar que hay un archivo subido
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha proporcionado un archivo de copia de seguridad'
+      });
+    }
+
+    // Verificar que el archivo es un ZIP
+    if (!req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El archivo debe ser un ZIP válido de copia de seguridad'
+      });
+    }
+
+    // Obtener el bucket a restaurar y la opción de mantener nombres originales
+    const bucketToRestore = req.bucketName || defaultBucketName;
+    const keepOriginalUsernames = req.body.keepOriginalUsernames === 'true' || req.body.keepOriginalUsernames === true;
+    
+    console.log(`[RESTORE_USERS] Restaurando usuarios al bucket: ${bucketToRestore}`);
+    console.log(`[RESTORE_USERS] Mantener nombres originales: ${keepOriginalUsernames}`);
+
+    // Crear un directorio temporal para extraer el zip
+    const tempDir = path.join(os.tmpdir(), 'restore-users-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`[RESTORE_USERS] Directorio temporal creado: ${tempDir}`);
+
+    // Guardar el archivo ZIP recibido
+    const zipPath = path.join(tempDir, 'backup.zip');
+    fs.writeFileSync(zipPath, req.file.buffer);
+
+    // Extraer el archivo ZIP
+    console.log(`[RESTORE_USERS] Extrayendo archivo ZIP: ${zipPath}`);
+    const extract = require('extract-zip');
+    await extract(zipPath, { dir: tempDir });
+    console.log(`[RESTORE_USERS] Extracción completada en ${tempDir}`);
+
+    // Verificar si existe el archivo de exportación de la base de datos
+    const dbExportPath = path.join(tempDir, 'database-export.json');
+    
+    if (!fs.existsSync(dbExportPath)) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'El archivo no contiene exportación de base de datos con usuarios'
+      });
+    }
+    
+    // Cargar el archivo de exportación
+    let dbExport;
+    try {
+      const fileContent = fs.readFileSync(dbExportPath, 'utf8');
+      dbExport = JSON.parse(fileContent);
+    } catch (parseError) {
+      console.error('[RESTORE_USERS] Error al parsear archivo de exportación:', parseError);
+      
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al procesar el archivo de exportación',
+        error: parseError.message
+      });
+    }
+    
+    // Verificar si hay usuarios para restaurar
+    if (!dbExport.users || !Array.isArray(dbExport.users) || dbExport.users.length === 0) {
+      // Limpiar archivos temporales
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontraron usuarios en el archivo de copia de seguridad'
+      });
+    }
+    
+    console.log(`[RESTORE_USERS] Encontrados ${dbExport.users.length} usuarios para restaurar`);
+    
+    // Extraer información del bucket de origen
+    const sourceBucket = dbExport.users.length > 0 && dbExport.users[0].bucket
+      ? dbExport.users[0].bucket
+      : 'desconocido';
+    
+    console.log(`[RESTORE_USERS] Bucket de origen detectado: ${sourceBucket}`);
+    
+    // Preparar usuarios para su restauración
+    let usersToRestore = [];
+    try {
+      usersToRestore = dbExport.users.map(user => {
+        // Determinar si hay que modificar el nombre de usuario
+        let username = user.username;
+        
+        // Si no queremos mantener nombres originales y los buckets son diferentes,
+        // añadir sufijo para evitar conflictos
+        if (!keepOriginalUsernames && sourceBucket !== bucketToRestore) {
+          // Generar un sufijo único usando el bucket de origen y un valor aleatorio
+          const randomSuffix = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+          username = `${user.username}_${sourceBucket}_${randomSuffix}`;
+        }
+        
+        // Crear un objeto limpio para el usuario restaurado
+        return {
+          username: username,
+          password_hash: user.password_hash || '', // Mantener hash de contraseña si existe
+          bucket: bucketToRestore, // Usar el bucket de destino actual
+          created_by: req.username || 'admin_restore',
+          assigned_folders: user.assigned_folders || [],
+          group_name: user.group_name || null,
+          active: user.active === false ? false : true, // Respetar estado activo/inactivo
+          created_at: user.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+      });
+      
+      console.log(`[RESTORE_USERS] Preparados ${usersToRestore.length} usuarios para inserción`);
+    } catch (prepError) {
+      console.error('[RESTORE_USERS] Error al preparar usuarios:', prepError);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error al preparar usuarios para restauración',
+        error: prepError.message
+      });
+    }
+    
+    // Insertar usuarios por lotes para evitar límites de la API
+    let successCount = 0;
+    let errorCount = 0;
+    let duplicateCount = 0;
+    
+    try {
+      // Usar lotes más pequeños para mayor robustez
+      const batchSize = 5;
+      
+      for (let i = 0; i < usersToRestore.length; i += batchSize) {
+        const batch = usersToRestore.slice(i, i + batchSize);
+        console.log(`[RESTORE_USERS] Procesando lote de usuarios ${i+1}-${Math.min(i+batchSize, usersToRestore.length)} de ${usersToRestore.length}`);
+        
+        // Procesar cada usuario individualmente para mejor control de errores
+        for (const user of batch) {
+          try {
+            // Verificar si el usuario ya existe
+            const { data: existingUser, error: checkError } = await supabase
+              .from('user_accounts')
+              .select('id')
+              .eq('username', user.username)
+              .single();
+            
+            if (existingUser) {
+              console.log(`[RESTORE_USERS] Usuario ${user.username} ya existe, omitiendo`);
+              duplicateCount++;
+              continue;
+            }
+            
+            // Insertar nuevo usuario
+            const { error: insertError } = await supabase
+              .from('user_accounts')
+              .insert([user]);
+            
+            if (insertError) {
+              console.error(`[RESTORE_USERS] Error al insertar usuario ${user.username}:`, insertError);
+              errorCount++;
+            } else {
+              successCount++;
+              console.log(`[RESTORE_USERS] Usuario ${user.username} restaurado correctamente`);
+            }
+          } catch (userError) {
+            console.error(`[RESTORE_USERS] Error al procesar usuario ${user.username}:`, userError);
+            errorCount++;
+          }
+        }
+      }
+    } catch (insertError) {
+      console.error('[RESTORE_USERS] Error general al insertar usuarios:', insertError);
+      // Continuamos para reportar resultados parciales
+    }
+    
+    // Limpiar archivos temporales
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.error('[RESTORE_USERS] Error al limpiar archivos temporales:', cleanupError);
+    }
+    
+    // Determinar estado de éxito
+    const someSuccess = successCount > 0;
+    const status = someSuccess ? 200 : 500;
+    
+    return res.status(status).json({
+      success: someSuccess,
+      message: someSuccess 
+        ? `Restauración de usuarios completada: ${successCount} exitosos, ${errorCount} errores, ${duplicateCount} duplicados` 
+        : 'No se pudo restaurar ningún usuario',
+      details: {
+        totalUsers: usersToRestore.length,
+        success: successCount,
+        errors: errorCount,
+        duplicates: duplicateCount,
+        sourceBucket: sourceBucket,
+        targetBucket: bucketToRestore,
+        keptOriginalNames: keepOriginalUsernames
+      }
+    });
+  } catch (error) {
+    console.error('[RESTORE_USERS] Error general:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Error al restaurar usuarios',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para renombrar usuarios (útil para corregir nombres después de restauración)
+app.patch('/api/admin/users/:userId/rename', isAdmin, express.json(), async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { newUsername } = req.body;
+    
+    if (!newUsername) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere nuevo nombre de usuario'
+      });
+    }
+    
+    // Verificar que el usuario existe
+    const { data: existingUser, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado',
+        error: userError?.message
+      });
+    }
+    
+    // Verificar que el nuevo nombre no está en uso
+    const { data: duplicateUser, error: checkError } = await supabase
+      .from('user_accounts')
+      .select('id')
+      .eq('username', newUsername)
+      .single();
+    
+    if (duplicateUser) {
+      return res.status(409).json({
+        success: false,
+        message: `El nombre de usuario '${newUsername}' ya está en uso`
+      });
+    }
+    
+    // Actualizar el nombre de usuario
+    const { error: updateError } = await supabase
+      .from('user_accounts')
+      .update({ 
+        username: newUsername,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userId);
+    
+    if (updateError) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error al actualizar nombre de usuario',
+        error: updateError.message
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Usuario renombrado correctamente de '${existingUser.username}' a '${newUsername}'`,
+      user: {
+        id: userId,
+        oldUsername: existingUser.username,
+        newUsername: newUsername
+      }
+    });
+  } catch (error) {
+    console.error('Error al renombrar usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al renombrar usuario',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para arreglar usuarios problemáticos que no se pueden desactivar o eliminar
+app.post('/api/admin/users/:userId/fix', isAdmin, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    // Verificar que el usuario existe
+    const { data: existingUser, error: userError } = await supabase
+      .from('user_accounts')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado',
+        error: userError?.message
+      });
+    }
+    
+    console.log(`[FIX_USER] Intentando arreglar usuario problemático: ${existingUser.username} (ID: ${userId})`);
+    
+    // Primer enfoque: Actualizar campos críticos
+    const fixedUser = {
+      // Mantener el mismo nombre de usuario
+      username: existingUser.username,
+      // Corrección: Asegurarse de que el bucket sea válido
+      bucket: existingUser.bucket || req.bucketName || defaultBucketName,
+      // Corregir creador si es necesario
+      created_by: existingUser.created_by || req.username || 'admin',
+      // Actualizar timestamp
+      updated_at: new Date().toISOString(),
+      // Establecer activo a true explícitamente
+      active: true
+    };
+    
+    // Actualizar el usuario con los campos corregidos
+    const { error: updateError } = await supabase
+      .from('user_accounts')
+      .update(fixedUser)
+      .eq('id', userId);
+    
+    if (updateError) {
+      console.error(`[FIX_USER] Error al actualizar usuario: ${updateError.message}`);
+      
+      // Segundo enfoque: Intento alternativo más agresivo
+      try {
+        console.log('[FIX_USER] Intentando enfoque alternativo...');
+        
+        // Intentar eliminar completamente y recrear
+        const userData = {
+          ...existingUser,
+          ...fixedUser
+        };
+        
+        // Eliminar usuario
+        const { error: deleteError } = await supabase
+          .from('user_accounts')
+          .delete()
+          .eq('id', userId);
+        
+        if (deleteError) {
+          console.error(`[FIX_USER] Error al eliminar usuario: ${deleteError.message}`);
+          throw deleteError;
+        }
+        
+        // Crear nuevo usuario con mismo ID
+        const { error: insertError } = await supabase
+          .from('user_accounts')
+          .insert([userData]);
+        
+        if (insertError) {
+          console.error(`[FIX_USER] Error al recrear usuario: ${insertError.message}`);
+          throw insertError;
+        }
+        
+        console.log(`[FIX_USER] Usuario recreado exitosamente: ${existingUser.username}`);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Usuario arreglado correctamente (enfoque alternativo)',
+          fixMethod: 'recreate',
+          user: userData
+        });
+      } catch (alternativeError) {
+        console.error(`[FIX_USER] Error en enfoque alternativo: ${alternativeError.message}`);
+        return res.status(500).json({
+          success: false,
+          message: 'Error al arreglar usuario (ambos enfoques fallaron)',
+          errors: [updateError.message, alternativeError.message]
+        });
+      }
+    }
+    
+    console.log(`[FIX_USER] Usuario arreglado correctamente: ${existingUser.username}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Usuario arreglado correctamente',
+      fixMethod: 'update',
+      user: {
+        ...existingUser,
+        ...fixedUser
+      }
+    });
+  } catch (error) {
+    console.error('Error al arreglar usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al arreglar usuario',
+      error: error.message
+    });
   }
 });
 

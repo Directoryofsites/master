@@ -34,6 +34,18 @@ if (!backupPath || !targetBucket) {
 console.log(`Archivo de backup: ${backupPath}`);
 console.log(`Bucket destino: ${targetBucket}`);
 
+// Obtener el parámetro para mantener nombres originales (cuarto argumento)
+// Aceptar múltiples formatos posibles: 'true', true, 1, 'yes', 'sí'
+const keepOriginalParam = process.argv[4];
+const keepOriginalUsernames = keepOriginalParam === 'true' || 
+                             keepOriginalParam === true || 
+                             keepOriginalParam === '1' || 
+                             keepOriginalParam === 'yes' || 
+                             keepOriginalParam === 'sí';
+
+console.log(`Parámetro recibido para mantener nombres: '${keepOriginalParam}'`);
+console.log(`Mantener nombres originales: ${keepOriginalUsernames ? 'Sí' : 'No'}`);
+
 // Crear cliente de Supabase
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -779,11 +791,22 @@ for (const fileName of userAccountsFiles) {
           // Establecer el bucket correcto
           newUser.bucket = targetBucket;
           
-          // Añadir un sufijo al username para evitar conflictos
+         // Manejar el nombre de usuario según la opción seleccionada
           if (newUser.username) {
-            // Comprobar si ya tiene sufijo del origen
-            if (!newUser.username.endsWith(`_${sourceBucket}`)) {
-              newUser.username = `${newUser.username}_${sourceBucket}`;
+            if (keepOriginalUsernames) {
+              // Mantener el nombre original (sin modificaciones)
+              console.log(`Manteniendo nombre de usuario original: ${newUser.username}`);
+            } else {
+              // Añadir un sufijo más corto y distinguible
+              // Usar solo los primeros 5 caracteres del bucket y un número aleatorio de 4 dígitos
+              const shortSuffix = sourceBucket ? sourceBucket.substring(0, 5) : 'src';
+              const randomId = Math.floor(1000 + Math.random() * 9000); // 4 dígitos (1000-9999)
+              
+              // Comprobar si ya tiene sufijo para evitar acumulación
+              if (!newUser.username.includes('_' + shortSuffix)) {
+                newUser.username = `${newUser.username}_${shortSuffix}_${randomId}`;
+                console.log(`Modificando nombre de usuario: ${newUser.username}`);
+              }
             }
           }
           

@@ -6,6 +6,9 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 
 const isGitHubPages = window.location.hostname === 'directoryofsites.github.io' && window.location.pathname.startsWith('/master/');
 
+// URL base de la API
+const API_BASE_URL = 'https://master-production-5386.up.railway.app';
+
 // Agregar estos console.log para depuración
 console.log('Hostname:', window.location.hostname);
 console.log('Pathname:', window.location.pathname);
@@ -1660,6 +1663,35 @@ export const deleteUser = async (userId, permanent = false) => {
     throw error;
   }
 };
+
+// Función para actualizar nombre de usuario
+export const updateUsername = async (userId, newUsername, bucket) => {
+  try {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/api/admin/users/${userId}/rename`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        newUsername,
+        bucket
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || 'Error al actualizar nombre de usuario');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error al actualizar nombre de usuario:', error);
+    throw error;
+  }
+};
+
 /**
  * Obtiene los permisos de carpeta para una ruta específica
  * @param {string} folderPath - Ruta de la carpeta

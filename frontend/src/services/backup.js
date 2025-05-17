@@ -24,14 +24,23 @@ const createFetchOptions = (method, body = null) => {
   return options;
 };
 
-// Obtener lista de backups
+// Obtener lista de backups (solo muestra backups en proceso)
 export const listBackups = async () => {
   try {
-    // Corregido para usar la ruta implementada en el backend
-    const listUrl = `${backendUrl}/api/backup/list`;
+    // Obtener el bucket actual
+    const currentBucket = localStorage.getItem('currentBucket');
+    if (!currentBucket) {
+      return {
+        success: false,
+        message: 'No se pudo determinar el bucket actual',
+        backups: []
+      };
+    }
     
-    console.log('URL de lista de backups:', listUrl);    
-    console.log('Intentando obtener backups desde:', listUrl);
+    // Usar la ruta con el parámetro de bucket
+    const listUrl = `${backendUrl}/api/admin/list?bucketName=${encodeURIComponent(currentBucket)}&token=${encodeURIComponent(getAuthToken())}`;
+    
+    console.log('Consultando backups en proceso para:', currentBucket);
     
     const response = await fetch(listUrl, createFetchOptions('GET'));
     
@@ -40,50 +49,77 @@ export const listBackups = async () => {
     }
     
     const data = await response.json();
-    console.log('Datos de backups recibidos:', data);
     
-    // Formatear la respuesta para manejar diferentes formatos
-    const formattedResponse = {
-      success: data.success || true,
-      message: data.message || 'Backups obtenidos correctamente',
-      backups: data.backups || data.files || []
+    // Formatear la respuesta
+    return {
+      success: data.success || false,
+      message: data.message || 'Consulta de backups en proceso completada',
+      backups: data.backups || [],
+      note: 'Los backups solo permanecen en el servidor temporalmente durante la descarga'
     };
-    
-    return formattedResponse;
   } catch (error) {
-    console.error('Error al listar backups:', error);
+    console.error('Error al listar backups en proceso:', error);
     return {
       success: false,
-      message: `Error al listar backups: ${error.message}`,
+      message: `Error al listar backups en proceso: ${error.message}`,
       backups: []
     };
   }
 };
 
-// Crear un nuevo backup
+// Crear un nuevo backup y descargarlo automáticamente mediante un enlace temporal
 export const createBackup = async (bucketName) => {
   try {
-    // Usar la ruta correcta según el backend
-    const createUrl = `${backendUrl}/api/backup/create/${encodeURIComponent(bucketName)}`;
+    // Verificar que tenemos un bucket válido
+    if (!bucketName) {
+      return {
+        success: false,
+        message: 'No se pudo determinar el bucket actual. Por favor, seleccione un bucket antes de crear un backup.'
+      };
+    }
     
-    console.log('Intentando crear backup en:', createUrl);
+    // Mostrar mensaje al usuario
+    console.log(`Iniciando backup para bucket: ${bucketName}`);
     
-    // Usar método GET según la implementación del backend
+    // Crear URL con token de autenticación para el primer paso (crear el backup)
+    const token = getAuthToken();
+    
+    // Aquí usamos tu servidor local en puerto 3001 en lugar de la URL de Railway
+    const localBackendUrl = 'http://localhost:3001';
+    const createUrl = `${localBackendUrl}/api/admin/create/${encodeURIComponent(bucketName)}?token=${encodeURIComponent(token)}`;
+    
+    console.log('Paso 1: Creando backup en:', createUrl);
+    
+    // Hacer petición para crear el backup
     const response = await fetch(createUrl, createFetchOptions('GET'));
     
-    // Mostrar detalle de la respuesta para depuración
-    if (!response.ok) {
-      console.error('Error en la respuesta del servidor:', response.status, response.statusText);
-      throw new Error(`Error HTTP: ${response.status}`);
-    }
-    
     if (!response.ok) {
       throw new Error(`Error HTTP: ${response.status}`);
     }
     
-    return await response.json();
+    // Obtener información del backup creado
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.message || 'Error al crear backup');
+    }
+    
+    console.log('Backup creado exitosamente:', data);
+    
+    // Usar la ruta del archivo para crear una descarga
+    const backupPath = data.path;
+    
+    alert(`Backup creado correctamente: ${data.filename}\n\nPara descargar el archivo, ve a la barra de direcciones de tu navegador y visita:\n\nhttp://localhost:3001/api/backup/download/${data.filename}\n\nEsto iniciará la descarga automáticamente.`);
+    
+    return {
+      success: true,
+      message: 'Backup creado correctamente. Por favor sigue las instrucciones para descargarlo.',
+      note: 'El archivo se eliminará automáticamente del servidor después de la descarga. Solo se guarda en tu dispositivo local.',
+      backupInfo: data,
+      downloadUrl: `http://localhost:3001/api/backup/download/${data.filename}`
+    };
   } catch (error) {
-    console.error('Error al crear backup:', error);
+    console.error('Error al crear y descargar backup:', error);
     return {
       success: false,
       message: `Error al crear backup: ${error.message}`
@@ -91,37 +127,33 @@ export const createBackup = async (bucketName) => {
   }
 };
 
-// Descargar un backup
+// Descargar un backup existente
 export const downloadBackup = async (filename) => {
   try {
     const token = getAuthToken();
-    // URL ya correcta, manteniendo como está
-    const downloadUrl = `${backendUrl}/api/backup/download/${encodeURIComponent(filename)}`;
+    const currentBucket = localStorage.getItem('currentBucket');
+
+    // Verificar que tenemos un bucket válido
+    if (!currentBucket) {
+      return {
+        success: false,
+        message: 'No se pudo determinar el bucket actual. Por favor, seleccione un bucket antes de descargar un backup.'
+      };
+    }
     
-    console.log('Intentando descargar desde:', downloadUrl);
+    // URL con parámetros de seguridad
+    const downloadUrl = `${backendUrl}/api/admin/download/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}&bucketName=${encodeURIComponent(currentBucket)}`;
     
-    // Para descargas, enviamos el token como parámetro de URL
-    // ya que es una redirección directa al navegador
-    const link = document.createElement('a');
-    const finalUrl = `${downloadUrl}?token=${encodeURIComponent(token)}`;
-    link.href = finalUrl;
-    link.target = '_blank';
-    link.download = filename;
+    console.log('Iniciando descarga desde:', downloadUrl);
     
-    console.log('URL final de descarga:', finalUrl);
+    // Abrir en nueva ventana para mejor manejo de archivos grandes
+    window.open(downloadUrl, '_blank');
     
-    // Añadir el enlace al DOM, hacer clic y luego eliminarlo
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    // Verificar que la descarga se ha iniciado
-    setTimeout(() => {
-      console.log('Descarga iniciada para:', filename);
-    }, 500);
-    
-    return { success: true, message: 'Descarga iniciada' };  
-  
+    return { 
+      success: true, 
+      message: 'La descarga ha comenzado en una nueva ventana.',
+      note: 'El archivo será eliminado automáticamente del servidor una vez completada la descarga. Los backups solo se guardan en tu dispositivo local.'
+    };
   } catch (error) {
     console.error('Error al descargar backup:', error);
     return {
@@ -132,16 +164,18 @@ export const downloadBackup = async (filename) => {
 };
 
 // Restaurar un backup
-export const restoreBackup = async (file, bucketName) => {
+export const restoreBackup = async (file, bucketName, keepOriginalUsernames = true) => {
   try {
     // URL ya correcta, pero ajustada la propiedad del formulario para coincidir con backend
-    const restoreUrl = `${backendUrl}/api/backup/restore`;
+    const restoreUrl = `${backendUrl}/api/admin/restore`;
     
     console.log('Intentando restaurar en:', restoreUrl);
+    console.log('Mantener nombres originales:', keepOriginalUsernames);
     
     const formData = new FormData();
     formData.append('backupFile', file);
     formData.append('targetBucket', bucketName); // Cambiado a targetBucket según el backend
+    formData.append('keepOriginalUsernames', keepOriginalUsernames.toString());
     
     const fetchOptions = createFetchOptions('POST', formData);
     // Asegurarnos de no incluir Content-Type cuando usamos FormData
@@ -163,13 +197,10 @@ export const restoreBackup = async (file, bucketName) => {
   }
 };
 
-// Las siguientes funciones dependen de endpoints que aún no están implementados en el backend.
-// Si necesitas usarlas, deberás implementar los endpoints correspondientes en el backend.
-
 // Restaurar solo etiquetas de un backup
 export const restoreTags = async (file) => {
   try {
-    const restoreTagsUrl = `${backendUrl}/api/backup/restore-tags`;
+    const restoreTagsUrl = `${backendUrl}/api/admin/restore-tags`;
     
     console.log('Intentando restaurar etiquetas en:', restoreTagsUrl);
     console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
@@ -199,7 +230,7 @@ export const restoreTags = async (file) => {
 // Verificar etiquetas en un backup
 export const checkTags = async (file) => {
   try {
-    const checkTagsUrl = `${backendUrl}/api/backup/check-tags`;
+    const checkTagsUrl = `${backendUrl}/api/admin/check-tags`;
     
     console.log('Verificando etiquetas en:', checkTagsUrl);
     console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
@@ -227,16 +258,18 @@ export const checkTags = async (file) => {
 };
 
 // Restaurar usuarios desde un backup
-export const restoreUsers = async (file, bucketName) => {
+export const restoreUsers = async (file, bucketName, keepOriginalNames = true) => {
   try {
-    const restoreUsersUrl = `${backendUrl}/api/backup/restore-users`;
+    const restoreUsersUrl = `${backendUrl}/api/admin/restore-users`;
     
     console.log('Restaurando usuarios en:', restoreUsersUrl);
-    console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
+    console.log('AVISO: Verificando implementación de ruta en el backend.');
+    console.log('Mantener nombres originales:', keepOriginalNames);
     
     const formData = new FormData();
     formData.append('backupFile', file);
     formData.append('bucketName', bucketName);
+    formData.append('keepOriginalNames', keepOriginalNames ? 'true' : 'false');
     
     const fetchOptions = createFetchOptions('POST', formData);
     delete fetchOptions.headers['Content-Type'];
@@ -260,7 +293,7 @@ export const restoreUsers = async (file, bucketName) => {
 // Exportar etiquetas
 export const exportTags = async (bucketName) => {
   try {
-    const exportTagsUrl = `${backendUrl}/api/backup/export-tags`;
+    const exportTagsUrl = `${backendUrl}/api/admin/export-tags`;
     
     console.log('Exportando etiquetas desde:', exportTagsUrl);
     console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
@@ -296,7 +329,7 @@ export const exportTags = async (bucketName) => {
 // Importar etiquetas
 export const importTags = async (file, bucketName, replaceExisting = true) => {
   try {
-    const importTagsUrl = `${backendUrl}/api/backup/import-tags`;
+    const importTagsUrl = `${backendUrl}/api/admin/import-tags`;
     
     console.log('Importando etiquetas en:', importTagsUrl);
     console.log('AVISO: Esta ruta puede no estar implementada en el backend.');
