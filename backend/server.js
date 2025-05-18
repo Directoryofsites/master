@@ -4,6 +4,36 @@ const { spawn } = require('child_process');
 const fallbackTranscribe = require('./fallback_transcribe');
 const { v4: uuidv4 } = require('uuid');
 
+// Añadir al inicio del archivo, después de las importaciones existentes
+const NodeCache = require('node-cache');
+
+// Crear instancias de caché para diferentes operaciones
+const fileListCache = new NodeCache({ stdTTL: 300 }); // 5 minutos para listado de archivos
+const metadataCache = new NodeCache({ stdTTL: 600 }); // 10 minutos para metadatos
+const userPermissionsCache = new NodeCache({ stdTTL: 1800 }); // 30 minutos para permisos
+
+// Añadir función para invalidar caché de archivos
+function invalidateFileCache(user, bucket, prefix = '') {
+  // Invalidar caché específica
+  const cacheKey = `files_${user}_${bucket}_${prefix}`;
+  fileListCache.del(cacheKey);
+  
+  // Si se modifica una subcarpeta, invalidar también carpetas padre
+  if (prefix.includes('/')) {
+    const parts = prefix.split('/');
+    let currentPrefix = '';
+    
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (i > 0) currentPrefix += '/';
+      currentPrefix += parts[i];
+      invalidateFileCache(user, bucket, currentPrefix);
+    }
+  }
+  
+  // Invalidar listado raíz
+  fileListCache.del(`files_${user}_${bucket}_`);
+}
+
 console.log('Todas las variables de entorno disponibles:');
 console.log(Object.keys(process.env));
 
@@ -4653,6 +4683,8 @@ const { data, error } = await supabase.storage
   upsert: true
 });
 
+// Invalidar caché después de subir archivo exitosamente
+invalidateFileCache(req.username || 'guest', bucketToUse, filePath || '');
    
     if (error) {
       throw error;
@@ -4915,7 +4947,6 @@ app.get('/api/download', async (req, res) => {
 
 // Ruta para crear carpetas
 
-
 app.post('/api/createFolder', async (req, res) => {
   try {
     // Verificar si Supabase está configurado
@@ -4987,6 +5018,9 @@ const { error } = await supabase.storage
       throw error;
     }
     
+    // Invalidar caché después de crear carpeta exitosamente
+invalidateFileCache(req.username || 'guest', bucketToUse, normalizedParentPath || '');
+
     res.status(200).json({
       success: true,
       message: `Carpeta ${folderName} creada correctamente`,
@@ -5143,6 +5177,9 @@ const { error: finalError } = await supabase.storage
     
     // Esperar un momento para que Supabase actualice su estado
     await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Invalidar caché después de eliminar carpeta
+invalidateFileCache(req.username || 'guest', bucketToUse, path.dirname(normalizedPath) || '');
     
     res.status(200).json({
       success: true,
@@ -5270,6 +5307,9 @@ const deleteFolderResult = await supabase.storage
 .remove([normalizedPath]);
       
       console.log('Resultado de eliminación de la carpeta misma:', deleteFolderResult);
+
+      // Invalidar caché después de eliminar archivo o carpeta
+invalidateFileCache(req.username || 'guest', bucketToUse, path.dirname(normalizedPath) || '');
       
       res.status(200).json({
         success: true,
@@ -7512,7 +7552,17 @@ app.get('/api/files', async (req, res) => {
       normalizedPrefix = normalizedPrefix.substring(1);
     }
     
-    console.log(`[FILES] Listando archivos con prefijo: "${normalizedPrefix}" en bucket: ${bucketToUse}`);
+    // Construir clave de caché basada en el usuario y el prefijo
+    const cacheKey = `files_${username || 'guest'}_${bucketToUse}_${normalizedPrefix}`;
+    
+    // Verificar si los resultados están en caché
+    const cachedResult = fileListCache.get(cacheKey);
+    if (cachedResult) {
+      console.log(`[FILES] CACHE HIT: Usando resultados en caché para ${cacheKey}`);
+      return res.status(200).json(cachedResult);
+    }
+    
+    console.log(`[FILES] CACHE MISS: Listando archivos con prefijo: "${normalizedPrefix}" en bucket: ${bucketToUse}`);
     console.log(`[FILES] Usuario: ${username || 'invitado'}, Tipo: ${userType}`);
     
     // VERIFICACIÓN DE PERMISOS PARA USUARIOS DINÁMICOS
@@ -7540,23 +7590,23 @@ app.get('/api/files', async (req, res) => {
             if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
               const folderName = item.name;
               
-           // Verificar si esta carpeta está en la lista de carpetas permitidas
-for (const allowedFolder of userFolders) {
-  // Ignorar elementos que no son cadenas (como el objeto de permisos)
-  if (typeof allowedFolder !== 'string') continue;
-  
-  // Eliminar / inicial si existe
-  const cleanAllowedFolder = allowedFolder.startsWith('/') 
-    ? allowedFolder.substring(1) 
-    : allowedFolder;
-  
-  // Si la carpeta actual es exactamente una permitida o es un padre de una permitida
-  if (cleanAllowedFolder === folderName || 
-      cleanAllowedFolder.startsWith(folderName + '/')) {
-    return true;
-  }
-}
-
+              // Verificar si esta carpeta está en la lista de carpetas permitidas
+              for (const allowedFolder of userFolders) {
+                // Ignorar elementos que no son cadenas (como el objeto de permisos)
+                if (typeof allowedFolder !== 'string') continue;
+                
+                // Eliminar / inicial si existe
+                const cleanAllowedFolder = allowedFolder.startsWith('/') 
+                  ? allowedFolder.substring(1) 
+                  : allowedFolder;
+                
+                // Si la carpeta actual es exactamente una permitida o es un padre de una permitida
+                if (cleanAllowedFolder === folderName || 
+                    cleanAllowedFolder.startsWith(folderName + '/')) {
+                  return true;
+                }
+              }
+              
               return false; // No mostrar carpetas a las que no tiene acceso
             }
             return false; // No mostrar archivos en la raíz para usuarios dinámicos
@@ -7573,26 +7623,28 @@ for (const allowedFolder of userFolders) {
             };
           });
         
+        // Guardar en caché
+        fileListCache.set(cacheKey, permittedFolders);
         return res.status(200).json(permittedFolders);
       } else {
         // Estamos en una subcarpeta, verificar permisos
         let hasPermission = false;
         
         // Verificar si la carpeta actual está permitida
-for (const folder of userFolders) {
-  // Ignorar elementos que no son cadenas (como el objeto de permisos)
-  if (typeof folder !== 'string') continue;
-  
-  // Normalizar carpeta permitida
-  const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
-  
-  // La carpeta actual debe ser exactamente una permitida o una subcarpeta de una permitida
-  if (normalizedPrefix === normalizedFolder || 
-      normalizedPrefix.startsWith(normalizedFolder + '/')) {
-    hasPermission = true;
-    break;
-  }
-}
+        for (const folder of userFolders) {
+          // Ignorar elementos que no son cadenas (como el objeto de permisos)
+          if (typeof folder !== 'string') continue;
+          
+          // Normalizar carpeta permitida
+          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+          
+          // La carpeta actual debe ser exactamente una permitida o una subcarpeta de una permitida
+          if (normalizedPrefix === normalizedFolder || 
+              normalizedPrefix.startsWith(normalizedFolder + '/')) {
+            hasPermission = true;
+            break;
+          }
+        }
         
         // Si no tiene permiso, devolver error de acceso denegado
         if (!hasPermission) {
@@ -7645,7 +7697,6 @@ for (const folder of userFolders) {
     // Para usuarios dinámicos en subcarpetas, verificar contenido adicional
     if (userType === 'dynamic' && normalizedPrefix) {
       // Filtrar adicionalmente si es una subcarpeta para asegurar que solo ve archivos en carpetas permitidas
-
       formattedFiles = formattedFiles.filter(item => {
         const itemFullPath = item.path.startsWith('/') ? item.path.substring(1) : item.path;
         
@@ -7666,6 +7717,9 @@ for (const folder of userFolders) {
       });
     }
 
+    // Guardar en caché los resultados
+    fileListCache.set(cacheKey, formattedFiles);
+    
     res.status(200).json(formattedFiles);
   } catch (error) {
     console.error('Error al listar archivos:', error);
@@ -7673,6 +7727,257 @@ for (const folder of userFolders) {
     res.status(500).json({
       success: false,
       message: `Error al listar archivos: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Añadir nuevo endpoint con paginación
+app.get('/api/files-paginated', async (req, res) => {
+  try {
+    // Verificar si Supabase está configurado
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cliente de Supabase no configurado correctamente.'
+      });
+    }
+    
+    // Extracción de información del token de autenticación
+    const authHeader = req.headers.authorization;
+    let username = null;
+    let userType = 'static';
+    let userRole = 'guest';
+    let userFolders = [];
+    let bucketToUse = defaultBucketName;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
+        
+        // Determinar tipo de usuario y configuración
+        if (tokenData.username) {
+          username = tokenData.username;
+          
+          if (tokenData.type === 'dynamic') {
+            // Usuario dinámico
+            userType = 'dynamic';
+            userRole = 'user';
+            userFolders = tokenData.folders || [];
+            bucketToUse = tokenData.bucket || defaultBucketName;
+          } else {
+            // Usuario estático
+            if (userBucketMap[username]) {
+              bucketToUse = userBucketMap[username];
+              userRole = userRoleMap[username] || 'user';
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[FILES_PAGINATED] Error al procesar token:', error);
+      }
+    }
+    
+    const prefix = req.query.prefix || '';
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
+    const sortBy = req.query.sortBy || 'name';
+    const sortOrder = req.query.sortOrder || 'asc';
+    
+    // Normalizar el prefijo
+    let normalizedPrefix = prefix;
+    if (normalizedPrefix.startsWith('/')) {
+      normalizedPrefix = normalizedPrefix.substring(1);
+    }
+    
+    // Construir clave de caché basada en el usuario, el prefijo y los parámetros de paginación
+    const cacheKey = `files_paginated_${username || 'guest'}_${bucketToUse}_${normalizedPrefix}_${limit}_${offset}_${sortBy}_${sortOrder}`;
+    
+    // Verificar si los resultados están en caché
+    const cachedResult = fileListCache.get(cacheKey);
+    if (cachedResult) {
+      console.log(`[FILES_PAGINATED] CACHE HIT: Usando resultados en caché para ${cacheKey}`);
+      return res.status(200).json(cachedResult);
+    }
+    
+    console.log(`[FILES_PAGINATED] CACHE MISS: Listando archivos con prefijo: "${normalizedPrefix}" en bucket: ${bucketToUse} (limit: ${limit}, offset: ${offset})`);
+    
+    // VERIFICACIÓN DE PERMISOS PARA USUARIOS DINÁMICOS
+    if (userType === 'dynamic') {
+      // Código de verificación similar al endpoint original
+      // Si estamos en la raíz, solo mostrar carpetas a las que tiene acceso
+      if (!normalizedPrefix) {
+        // Obtener todas las carpetas del bucket para filtrar
+        const { data, error } = await supabase.storage
+          .from(bucketToUse)
+          .list('');
+          
+        if (error) {
+          console.error('[FILES_PAGINATED] Error al listar directorio raíz:', error);
+          throw error;
+        }
+        
+        // Filtrar solo las carpetas a las que el usuario tiene acceso
+        const permittedFolders = data
+          .filter(item => {
+            // Solo mostrar carpetas en la raíz
+            if (!item.metadata || item.metadata.mimetype === 'application/x-directory') {
+              const folderName = item.name;
+              
+              // Verificar si esta carpeta está en la lista de carpetas permitidas
+              for (const allowedFolder of userFolders) {
+                if (typeof allowedFolder !== 'string') continue;
+                
+                const cleanAllowedFolder = allowedFolder.startsWith('/') 
+                  ? allowedFolder.substring(1) 
+                  : allowedFolder;
+                
+                if (cleanAllowedFolder === folderName || 
+                    cleanAllowedFolder.startsWith(folderName + '/')) {
+                  return true;
+                }
+              }
+              
+              return false;
+            }
+            return false;
+          })
+          .filter(item => item.name !== '.folder')
+          .map(item => {
+            return {
+              name: item.name,
+              path: `/${item.name}`,
+              size: (item.metadata && item.metadata.size) || 0,
+              contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+              updated: item.updated_at,
+              isFolder: true
+            };
+          });
+        
+        // Aplicar paginación a los resultados filtrados
+        const paginatedFolders = permittedFolders.slice(offset, offset + limit);
+        
+        const result = {
+          items: paginatedFolders,
+          pagination: {
+            offset,
+            limit,
+            total: permittedFolders.length,
+            hasMore: offset + limit < permittedFolders.length
+          }
+        };
+        
+        // Guardar en caché
+        fileListCache.set(cacheKey, result);
+        return res.status(200).json(result);
+      } else {
+        // Estamos en una subcarpeta, verificar permisos
+        let hasPermission = false;
+        
+        for (const folder of userFolders) {
+          if (typeof folder !== 'string') continue;
+          
+          const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+          
+          if (normalizedPrefix === normalizedFolder || 
+              normalizedPrefix.startsWith(normalizedFolder + '/')) {
+            hasPermission = true;
+            break;
+          }
+        }
+        
+        if (!hasPermission) {
+          console.log(`[FILES_PAGINATED] ACCESO DENEGADO: Usuario ${username} intentó acceder a ${normalizedPrefix}`);
+          return res.status(403).json({
+            success: false,
+            message: 'No tienes permiso para acceder a esta carpeta'
+          });
+        }
+      }
+    }
+    
+    // Proceder con la lista de archivos paginada
+    const { data, error } = await supabase.storage
+      .from(bucketToUse)
+      .list(normalizedPrefix, {
+        sortBy: { column: sortBy, order: sortOrder },
+        // Supabase no soporta limit y offset directamente, así que obtenemos todo y filtramos después
+      });
+      
+    if (error) {
+      throw error;
+    }
+    
+    // Filtrar contenido según tipo de usuario
+    let formattedFiles = data
+      .filter(item => {
+        // Filtrar archivos de sistema y metadatos
+        return !item.name.endsWith('.youtube.metadata') && 
+               !item.name.endsWith('.audio.metadata') && 
+               !item.name.endsWith('.image.metadata') &&
+               !item.name.endsWith('.access.metadata') &&
+               item.name !== '.folder';
+      })
+      .map(item => {
+        // Identificar si es carpeta o archivo
+        const isFolder = !item.metadata || item.metadata.mimetype === 'application/x-directory';
+        
+        return {
+          name: item.name,
+          path: normalizedPrefix ? `/${normalizedPrefix}/${item.name}` : `/${item.name}`,
+          size: (item.metadata && item.metadata.size) || 0,
+          contentType: (item.metadata && item.metadata.mimetype) || 'application/octet-stream',
+          updated: item.updated_at,
+          isFolder: isFolder
+        };
+      });
+
+    // Para usuarios dinámicos en subcarpetas, verificar contenido adicional
+    if (userType === 'dynamic' && normalizedPrefix) {
+      formattedFiles = formattedFiles.filter(item => {
+        const itemFullPath = item.path.startsWith('/') ? item.path.substring(1) : item.path;
+        
+        if (item.isFolder) {
+          for (const folder of userFolders) {
+            if (typeof folder !== 'string') continue;
+            
+            const normalizedFolder = folder.startsWith('/') ? folder.substring(1) : folder;
+            if (normalizedFolder === itemFullPath || normalizedFolder.startsWith(itemFullPath + '/')) {
+              return true;
+            }
+          }
+        }
+        return !item.isFolder || true;
+      });
+    }
+
+    // Obtener el conteo total para calcular el total de páginas
+    const totalFiles = formattedFiles.length;
+    
+    // Aplicar paginación manualmente
+    const paginatedFiles = formattedFiles.slice(offset, offset + limit);
+    
+    const result = {
+      items: paginatedFiles,
+      pagination: {
+        offset,
+        limit,
+        total: totalFiles,
+        hasMore: offset + limit < totalFiles
+      }
+    };
+    
+    // Guardar en caché
+    fileListCache.set(cacheKey, result);
+    
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('[FILES_PAGINATED] Error al listar archivos:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: `Error al listar archivos paginados: ${error.message}`,
       error: error.message
     });
   }

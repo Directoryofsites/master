@@ -147,6 +147,39 @@ export const listFiles = async (path = '') => {
 };
 
 /**
+ * Lista los archivos en la ruta especificada con soporte para paginación
+ * @param {string} path - Ruta a listar
+ * @param {number} limit - Número máximo de elementos a retornar
+ * @param {number} offset - Índice desde donde comenzar
+ * @param {string} sortBy - Campo por el cual ordenar (nombre, fecha, tamaño)
+ * @param {string} sortOrder - Orden de clasificación ('asc' o 'desc')
+ * @returns {Promise<Object>} - Objeto con lista de archivos y metadatos de paginación
+ */
+export const listFilesPaginated = async (path = '', limit = 100, offset = 0, sortBy = 'name', sortOrder = 'asc') => {
+  try {
+    console.log(`Listando archivos paginados en: ${path || 'raíz'} (limit: ${limit}, offset: ${offset})`);
+    
+    // Construir la URL con todos los parámetros de paginación
+    const params = new URLSearchParams();
+    if (path) params.append('prefix', path);
+    params.append('limit', limit.toString());
+    params.append('offset', offset.toString());
+    params.append('sortBy', sortBy);
+    params.append('sortOrder', sortOrder);
+    
+    const url = `${BASE_URL}/files-paginated?${params.toString()}`;
+    const response = await fetchWithRetry(url);
+    
+    const data = await response.json();
+    console.log(`Listado paginado exitoso: ${data.items?.length || 0} elementos encontrados de un total de ${data.pagination?.total || 'desconocido'}`);
+    return data;
+  } catch (error) {
+    console.error('Error en listFilesPaginated después de reintentos:', error);
+    throw new Error('No se pudieron cargar los archivos paginados');
+  }
+};
+
+/**
  * Sube un archivo al servidor
  * @param {File} file - Archivo a subir
  * @param {string} path - Ruta donde subir el archivo

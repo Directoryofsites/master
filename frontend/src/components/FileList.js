@@ -6,6 +6,14 @@ import FileMetadataEditor from './FileMetadataEditor'; // Importar el componente
 const FileList = ({ files, currentPath, onNavigate, userRole, onActionComplete, isSearchResults = false }) => {
   // Estado para almacenar las URLs de YouTube para cada archivo
   const [youtubeUrls, setYoutubeUrls] = useState({});
+
+  // Estados para paginación
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(100);
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [hasMoreFiles, setHasMoreFiles] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  
   // Estado para controlar la carga de URLs
   const [loadingUrls, setLoadingUrls] = useState(false);
   // Estado para controlar el editor de metadatos
@@ -54,6 +62,45 @@ useEffect(() => {
     console.log('Menú de acciones activado para:', activeActionsMenu);
   }
 }, [activeActionsMenu]);
+
+// Función para cargar más archivos
+const loadMoreFiles = async () => {
+  if (isLoadingMore || !hasMoreFiles) return;
+  
+  try {
+    setIsLoadingMore(true);
+    
+    const nextPage = currentPage + 1;
+    const offset = nextPage * pageSize;
+    
+    console.log(`Cargando más archivos: página ${nextPage}, offset ${offset}`);
+    
+    // Utilizar la función paginada con el offset correcto
+    const result = await api.listFilesPaginated(
+      currentPath, 
+      pageSize,
+      offset,
+      'name',
+      'asc'
+    );
+    
+    if (result && result.items) {
+      // Actualizar la lista de archivos añadiendo los nuevos
+      onActionComplete(prevFiles => {
+        return [...prevFiles, ...result.items];
+      }, true); // El segundo parámetro indica que es una actualización incremental
+
+      // Actualizar estado de paginación
+      setCurrentPage(nextPage);
+      setHasMoreFiles(result.pagination.hasMore);
+      setTotalFiles(result.pagination.total);
+    }
+  } catch (error) {
+    console.error('Error al cargar más archivos:', error);
+  } finally {
+    setIsLoadingMore(false);
+  }
+};
 
   // Función para cargar la URL de YouTube de un archivo
   const loadYoutubeUrl = async (filePath) => {
@@ -155,6 +202,70 @@ useEffect(() => {
   };
 }, [activeActionsMenu]);
 
+// Efecto para manejar la paginación y carga inicial
+useEffect(() => {
+  if (files && files.length > 0) {
+    // Si tenemos archivos, asumir que es la primera página
+    setCurrentPage(0);
+    
+    // Verificar si hay más páginas, asumiendo que la primera carga trae pageSize elementos
+    const hasMore = files.length >= pageSize;
+    setHasMoreFiles(hasMore);
+    
+    // Establecer el total de archivos (si no se conoce con exactitud)
+    setTotalFiles(hasMore ? files.length + 1 : files.length);
+  } else {
+    // Resetear estado si no hay archivos
+    setHasMoreFiles(false);
+    setTotalFiles(0);
+  }
+  
+  // Resetear estado de carga
+  setIsLoadingMore(false);
+}, [files, pageSize]);
+
+// Función para cargar la siguiente página de archivos
+const fetchMoreFiles = async () => {
+  if (isLoadingMore || !hasMoreFiles) return;
+  
+  try {
+    setIsLoadingMore(true);
+    
+    const nextPage = currentPage + 1;
+    const offset = nextPage * pageSize;
+    
+    console.log(`Cargando más archivos: página ${nextPage}, offset ${offset}`);
+    
+    // Utilizar la función paginada con el offset correcto
+    const result = await api.listFilesPaginated(
+      currentPath, 
+      pageSize,
+      offset,
+      'name',
+      'asc'
+    );
+    
+    if (result && result.items) {
+      // Actualizar la lista de archivos añadiendo los nuevos
+      const newFiles = [...files, ...result.items];
+      
+      // Notificar al componente padre sobre los nuevos archivos
+      if (onActionComplete) {
+        onActionComplete('append', newFiles);
+      }
+
+      // Actualizar estado de paginación
+      setCurrentPage(nextPage);
+      setHasMoreFiles(result.pagination.hasMore);
+      setTotalFiles(result.pagination.total);
+    }
+  } catch (error) {
+    console.error('Error al cargar más archivos:', error);
+  } finally {
+    setIsLoadingMore(false);
+  }
+};
+
 // Efecto para cargar las URLs cuando cambian los archivos o la ruta
 useEffect(() => {
   async function loadAllUrls() {
@@ -239,6 +350,8 @@ useEffect(() => {
   setSizeFilterActive(false);
   setFilteredFiles([]);
 }, [files, currentPath, isSearchResults]);
+
+
 
 // Función para aplicar el filtro de tamaño
 const applyFileSizeFilter = () => {
@@ -2504,6 +2617,75 @@ style={{
         </div>
      )}
 
+     {/* Botón de cargar más archivos */}
+{hasMoreFiles && (
+  <div className="load-more-container" style={{
+    textAlign: 'center',
+    margin: '20px 0'
+  }}>
+    <button 
+      onClick={loadMoreFiles}
+      disabled={isLoadingMore}
+      style={{
+        padding: '10px 20px',
+        backgroundColor: '#007bff',
+        color: 'white',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: isLoadingMore ? 'not-allowed' : 'pointer',
+        opacity: isLoadingMore ? 0.7 : 1
+      }}
+    >
+      {isLoadingMore ? 'Cargando...' : 'Cargar más archivos'}
+    </button>
+  </div>
+)}
+
+{/* Mensaje de fin de lista */}
+{!hasMoreFiles && files.length > 0 && !isSearchResults && (
+  <div style={{
+    textAlign: 'center',
+    margin: '20px 0',
+    color: '#6c757d'
+  }}>
+    No hay más archivos para mostrar
+  </div>
+)}
+
+{/* Botón de cargar más archivos */}
+{hasMoreFiles && files && files.length > 0 && !isSearchResults && (
+  <div className="load-more-container" style={{
+    textAlign: 'center',
+    margin: '20px 0'
+  }}>
+    <button 
+      onClick={fetchMoreFiles}
+      disabled={isLoadingMore}
+      style={{
+        padding: '10px 20px',
+        backgroundColor: '#007bff',
+        color: 'white',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: isLoadingMore ? 'not-allowed' : 'pointer',
+        opacity: isLoadingMore ? 0.7 : 1
+      }}
+    >
+      {isLoadingMore ? 'Cargando...' : `Cargar más archivos (${totalFiles - files.length} restantes)`}
+    </button>
+  </div>
+)}
+
+{/* Mensaje de fin de lista */}
+{!hasMoreFiles && files && files.length > 0 && !isSearchResults && (
+  <div style={{
+    textAlign: 'center',
+    margin: '20px 0',
+    color: '#6c757d'
+  }}>
+    No hay más archivos para mostrar
+  </div>
+)}
      {/* Editor de metadatos */}
      <FileMetadataEditor
        filePath={selectedFilePath}
