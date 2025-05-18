@@ -546,7 +546,7 @@ const cleanupBackupFiles = () => {
           
        // Eliminar archivos que tienen más de 5 minutos de antigüedad
 const fileAgeSeconds = (Date.now() - stats.birthtimeMs) / 1000;
-if (fileAgeSeconds > 120) { // 2 minutos
+if (fileAgeSeconds > 180) { // 3 minutos
 
             console.log(`[BACKUP] Eliminando archivo antiguo (${fileAgeSeconds.toFixed(2)} segundos): ${file}`);
             fs.unlinkSync(filePath);
